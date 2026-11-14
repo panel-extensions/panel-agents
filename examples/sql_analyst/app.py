@@ -101,21 +101,30 @@ class AnalystDeps:
 agent = Agent(MODEL, deps_type=AnalystDeps, instructions=INSTRUCTIONS, name="Analyst")
 
 
+def cursor(ctx: RunContext[AnalystDeps]) -> duckdb.DuckDBPyConnection:
+    # pydantic-ai runs tool calls concurrently and a DuckDB connection is not
+    # thread-safe: sharing it makes parallel queries silently return no rows.
+    return ctx.deps.con.cursor()
+
+
 @agent.tool
-def list_tables(ctx: RunContext[AnalystDeps]) -> str:
+def list_tables(ctx: RunContext[AnalystDeps]) -> list[dict]:
     """List the tables in the database with their row counts."""
-    tables = ctx.deps.con.execute("SELECT table_name FROM information_schema.tables ORDER BY 1").fetchall()
-    return "\n".join(
-        f"{t}: {ctx.deps.con.execute(f'SELECT count(*) FROM {t}').fetchone()[0]} rows" for (t,) in tables
-    )
+    con = cursor(ctx)
+    tables = con.execute("SELECT table_name FROM information_schema.tables ORDER BY 1").fetchall()
+    return [{"table": t, "rows": con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]} for (t,) in tables]
 
 
 @agent.tool
-def describe_table(ctx: RunContext[AnalystDeps], table: str) -> str:
-    """Show the columns and types of a table, with three sample rows."""
-    schema = ctx.deps.con.execute(f"DESCRIBE {table}").df()[["column_name", "column_type"]]
-    sample = ctx.deps.con.execute(f"SELECT * FROM {table} LIMIT 3").df()
-    return f"{schema.to_markdown(index=False)}\n\nSample:\n{sample.to_markdown(index=False)}"
+def describe_table(ctx: RunContext[AnalystDeps], table: str) -> list[dict]:
+    """Show the columns and types of a table, with sample values from its first three rows."""
+    con = cursor(ctx)
+    schema = con.execute(f"DESCRIBE {table}").fetchall()
+    sample = con.execute(f"SELECT * FROM {table} LIMIT 3").df()
+    return [
+        {"column": name, "type": dtype, "sample": ", ".join(str(v) for v in sample[name])}
+        for name, dtype, *_ in schema
+    ]
 
 
 @agent.tool
@@ -130,7 +139,7 @@ async def run_query(ctx: RunContext[AnalystDeps], sql: str, name: str, title: st
     """
     if not READ_ONLY.match(sql):
         raise ValueError("run_query only accepts read-only queries; use execute_statement instead.")
-    df = ctx.deps.con.execute(sql).df()
+    df = cursor(ctx).execute(sql).df()
     await publish_artifact(ctx, f"{name}_sql", sql, kind="sql", title=f"{title} (SQL)")
     preview = df.head(PREVIEW_ROWS).to_markdown(index=False)
     summary = f"{len(df)} rows x {len(df.columns)} columns, published as '{name}'.\n\n{preview}"
@@ -172,7 +181,7 @@ def execute_statement(ctx: RunContext[AnalystDeps], sql: str, reason: str) -> st
     """
     if not ctx.tool_call_approved:
         raise ApprovalRequired
-    ctx.deps.con.execute(sql)
+    cursor(ctx).execute(sql)
     return "Statement executed."
 
 

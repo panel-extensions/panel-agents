@@ -54,7 +54,7 @@ def test_streams_into_existing_message():
     (message,) = chat.feed.objects
     pane = message.object
     assert not message.visible
-    state.apply(ev.TextMessageContent(message_id="m1", delta="Hel", run_id="r1"))
+    state.apply(ev.TextMessageContent(message_id="m1", delta="Hel", run_id="r1"))  # codespell:ignore
     assert message.visible
     state.apply(ev.TextMessageContent(message_id="m1", delta="lo", run_id="r1"))
     assert chat.feed.objects == [message]

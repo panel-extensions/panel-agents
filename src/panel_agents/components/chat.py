@@ -17,12 +17,6 @@ from ..state import MessageState, RunState, ToolCallState
 from .approval import approval_factory as default_approval_factory
 from .tool_call import ToolCallCard
 
-MESSAGE_CSS = """
-:host { width: 100%; }
-.markdown p:first-child { margin-top: 0; }
-.markdown p:last-child { margin-bottom: 0; }
-"""
-
 THINKING_CSS = """
 :host { width: 100%; }
 .markdown { font-size: 0.85rem; opacity: 0.75; }
@@ -194,7 +188,7 @@ class AgentChat(Viewer):
         if item.kind == "thinking":
             return self._build_thinking(item)
         user = self.user if item.role == "user" else self._agent_name(item.run_id)
-        pane = pn.pane.Markdown(item.content, margin=0, stylesheets=[MESSAGE_CSS])
+        pane = pn.pane.Markdown(item.content)
         message = pmui.ChatMessage(pane, visible=bool(item.content), **self._message_params(user, item.created_at))
         self._views[id(item)] = message
 

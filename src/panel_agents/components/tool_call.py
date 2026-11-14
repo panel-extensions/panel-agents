@@ -15,6 +15,7 @@ import panel_material_ui as pmui
 import param
 from panel.viewable import Viewer
 
+from ..artifacts.model import infer_kind
 from ..state import ApprovalRequest, RunState, ToolCallState
 from .renderers import render
 
@@ -307,7 +308,7 @@ class ToolCallCard(Viewer):
             self._result_section.visible = False
             return
         value, hint = truncate(result, self.max_chars, self.max_items)
-        self._result.objects = [render(value)]
+        self._result.objects = [render(value, kind="dataframe" if infer_kind(value) == "table" else None)]
         self._hint.object = f'<div class="tc-hint">{escape(hint)}</div>' if hint else ""
         self._result_section.visible = True
 

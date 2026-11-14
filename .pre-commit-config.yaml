@@ -25,6 +25,7 @@ repos:
       - id: codespell
         additional_dependencies:
           - tomli
+        exclude: ^tests/fixtures/
   - repo: https://github.com/shssoichiro/oxipng
     rev: v8.0.0
     hooks:

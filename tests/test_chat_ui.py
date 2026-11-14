@@ -1,3 +1,4 @@
+import pandas as pd
 import pytest
 
 pytest.importorskip("playwright")
@@ -42,6 +43,28 @@ def test_card_expands_on_failure(page):
     expect(page.locator(".MuiAlert-root")).to_contain_text("Binder Error: column qtr not found")
     expect(page.locator(".tc-args pre")).to_contain_text("SELECT qtr FROM sales")
     expect(page.locator("[aria-label='show more']")).to_have_attribute("aria-expanded", "true")
+
+
+@pytest.mark.parametrize("content", [
+    pd.DataFrame({"column": ["order_id"], "type": ["BIGINT"]}),
+    [{"column": "order_id", "type": "BIGINT"}],
+    "| column | type |\n|---|---|\n| order_id | BIGINT |",
+], ids=["dataframe", "records", "markdown"])
+def test_card_result_table_uses_material_styling(page, content):
+    state = RunState(flush_interval=0)
+    state.apply_many([
+        ev.ToolCallStart(tool_call_id="t1", tool_name="describe_table"),
+        ev.ToolCallEnd(tool_call_id="t1"),
+        ev.ToolCallResult(tool_call_id="t1", content=content),
+    ])
+    card = ToolCallCard(state.tool_calls["t1"], state=state, collapsed=False)
+    serve_component(page, card)
+
+    header = page.locator("thead th", has_text="column")
+    expect(header).to_have_css("text-transform", "uppercase")
+    expect(header).to_have_css("border-top-width", "0px")
+    expect(page.locator("table")).to_have_css("border-collapse", "separate")
+    expect(page.locator("td", has_text="order_id")).to_have_css("border-left-width", "0px")
 
 
 def test_chat_shows_streamed_text(page):

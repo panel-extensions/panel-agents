@@ -5,6 +5,7 @@ import pytest
 
 from panel_agents import RunState
 from panel_agents import events as ev
+from panel_agents.components.renderers import TABLE_CSS
 from panel_agents.components.tool_call import (
     ToolCallCard,
     args_preview,
@@ -141,8 +142,40 @@ def test_large_dataframe_result_is_truncated(state):
     call = start(state)
     card = ToolCallCard(call, state=state, max_items=10)
     finish(state, pd.DataFrame({"a": range(50)}))
-    assert len(card._result[0].value) == 10
+    assert len(card._result[0].object) == 10
     assert "10 of 50 rows" in card._hint.object
+
+
+def test_dataframe_result_renders_styled_table(state):
+    card = ToolCallCard(start(state), state=state)
+    finish(state, pd.DataFrame({"a": [1, 2]}))
+    (pane,) = card._result.objects
+    assert type(pane) is pn.pane.DataFrame
+    assert not pane.index
+    assert TABLE_CSS in pane.stylesheets
+
+
+def test_records_result_renders_styled_table(state):
+    card = ToolCallCard(start(state), state=state)
+    finish(state, [{"column": "order_id", "type": "BIGINT"}, {"column": "product", "type": "VARCHAR"}])
+    (pane,) = card._result.objects
+    assert type(pane) is pn.pane.DataFrame
+    assert list(pane.object.columns) == ["column", "type"]
+    assert len(pane.object) == 2
+
+
+def test_nested_list_result_renders_json(state):
+    card = ToolCallCard(start(state), state=state)
+    finish(state, [{"a": [1, 2]}])
+    assert isinstance(card._result[0], pn.pane.JSON)
+
+
+def test_markdown_table_result_is_styled(state):
+    card = ToolCallCard(start(state), state=state)
+    finish(state, "| a | b |\n|---|---|\n| 1 | 2 |")
+    (pane,) = card._result.objects
+    assert isinstance(pane, pn.pane.Markdown)
+    assert TABLE_CSS in pane.stylesheets
 
 
 def test_artifact_chips(state):
