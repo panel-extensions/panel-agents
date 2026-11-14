@@ -1,0 +1,83 @@
+[project]
+name = "panel-agents"
+channels = ["pyviz/label/dev", "conda-forge"]
+platforms = ["osx-arm64", "osx-64", "linux-64", "win-64"]
+
+[tasks]
+postinstall = "pip install --no-build-isolation --no-deps --disable-pip-version-check -e ."
+pre-commit-install = "pre-commit install"
+pre-commit-run = "pre-commit run -a"
+
+[dependencies]
+python = ">=3.10"
+panel = ">=1.8.0"
+panel-material-ui = ">=0.16.0"
+pydantic = ">=2"
+pydantic-ai-slim = ">=1.0"
+pandas = "*"
+duckdb = "*"
+pip = "*"
+hatchling = "*"
+hatch-vcs = "*"
+setuptools-scm = "*"
+
+[feature.py310.dependencies]
+python = "3.10.*"
+[feature.py311.dependencies]
+python = "3.11.*"
+[feature.py312.dependencies]
+python = "3.12.*"
+[feature.py313.dependencies]
+python = "3.13.*"
+
+[environments]
+test-310 = ["py310", "test-core", "test-unit-task"]
+test-311 = ["py311", "test-core", "test-unit-task"]
+test-312 = ["py312", "test-core", "test-unit-task"]
+test-313 = ["py313", "test-core", "test-unit-task"]
+test-ui = ["py312", "test-core", "test-ui"]
+build = ["py312", "build"]
+lint = { features = ["lint"], no-default-feature = true }
+
+[feature.test-core.dependencies]
+pytest = ">=6"
+pytest-asyncio = "*"
+pytest-cov = "*"
+pytest-rerunfailures = "<16"
+pytest-xdist = "*"
+
+[feature.test-unit-task.tasks]
+_install = "pip install --no-deps --disable-pip-version-check -e ."
+test = { cmd = "pytest", depends-on = ["_install"] }
+test-coverage = { cmd = "pytest --cov=panel_agents --cov-report=xml --cov-report=term-missing", depends-on = ["_install"] }
+
+[feature.test-ui]
+channels = ["microsoft"]
+
+[feature.test-ui.dependencies]
+playwright = { version = "<1.51", channel = "microsoft" }
+pytest-playwright = { version = "*", channel = "microsoft" }
+
+[feature.test-ui.tasks]
+_install = "pip install --no-deps --no-build-isolation --disable-pip-version-check -e ."
+_install-ui = 'playwright install chromium'
+
+[feature.test-ui.tasks.test-ui]
+cmd = 'pytest ./tests/ --ui --browser chromium -n logical --dist loadgroup --reruns 3 --reruns-delay 10'
+depends-on = ["_install", "_install-ui"]
+
+[feature.build.dependencies]
+python-build = "*"
+twine = "*"
+wheel = "*"
+
+[feature.build.tasks]
+build-wheel = "python -m build --no-isolation ."
+check-wheel = "twine check dist/*"
+
+[feature.lint.dependencies]
+pre-commit = "*"
+
+[feature.lint.tasks]
+pre-commit-install = "pre-commit install"
+pre-commit-run = "pre-commit run -a"
