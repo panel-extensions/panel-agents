@@ -16,7 +16,7 @@ nav = [
     {"Document Artifacts" = "how-to/document-artifacts.md"},
     {"Act on the Page" = "how-to/ui-actions.md"},
     {"Serve Tools over MCP" = "how-to/mcp.md"},
-    {"Trace Model Calls" = "how-to/model-traces.md"},
+    {"Trace and Replay Model Calls" = "how-to/model-traces.md"},
     {"Security" = "how-to/security.md"}
   ]},
   {"Examples" = "examples.md"},
