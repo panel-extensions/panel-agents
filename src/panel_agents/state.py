@@ -9,6 +9,7 @@ from events, replaying a recording reproduces the same state.
 from __future__ import annotations
 
 import copy
+import threading
 import time
 import uuid
 from collections.abc import Callable, Iterable
@@ -216,6 +217,9 @@ class RunState(param.Parameterized):
         self._subscribers: list[Callable[[ev.Event], Any]] = []
         self._buffers: dict[tuple[type, str], list[str]] = {}
         self._last_flush = 0.0
+        # Set by an adapter enforcing an approval policy: (request, user, args, approved) -> refusal message or None.
+        self._decision_check: Callable[[ApprovalRequest, str | None, dict[str, Any] | None, bool], str | None] | None = None
+        self._decision_lock = threading.Lock()
 
     @classmethod
     def from_events(cls, events: Iterable[ev.Event], **params) -> RunState:
@@ -297,11 +301,25 @@ class RunState(param.Parameterized):
         reason: str | None = None,
         user: str | None = None,
     ):
-        request = self.approvals[tool_call_id]
-        self.apply(ev.ApprovalResolved(
-            tool_call_id=tool_call_id, approved=approved, args=args,
-            reason=reason, user=user, run_id=request.run_id,
-        ))
+        """
+        Approve or deny a pending tool call, optionally with edited ``args``.
+
+        Raises ``ValueError`` if the request was already decided or the
+        edited arguments are not valid for the tool, and ``PermissionError``
+        if the runner's approval policy does not allow ``user`` to make
+        this decision.
+        """
+        with self._decision_lock:
+            request = self.approvals[tool_call_id]
+            if request.status != "pending":
+                raise ValueError(f"The approval for {tool_call_id!r} was already {request.status}.")
+            check = self._decision_check
+            if check is not None and (refusal := check(request, user, args if approved else None, approved)):
+                raise (ValueError if refusal.startswith("Invalid") else PermissionError)(refusal)
+            self.apply(ev.ApprovalResolved(
+                tool_call_id=tool_call_id, approved=approved, args=args,
+                reason=reason, user=user, run_id=request.run_id,
+            ))
 
     # Event handlers
 
@@ -418,8 +436,14 @@ class RunState(param.Parameterized):
 
     def _on_approval_resolved(self, event: ev.ApprovalResolved):
         request = self.approvals.get(event.tool_call_id)
-        if request is None:
+        # A request is decided once, and only by someone the policy allows; other
+        # decisions stay in the event log but change nothing.
+        if request is None or request.status != "pending":
             return
+        check = self._decision_check
+        if check is not None and check(request, event.user, event.args if event.approved else None, event.approved):
+            return
+        request._decision = event
         request.param.update(
             status="approved" if event.approved else "denied",
             final_args=event.args if event.approved else None,

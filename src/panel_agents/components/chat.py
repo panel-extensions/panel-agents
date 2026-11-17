@@ -14,6 +14,7 @@ import param
 from panel.viewable import Viewer
 
 from ..state import MessageState, RunState, ToolCallState
+from .approval import ApprovalCard
 from .approval import approval_factory as default_approval_factory
 from .tool_call import ToolCallCard
 
@@ -58,6 +59,11 @@ class AgentChat(Viewer):
         pending approvals inside tool call cards. Defaults to the
         ApprovalCard factory; set to None to show a placeholder.""")
 
+    can_approve = param.Callable(default=None, allow_None=True, doc="""
+        Permission hook ``(request, user) -> bool`` set on the approval
+        cards the default factory creates. Defaults to the runner's
+        ``approval_policy.can_approve`` when it has one.""")
+
     user = param.String(default="User", doc="Name shown for user messages.")
 
     assistant = param.String(default="Assistant", doc="""
@@ -74,7 +80,13 @@ class AgentChat(Viewer):
             params["state"] = state
         elif params.get("runner") is not None and "state" not in params:
             params["state"] = params["runner"].state
+        runner = params.get("runner")
+        follow_policy = "can_approve" not in params and isinstance(runner, param.Parameterized) and "approval_policy" in runner.param
+        if follow_policy and runner.approval_policy is not None:
+            params["can_approve"] = runner.approval_policy.can_approve
         super().__init__(**params)
+        if follow_policy:
+            runner.param.watch(lambda e: setattr(self, "can_approve", e.new.can_approve if e.new is not None else None), "approval_policy")
         feed_params = dict(
             sizing_mode="stretch_both", show_activity_dot=False, min_height=300,
             **self.feed_params,
@@ -179,9 +191,9 @@ class AgentChat(Viewer):
 
     def _build(self, item) -> pmui.ChatMessage | None:
         if isinstance(item, ToolCallState):
-            card = ToolCallCard(item, state=self.state, approval_factory=self.approval_factory)
+            card = ToolCallCard(item, state=self.state, approval_factory=self._approval_factory())
             self._views[id(item)] = card
-            self._watch(self, lambda e, c=card: setattr(c, "approval_factory", e.new), "approval_factory")
+            self._watch(self, lambda e, c=card: setattr(c, "approval_factory", self._approval_factory()), ["approval_factory", "can_approve"])
             return pmui.ChatMessage(card, **self._message_params(self._agent_name(item.run_id), item.started_at, compact=True))
         if not isinstance(item, MessageState):
             return None
@@ -221,6 +233,18 @@ class AgentChat(Viewer):
 
         self._watch(item, update, ["content", "finished"])
         return message
+
+    def _approval_factory(self):
+        factory, can_approve = self.approval_factory, self.can_approve
+        if factory is None or can_approve is None:
+            return factory
+
+        def build(request, state):
+            view = factory(request, state)
+            if isinstance(view, ApprovalCard) and view.can_approve is None:
+                view.can_approve = can_approve
+            return view
+        return build
 
     def _scroll(self):
         # ChatFeed exposes no public scroll API; this mirrors what its own stream() does.
