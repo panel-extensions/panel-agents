@@ -266,15 +266,19 @@ class ApprovalCard(Viewer):
         )
         self._policy = pmui.Alert(object=self.policy_message, severity="info", variant="outlined", visible=False, sizing_mode="stretch_width", margin=(4, 4))
         self._error = pmui.Alert(object="", severity="error", visible=False, sizing_mode="stretch_width", margin=(4, 4))
-        header = pmui.Row(
-            pmui.Typography(
-                self.request.tool_name, variant="subtitle1", margin=(0, 8, 0, 4),
-                sx={"fontWeight": 600, "fontFamily": "ui-monospace, SFMono-Regular, Menlo, monospace"},
+        # Wraps the edit toggle below the title when the card is narrow, e.g. in a drawer.
+        header = pmui.FlexBox(
+            pmui.Row(
+                pmui.Typography(
+                    self.request.tool_name, variant="subtitle1", margin=(0, 8, 0, 4),
+                    sx={"fontWeight": 600, "fontFamily": "ui-monospace, SFMono-Regular, Menlo, monospace"},
+                ),
+                pmui.Chip(label="Awaiting approval", color="warning", size="small", variant="outlined", icon="pending", margin=(0, 4)),
+                margin=0, align="center", styles={"align-items": "center"},
             ),
-            pmui.Chip(label="Awaiting approval", color="warning", size="small", variant="outlined", icon="pending", margin=(0, 4)),
-            pn.Spacer(sizing_mode="stretch_width"),
             self._edit_toggle,
-            sizing_mode="stretch_width", margin=0, align="center",
+            flex_wrap="wrap", justify_content="space-between", align_items="center", gap="4px",
+            sizing_mode="stretch_width", margin=0,
         )
         body = [header]
         if self.request.description:
