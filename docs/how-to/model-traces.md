@@ -82,9 +82,9 @@ assert cassette.divergences == []
 assert cassette.remaining == 0
 ```
 
-`Cassette(messages)` takes a message history directly, for example `result.all_messages()`, and works with `agent.run`, `agent.override(model=cassette)` and streamed runs alike. The responses keep their recorded model name, usage and ids, so the chat shows the same usage as the recorded run.
+`Cassette(messages)` takes a message history directly, for example `result.all_messages()`, and works with `agent.run`, `agent.override(model=cassette)` and streamed runs alike. The responses keep their recorded parts, model name and usage, so the chat shows the same usage as the recorded run, but take the run id of the playback, so a trace recorded during playback joins with its own events.
 
-A cassette holds the model fixed and tests everything else. Each tool result and user prompt the agent sends is compared with the recording, and every difference is collected in `cassette.divergences` as a `Divergence` naming the request, the tool call and the recorded and actual values; with `strict=True` the first one raises `CassetteError` instead. Playback fails with `CassetteError` when a recorded response calls a tool the agent no longer offers and when the agent makes more requests than were recorded.
+A cassette holds the model fixed and tests everything else. Each tool result, user prompt and output validator retry the agent sends is compared with the recording, and every difference is collected in `cassette.divergences` as a `Divergence` naming the request, the tool call and the recorded and actual values; with `strict=True` the first one raises `CassetteError` instead. Playback fails with `CassetteError` when a recorded response calls a tool the agent no longer offers and when the agent makes more requests than were recorded.
 
 A cassette also goes stale when the instructions or tools change, even if every result still matches. `AgentRunner` stores a `fingerprint` of the instructions, system prompts and tool schemas on each response, and the cassette raises `CassetteError` when the agent it plays to offers something else. Record the cassette again after such a change. For an agent whose instructions change from run to run, for example because they include the date, pass `check_fingerprint=False`; a mismatch is then reported as a divergence of kind `"fingerprint"`.
 

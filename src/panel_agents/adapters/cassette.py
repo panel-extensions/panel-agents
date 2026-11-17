@@ -19,30 +19,33 @@ the ones the recording was made with.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import os
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Iterable, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
 from typing import Any
 
+from pydantic_ai import messages as _messages
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
-    ModelResponseStreamEvent,
     RetryPromptPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
 )
-from pydantic_ai.models import ModelRequestParameters, StreamedResponse
+from pydantic_ai.models import CompletedStreamedResponse, ModelRequestParameters, StreamedResponse
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_core import to_jsonable_python
 
 from .model_trace import _METADATA_KEY, _read, fingerprint, load_messages
 
 __all__ = ["Cassette", "CassetteError", "Divergence"]
+
+# Output validator retries are RetryPromptParts without a tool in older pydantic-ai releases.
+_RetryFeedbackPart = getattr(_messages, "RetryFeedbackPart", None)
 
 
 class CassetteError(RuntimeError):
@@ -56,7 +59,7 @@ class Divergence:
     request: int
     """The 1-based number of the model request it was found in."""
     kind: str
-    """``"tool_return"``, ``"prompt"`` or ``"fingerprint"``."""
+    """``"tool_return"``, ``"prompt"``, ``"retry"`` or ``"fingerprint"``."""
     expected: Any
     actual: Any
     tool_name: str | None = None
@@ -71,7 +74,7 @@ def _normalize(value: Any) -> Any:
     return to_jsonable_python(value, fallback=repr)
 
 
-def _tool_parts(message: ModelMessage) -> dict[str, ToolReturnPart | RetryPromptPart]:
+def _tool_parts(message: ModelMessage | None) -> dict[str, ToolReturnPart | RetryPromptPart]:
     if not isinstance(message, ModelRequest):
         return {}
     return {
@@ -80,44 +83,20 @@ def _tool_parts(message: ModelMessage) -> dict[str, ToolReturnPart | RetryPrompt
     }
 
 
-def _prompts(message: ModelMessage) -> list[Any]:
+def _prompts(message: ModelMessage | None) -> list[Any]:
     if not isinstance(message, ModelRequest):
         return []
     return [_normalize(part.content) for part in message.parts if isinstance(part, UserPromptPart)]
 
 
-@dataclass
-class _PlaybackStream(StreamedResponse):
-    """Streams a recorded response part by part, keeping its model name, usage and ids."""
-
-    recorded: ModelResponse = field(kw_only=True)
-
-    def __post_init__(self):
-        self.provider_response_id = self.recorded.provider_response_id
-        self.provider_details = self.recorded.provider_details
-        self.finish_reason = self.recorded.finish_reason
-        self.metadata = copy.deepcopy(self.recorded.metadata)
-
-    async def _get_event_iterator(self) -> AsyncIterator[ModelResponseStreamEvent]:
-        for index, part in enumerate(self.recorded.parts):
-            yield self._parts_manager.handle_part(vendor_part_id=index, part=part)
-        self._usage = self.recorded.usage
-
-    @property
-    def model_name(self) -> str:
-        return self.recorded.model_name or "cassette"
-
-    @property
-    def provider_name(self) -> str | None:
-        return self.recorded.provider_name
-
-    @property
-    def provider_url(self) -> str | None:
-        return self.recorded.provider_url
-
-    @property
-    def timestamp(self) -> datetime:
-        return self.recorded.timestamp
+def _retries(message: ModelMessage | None) -> list[Any]:
+    if not isinstance(message, ModelRequest):
+        return []
+    return [
+        _normalize(part.content) for part in message.parts
+        if (isinstance(part, RetryPromptPart) and not part.tool_name)
+        or (_RetryFeedbackPart is not None and isinstance(part, _RetryFeedbackPart))
+    ]
 
 
 class Cassette(FunctionModel):
@@ -126,15 +105,18 @@ class Cassette(FunctionModel):
 
     Pass it as the agent's model, e.g. ``AgentRunner(agent, run_kwargs={"model":
     Cassette.from_trace(path)})``, or with ``agent.override(model=...)``.
-    Streamed and non-streamed runs are both supported.
+    Streamed and non-streamed runs are both supported. Played responses
+    keep their recorded parts, model name and usage, but take the run and
+    conversation ids of the playback.
 
-    Every tool result and user prompt the agent sends is compared with the
-    recording; differences are collected in ``divergences``, or raised as
-    ``CassetteError`` with ``strict=True``. ``check_fingerprint`` compares
-    the instructions and tools offered with the fingerprint stored on each
-    recorded response by ``AgentRunner``, so a cassette recorded against
-    another version of the agent fails instead of passing silently; turn
-    it off for agents whose instructions change from run to run.
+    Every tool result, user prompt and output retry the agent sends is
+    compared with the recording; differences are collected in
+    ``divergences``, or raised as ``CassetteError`` with ``strict=True``.
+    ``check_fingerprint`` compares the instructions and tools offered with
+    the fingerprint stored on each recorded response by ``AgentRunner``, so
+    a cassette recorded against another version of the agent fails instead
+    of passing silently; turn it off for agents whose instructions change
+    from run to run.
     """
 
     def __init__(self, messages: Sequence[ModelMessage], *, strict: bool = False, check_fingerprint: bool = True):
@@ -146,6 +128,7 @@ class Cassette(FunctionModel):
         self.played = 0
         self._responses: list[ModelResponse] = []
         self._requests: list[list[ModelRequest]] = []
+        self._unprepared: ModelRequestParameters | None = None
         pending: list[ModelRequest] = []
         for message in self.messages:
             if isinstance(message, ModelResponse):
@@ -159,11 +142,18 @@ class Cassette(FunctionModel):
         }
 
     @classmethod
-    def from_trace(cls, path: str | os.PathLike, **kwargs) -> Cassette:
-        """Load the conversation of a model trace written by ``ModelTraceRecorder``."""
-        if not _read(path).include_content:
-            raise ValueError(f"{path} was recorded with include_content=False and has nothing to play back.")
-        return cls(load_messages(path), **kwargs)
+    def from_trace(cls, source: str | os.PathLike | Iterable[dict[str, Any]], **kwargs) -> Cassette:
+        """
+        Load the conversation of a model trace written by ``ModelTraceRecorder``,
+        from a file or, where the trace loaders accept them, from the records
+        a callable sink received.
+        """
+        if not isinstance(source, (str, os.PathLike)):
+            source = list(source)
+        if not _read(source).include_content:
+            name = source if isinstance(source, (str, os.PathLike)) else "The model trace"
+            raise ValueError(f"{name} was recorded with include_content=False and has nothing to play back.")
+        return cls(load_messages(source), **kwargs)
 
     @property
     def responses(self) -> list[ModelResponse]:
@@ -191,10 +181,12 @@ class Cassette(FunctionModel):
                 )
             self._diverge(Divergence(number, "fingerprint", expected, actual))
         request = messages[-1] if messages else None
-        recorded_prompts = [p for message in self._requests[number - 1] for p in _prompts(message)]
-        if (prompts := _prompts(request)) != recorded_prompts and (prompts or recorded_prompts):
-            self._diverge(Divergence(number, "prompt", recorded_prompts, prompts))
-        expected_parts = {k: v for message in self._requests[number - 1] for k, v in _tool_parts(message).items()}
+        recorded_requests = self._requests[number - 1]
+        for kind, extract in (("prompt", _prompts), ("retry", _retries)):
+            expected_values = [value for message in recorded_requests for value in extract(message)]
+            if (actual_values := extract(request)) != expected_values:
+                self._diverge(Divergence(number, kind, expected_values, actual_values))
+        expected_parts = {k: v for message in recorded_requests for k, v in _tool_parts(message).items()}
         actual_parts = _tool_parts(request)
         for call_id in dict.fromkeys([*expected_parts, *actual_parts]):
             part, expected_part = actual_parts.get(call_id), expected_parts.get(call_id) or self._returns.get(call_id)
@@ -211,31 +203,39 @@ class Cassette(FunctionModel):
                 f"and the agent made another."
             )
         number = self.played + 1
+        # Compared before the model prepares them, as AgentRunner fingerprints them when recording.
         self._compare(number, messages, params)
-        response = copy.deepcopy(self._responses[number - 1])
+        recorded = self._responses[number - 1]
         offered = {tool.name for tool in [*params.function_tools, *params.output_tools]}
-        for part in response.parts:
+        for part in recorded.parts:
             if isinstance(part, ToolCallPart) and part.tool_name not in offered:
                 raise CassetteError(
                     f"Recorded response {number} calls the tool {part.tool_name!r}, which the agent no longer "
                     f"offers; it offers {sorted(offered)}."
                 )
         self.played = number
-        return response
+        # The run that plays the response stamps its own ids, so traces of a playback join with its events.
+        return dataclasses.replace(copy.deepcopy(recorded), run_id=None, conversation_id=None)
 
     def _respond(self, messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        response = self._play(messages, info.model_request_parameters)
+        response = self._play(messages, self._unprepared or info.model_request_parameters)
         self._model_name_played = response.model_name
         return response
 
     async def request(self, messages, model_settings, model_request_parameters) -> ModelResponse:
+        self._unprepared = model_request_parameters
+        try:
+            response = await super().request(messages, model_settings, model_request_parameters)
+        finally:
+            self._unprepared = None
         # FunctionModel names every response after itself; the recorded name is the one to keep.
-        response = await super().request(messages, model_settings, model_request_parameters)
         response.model_name = self._model_name_played
         return response
 
     @asynccontextmanager
     async def request_stream(self, messages, model_settings, model_request_parameters, run_context=None) -> AsyncIterator[StreamedResponse]:
+        # The run's history is what was recorded; the messages sent to the model may render some parts differently.
+        history = list(run_context.messages) if run_context is not None and run_context.messages else messages
+        recorded = self._play(history, model_request_parameters)
         model_settings, model_request_parameters = self.prepare_request(model_settings, model_request_parameters)
-        recorded = self._play(messages, model_request_parameters)
-        yield _PlaybackStream(model_request_parameters=model_request_parameters, recorded=recorded)
+        yield CompletedStreamedResponse(recorded, model_request_parameters=model_request_parameters, replay_events=True)
