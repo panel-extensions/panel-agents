@@ -286,4 +286,5 @@ def create_app():
     return page
 
 
-create_app().servable()
+if pn.state.served:
+    create_app().servable()
