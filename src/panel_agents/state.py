@@ -321,6 +321,36 @@ class RunState(param.Parameterized):
                 reason=reason, user=user, run_id=request.run_id,
             ))
 
+    def publish_artifact(
+        self,
+        artifact_id: str,
+        value: Any,
+        *,
+        kind: str | None = None,
+        title: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        applied: bool = False,
+    ):
+        """
+        Publish a version of an artifact from the host app rather than a
+        tool, e.g. after the user edited a document directly. With
+        ``applied=True`` the version becomes the one the host document holds.
+        """
+        self.apply(ev.ArtifactPublished(
+            artifact_id=artifact_id, value=value, kind=kind, title=title, metadata=metadata or {}, applied=applied,
+        ))
+        return self.artifacts[artifact_id]
+
+    def apply_artifact_version(self, artifact_id: str, version: int, user: str | None = None):
+        """
+        Record that a person applied ``version`` (counting from 1) of a
+        document artifact to the host document.
+        """
+        artifact = self.artifacts[artifact_id]
+        if not 1 <= version <= len(artifact.versions):
+            raise ValueError(f"{artifact_id!r} has no version {version}.")
+        self.apply(ev.ArtifactApplied(artifact_id=artifact_id, version=version, user=user))
+
     # Event handlers
 
     def _add_item(self, item):
@@ -414,7 +444,12 @@ class RunState(param.Parameterized):
         self.artifacts.publish(
             event.artifact_id, event.value, kind=event.kind, title=event.title,
             tool_call_id=event.tool_call_id, metadata=event.metadata, created_at=event.timestamp,
+            applied=event.applied,
         )
+
+    def _on_artifact_applied(self, event: ev.ArtifactApplied):
+        if event.artifact_id in self.artifacts:
+            self.artifacts.mark_applied(event.artifact_id, event.version)
 
     def _on_approval_requested(self, event: ev.ApprovalRequested):
         request = ApprovalRequest(

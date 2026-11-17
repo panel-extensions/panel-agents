@@ -1,0 +1,67 @@
+# Edit documents with versions you can apply and revert
+
+Most artifacts are outputs: a query result, a chart, a report. A document artifact instead mirrors something the host app owns and the agent edits, such as a configuration, a dashboard or a form. Each edit the agent makes is published as a new version, the user can compare any two versions, and the artifact view offers to apply an earlier or later version back to the app.
+
+## Publish versions as applied
+
+A tool that edits the document in place publishes what the document now holds with `applied=True`:
+
+```python
+from panel_agents.adapters.pydantic_ai import publish_artifact
+
+@agent.tool
+async def set_title(ctx: RunContext[Deps], title: str) -> str:
+    """Rename the dashboard."""
+    ctx.deps.dashboard.title = title
+    await publish_artifact(ctx, "dashboard", ctx.deps.dashboard.to_dict(), kind="dashboard", title="Dashboard", applied=True)
+    return "Renamed."
+```
+
+`artifact_return(..., applied=True)` does the same from a sync tool. An artifact with an applied version is a document: `artifact.is_document` is True, `artifact.applied` is the number of the version the host holds (a read-only parameter you can watch), and `artifact.applied_version` is that `ArtifactVersion`. Version numbers count from 1 everywhere they are public, as in the `v1`, `v2` labels the user sees: `ArtifactVersion.version`, `Artifact.current`, `ArtifactView.base` and `target`, `apply_version(version)` and the `ARTIFACT_APPLIED` event all use them. A tool that only proposes a change publishes without `applied`, and the version waits for the user to apply it.
+
+## Apply and revert from the artifact view
+
+Give the `ArtifactPane` (or a single `ArtifactView`) the `RunState` and an `on_apply` callback that makes the host document match a version:
+
+```python
+from panel_agents import ArtifactPane
+
+def apply_version(artifact, version):
+    dashboard.load(version.value)
+
+pane = ArtifactPane(state=runner.state, on_apply=apply_version)
+```
+
+When the user selects a version of a document, the header shows "Revert to vN" for versions before the applied one and "Apply vN" for versions after it. Clicking it calls `on_apply(artifact, version)` with the `Artifact` and the `ArtifactVersion` to apply, and the callback may be async. If the callback raises or returns False, the message is shown and nothing changes. Otherwise the pane records an `ARTIFACT_APPLIED` event through `RunState.apply_artifact_version`, so recordings and replays show which version was live. The button is disabled while the callback runs, so a double click cannot apply twice. `ArtifactView.apply_version(version)` does the same from code, taking a version number, and raises if there is no `on_apply` or no such version.
+
+Applying does not create a version. The compare tab compares new versions of a document with the applied one, so after a revert the agent's next edit is shown against what the host actually holds. An `AgentRunner` also tells the model: the next prompt it sends starts with a short note such as "ann applied version 1 of the artifact 'Dashboard' (dashboard)", so the agent does not keep building on a version that is no longer live.
+
+## Publish the host's own edits
+
+When the user changes the document outside the agent, for example with the app's own widgets, publish the new state so the versions stay truthful:
+
+```python
+state.publish_artifact("dashboard", dashboard.to_dict(), applied=True)
+```
+
+`RunState.publish_artifact` records an `ARTIFACT_PUBLISHED` event like a tool would, and an `AgentRunner` mentions the new version to the model on its next prompt.
+
+## Describe changes semantically
+
+The compare tab picks a diff strategy by artifact kind. Text kinds get a line diff and tables a cell diff. For structured documents, register a strategy that returns a `StructuredDiff`, a list of `Change(op, path, old, new, label)` records. `diff_structured` computes the changes between two nested dict and list values. A change's `path` is a tuple of the keys and list positions leading to it, such as `("nodes", "sales", "config")`, so keys containing dots stay unambiguous, and `path_str` renders it for display. A strategy can relabel the changes in the document's own terms:
+
+```python
+from panel_agents.artifacts.diff import diff_structured, register_diff
+
+@register_diff("dashboard")
+def diff_dashboard(old, new, **options):
+    result = diff_structured(old, new)
+    for change in result.changes:
+        if len(change.path) == 2 and change.path[0] == "nodes" and change.op != "change":
+            name = change.path[1]
+            change.label = f"Node {name!r} {'added' if change.op == 'add' else 'removed'}"
+    result.old_text, result.new_text = to_yaml(old), to_yaml(new)
+    return result
+```
+
+The view lists the changes, showing the label when there is one and otherwise the path with the old and new values. When `old_text` and `new_text` are set, a Text tab next to the change list shows the line diff of the serialized versions. `examples/artifacts_demo.py` shows a document artifact with a custom diff and an `on_apply` callback.
