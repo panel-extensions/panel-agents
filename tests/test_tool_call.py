@@ -5,12 +5,13 @@ import pytest
 
 from panel_agents import RunState
 from panel_agents import events as ev
-from panel_agents.components.renderers import TABLE_CSS
+from panel_agents.components.approval import ApprovalCard, approval_factory
+from panel_agents.components.renderers import _TABLE_CSS
 from panel_agents.components.tool_call import (
     ToolCallCard,
-    args_preview,
-    format_duration,
-    truncate,
+    _args_preview,
+    _format_duration,
+    _truncate,
 )
 
 
@@ -119,6 +120,19 @@ def test_approval_factory_and_resolution(state):
     assert "Edited" in card._header.object
 
 
+def test_approval_card_replaces_the_argument_listing(state):
+    state.apply(ev.ToolCallStart(tool_call_id="t1", tool_name="drop_table"))
+    state.apply(ev.ToolCallArgs(tool_call_id="t1", delta='{"table": "sales"}'))
+    cards = []
+    card = ToolCallCard(state.tool_calls["t1"], state=state, approval_factory=lambda *a: cards.append(approval_factory(*a)) or cards[-1])
+    assert card._args_section.visible
+    state.apply(ev.ApprovalRequested(tool_call_id="t1", tool_name="drop_table", args={"table": "sales"}))
+    assert isinstance(cards[-1], ApprovalCard) and not cards[-1]._title.visible
+    assert not card._args_section.visible
+    state.resolve_approval("t1", approved=True)
+    assert card._args_section.visible
+
+
 def test_denied(state):
     state.apply(ev.ApprovalRequested(tool_call_id="t1", tool_name="drop_table"))
     card = ToolCallCard(state.tool_calls["t1"], state=state)
@@ -152,7 +166,7 @@ def test_dataframe_result_renders_styled_table(state):
     (pane,) = card._result.objects
     assert type(pane) is pn.pane.DataFrame
     assert not pane.index
-    assert TABLE_CSS in pane.stylesheets
+    assert _TABLE_CSS in pane.stylesheets
 
 
 def test_records_result_renders_styled_table(state):
@@ -175,7 +189,7 @@ def test_markdown_table_result_is_styled(state):
     finish(state, "| a | b |\n|---|---|\n| 1 | 2 |")
     (pane,) = card._result.objects
     assert isinstance(pane, pn.pane.Markdown)
-    assert TABLE_CSS in pane.stylesheets
+    assert _TABLE_CSS in pane.stylesheets
 
 
 def test_artifact_chips(state):
@@ -219,11 +233,11 @@ def test_card_without_state(state):
 
 
 def test_helpers():
-    assert args_preview({"a": 1, "b": "x  y\nz"}) == 'a=1, b="x y z"'
-    assert args_preview({"sql": "x" * 200}, max_length=20).endswith("…")
-    assert format_duration(None) == ""
-    assert format_duration(0.25) == "250ms"
-    assert format_duration(2.34) == "2.3s"
-    assert format_duration(125) == "2m 5s"
-    assert truncate([1, 2, 3], max_items=2) == ([1, 2], "Showing the first 2 of 3 items.")
-    assert truncate({"a": 1}) == ({"a": 1}, None)
+    assert _args_preview({"a": 1, "b": "x  y\nz"}) == 'a=1, b="x y z"'
+    assert _args_preview({"sql": "x" * 200}, max_length=20).endswith("…")
+    assert _format_duration(None) == ""
+    assert _format_duration(0.25) == "250ms"
+    assert _format_duration(2.34) == "2.3s"
+    assert _format_duration(125) == "2m 5s"
+    assert _truncate([1, 2, 3], max_items=2) == ([1, 2], "Showing the first 2 of 3 items.")
+    assert _truncate({"a": 1}) == ({"a": 1}, None)

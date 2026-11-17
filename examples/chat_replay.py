@@ -14,9 +14,8 @@ import json
 import pandas as pd
 import panel_material_ui as pmui
 
-from panel_agents import RunState
+from panel_agents import AgentChat, RunState
 from panel_agents import events as ev
-from panel_agents.components.chat import AgentChat
 
 RESULT = pd.DataFrame({
     "region": ["EMEA", "North America", "APAC", "LATAM"],

@@ -1,7 +1,7 @@
 """
 Drive a pydantic-ai agent and translate its run into panel-agents events.
 
-``AgentRunner`` streams a run through ``PanelEventStream``, a
+``AgentRunner`` streams a run through ``_PanelEventStream``, a
 ``pydantic_ai.ui.UIEventStream`` subclass, and applies every resulting
 event to a ``RunState``. A run-scoped capability reports per-response
 usage and resolves tool approvals inline, so a run that pauses for a
@@ -23,7 +23,7 @@ from typing import Any
 import param
 from pydantic_ai import CancellationToken, CapabilityEvent, CustomEvent, RunContext
 from pydantic_ai.capabilities import AbstractCapability
-from pydantic_ai.exceptions import RunCancelled
+from pydantic_ai.exceptions import ApprovalRequired, CallDeferred, ModelRetry, RunCancelled, ToolFailed
 from pydantic_ai.messages import (
     DeferredToolRequestsEvent,
     FunctionToolResultEvent,
@@ -45,27 +45,30 @@ from pydantic_ai.tools import (
     ToolDefinition,
     ToolDenied,
 )
+from pydantic_ai.toolsets import AbstractToolset, ApprovalRequiredToolset, ToolsetTool
 from pydantic_ai.ui import UIEventStream
+from pydantic_core import to_jsonable_python
 
 from .. import events as ev
-from ..recording import dump_event
-from ..state import RunState, new_id
+from ..actions import Action, ActionRegistry
+from ..policy import ApprovalPolicy
+from ..recording import _dump_event
+from ..state import ApprovalRequest, RunState, _new_id
 
 __all__ = [
+    "ActionToolset",
     "AgentRunner",
-    "ArtifactEvent",
-    "PanelEventStream",
     "artifact_return",
     "publish_artifact",
 ]
 
 _ARTIFACTS_KEY = "panel_agents.artifacts"
 
-DENIED_MESSAGE = "The user denied this tool call."
+_DENIED_MESSAGE = "The user denied this tool call."
 
 
 @dataclass(kw_only=True)
-class ArtifactEvent(CustomEvent, name="panel_agents.artifact"):
+class _ArtifactEvent(CustomEvent, name="panel_agents.artifact"):
     """Publishes a version of an artifact; emitted from tools via ``publish_artifact``."""
 
     artifact_id: str
@@ -73,10 +76,11 @@ class ArtifactEvent(CustomEvent, name="panel_agents.artifact"):
     title: str | None = None
     kind: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    applied: bool = False
 
 
 @dataclass(kw_only=True)
-class UsageEvent(CapabilityEvent, namespace="panel_agents"):
+class _UsageEvent(CapabilityEvent, namespace="panel_agents"):
     model: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
@@ -92,14 +96,19 @@ async def publish_artifact(
     title: str | None = None,
     kind: str | None = None,
     metadata: dict[str, Any] | None = None,
+    applied: bool = False,
 ) -> None:
     """
     Publish a new version of an artifact from inside an async tool.
 
     The event is stamped with the calling tool's ``tool_call_id`` and
-    reaches the UI in stream order, before the tool's result.
+    reaches the UI in stream order, before the tool's result. Pass
+    ``applied=True`` when the tool edited a host document in place and
+    ``value`` is what the document now holds.
     """
-    await ctx.emit(ArtifactEvent(artifact_id=artifact_id, value=value, title=title, kind=kind, metadata=metadata or {}))
+    await ctx.emit(_ArtifactEvent(
+        artifact_id=artifact_id, value=value, title=title, kind=kind, metadata=metadata or {}, applied=applied,
+    ))
 
 
 def artifact_return(
@@ -110,15 +119,95 @@ def artifact_return(
     title: str | None = None,
     kind: str | None = None,
     metadata: dict[str, Any] | None = None,
+    applied: bool = False,
 ) -> ToolReturn:
     """
     Return ``return_value`` to the model and publish ``value`` as an artifact.
 
     Works from sync and async tools. The artifact travels in the tool
-    return's metadata, which pydantic-ai never sends to the model.
+    return's metadata, which pydantic-ai never sends to the model. See
+    ``publish_artifact`` for ``applied``.
     """
-    artifact = ArtifactEvent(artifact_id=artifact_id, value=value, title=title, kind=kind, metadata=metadata or {})
+    artifact = _ArtifactEvent(
+        artifact_id=artifact_id, value=value, title=title, kind=kind, metadata=metadata or {}, applied=applied,
+    )
     return ToolReturn(return_value=return_value, metadata={_ARTIFACTS_KEY: [artifact]})
+
+
+@dataclass
+class _RecordingApprovalToolset(ApprovalRequiredToolset[Any]):
+    """Applies the approval policy and keeps each tool's validator, to check edited arguments with it."""
+
+    runner: Any = None
+
+    async def call_tool(self, name: str, tool_args: dict[str, Any], ctx: RunContext[Any], tool: Any) -> Any:
+        self.runner._validators[name] = tool.args_validator
+        return await super().call_tool(name, tool_args, ctx, tool)
+
+
+def _shorten(text: str, limit: int = 80) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _with_defaults(args: dict[str, Any], schema: dict[str, Any] | None) -> dict[str, Any]:
+    # Edited arguments are checked as the tool will see them, with omitted defaults filled in.
+    properties = (schema or {}).get("properties", {})
+    return {**{k: p["default"] for k, p in properties.items() if isinstance(p, dict) and "default" in p}, **args}
+
+
+@dataclass
+class _ActionArgsValidator:
+
+    action: Action
+
+    def validate_json(self, input: str | bytes | bytearray, *, allow_partial: Any = False, **kwargs: Any) -> dict[str, Any]:
+        return self.action.validate_json(input)
+
+    def validate_python(self, input: Any, *, allow_partial: Any = False, **kwargs: Any) -> dict[str, Any]:
+        return self.action.validate(input)
+
+
+class ActionToolset(AbstractToolset[Any]):
+    """
+    Exposes the actions of an ``ActionRegistry`` as pydantic-ai tools.
+
+    Each tool has the action's name, description and JSON schema, and
+    runs the action in the registry's Panel session. Actions registered
+    or removed during a session are picked up on the next model request.
+    An exception raised by an action is reported to the model as a
+    failed tool call instead of ending the run.
+    """
+
+    def __init__(self, registry: ActionRegistry, *, id: str | None = None, max_retries: int = 1):
+        self.registry = registry
+        self.max_retries = max_retries
+        self._id = id
+
+    @property
+    def id(self) -> str | None:
+        return self._id
+
+    async def get_tools(self, ctx: RunContext[Any]) -> dict[str, ToolsetTool[Any]]:
+        return {
+            action.name: ToolsetTool(
+                toolset=self,
+                tool_def=ToolDefinition(name=action.name, description=action.description, parameters_json_schema=action.parameters),
+                max_retries=self.max_retries,
+                args_validator=_ActionArgsValidator(action),
+            )
+            for action in self.registry
+        }
+
+    async def call_tool(self, name: str, tool_args: dict[str, Any], ctx: RunContext[Any], tool: ToolsetTool[Any]) -> Any:
+        action = self.registry.actions.get(name)
+        if action is None:
+            raise ToolFailed(f"The action {name!r} is no longer available.")
+        try:
+            return await self.registry._invoke_validated(action, tool_args)
+        except (ApprovalRequired, CallDeferred, ModelRetry, ToolFailed):
+            raise
+        except Exception as e:
+            raise ToolFailed(f"{type(e).__name__}: {e}") from e
 
 
 def _response_cost(response: ModelResponse) -> float | None:
@@ -141,9 +230,22 @@ class _RunCapability(AbstractCapability[Any]):
         self.runner._tool_defs.update({td.name: td for td in tool_defs})
         return tool_defs
 
+    def get_wrapper_toolset(self, toolset: AbstractToolset[Any]) -> AbstractToolset[Any] | None:
+        runner = self.runner
+
+        def needs_approval(ctx: RunContext[Any], tool_def: ToolDefinition, args: dict[str, Any]) -> bool:
+            # The validated arguments, defaults included, are what approvals are shown and checked against.
+            validated = to_jsonable_python(args, fallback=str)
+            if ctx.tool_call_id:
+                runner._validated[ctx.tool_call_id] = validated
+            policy = runner.approval_policy
+            return policy is not None and policy.requires_approval(tool_def.name, validated)
+
+        return _RecordingApprovalToolset(toolset, needs_approval, runner=runner)
+
     async def after_model_request(self, ctx: RunContext[Any], *, request_context: Any, response: ModelResponse) -> ModelResponse:
         usage = response.usage
-        await ctx.emit(UsageEvent(
+        await ctx.emit(_UsageEvent(
             model=response.model_name, input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
             cached_tokens=usage.cache_read_tokens, cost_usd=_response_cost(response),
         ))
@@ -153,26 +255,35 @@ class _RunCapability(AbstractCapability[Any]):
         # External calls (CallDeferred) are left unresolved so the run ends with them as its output.
         if not requests.approvals:
             return None
-        decisions = await asyncio.gather(*(self.runner._wait_for_decision(call.tool_call_id) for call in requests.approvals))
+        runner = self.runner
+        decisions = await asyncio.gather(*(runner._wait_for_decision(call.tool_call_id) for call in requests.approvals))
         approvals: dict[str, ToolApproved | ToolDenied] = {}
         for call, decision in zip(requests.approvals, decisions, strict=True):
-            if decision.approved:
-                edited = decision.args is not None and decision.args != call.args_as_dict()
-                approvals[call.tool_call_id] = ToolApproved(override_args=decision.args if edited else None)
-            else:
-                approvals[call.tool_call_id] = ToolDenied(decision.reason or DENIED_MESSAGE)
+            if not decision.approved:
+                approvals[call.tool_call_id] = ToolDenied(decision.reason or _DENIED_MESSAGE)
+                continue
+            proposed = runner._validated.get(call.tool_call_id, call.args_as_dict())
+            # The state only accepts permitted decisions; this guards against a policy changed in between.
+            request = runner.state.approvals.get(call.tool_call_id)
+            if request is not None and (message := runner._refusal(request, decision.user, decision.args, True)):
+                runner.state.apply(ev.ToolCallResult(tool_call_id=call.tool_call_id, content=message, is_error=True, run_id=runner.run_id))
+                approvals[call.tool_call_id] = ToolDenied(message)
+                continue
+            edited = decision.args is not None and decision.args != proposed
+            approvals[call.tool_call_id] = ToolApproved(override_args=decision.args if edited else None)
         return DeferredToolResults(approvals=approvals)
 
 
 @dataclass
-class PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
+class _PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
     """Translates pydantic-ai stream events into panel-agents events."""
 
-    run_id: str = field(default_factory=lambda: new_id("run-"))
+    run_id: str = field(default_factory=lambda: _new_id("run-"))
     thread_id: str | None = None
     agent_name: str | None = None
     input: Any = None
     tool_defs: dict[str, ToolDefinition] = field(default_factory=dict)
+    validated_args: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     error: Exception | None = None
     _text_id: str | None = None
@@ -180,7 +291,7 @@ class PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
     _response_text_id: str | None = None
 
     def encode_event(self, event: ev.Event) -> str:
-        return f"data: {dump_event(event)}\n\n"
+        return f"data: {_dump_event(event)}\n\n"
 
     def _stamp(self, event: ev.Event) -> ev.Event:
         event.run_id = self.run_id
@@ -209,7 +320,7 @@ class PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
 
     async def handle_text_start(self, part: TextPart, follows_text: bool = False) -> AsyncIterator[ev.Event]:
         if not follows_text or self._text_id is None:
-            self._text_id = self._response_text_id = new_id("msg-")
+            self._text_id = self._response_text_id = _new_id("msg-")
             yield ev.TextMessageStart(message_id=self._text_id)
         if part.content:
             yield ev.TextMessageContent(message_id=self._text_id, delta=part.content)
@@ -225,7 +336,7 @@ class PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
 
     async def handle_thinking_start(self, part: ThinkingPart, follows_thinking: bool = False) -> AsyncIterator[ev.Event]:
         if not follows_thinking or self._thinking_id is None:
-            self._thinking_id = new_id("think-")
+            self._thinking_id = _new_id("think-")
             yield ev.ThinkingStart(message_id=self._thinking_id)
         if part.content:
             yield ev.ThinkingContent(message_id=self._thinking_id, delta=part.content)
@@ -259,7 +370,8 @@ class PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
         for call in event.requests.approvals:
             tool_def = self.tool_defs.get(call.tool_name)
             yield ev.ApprovalRequested(
-                tool_call_id=call.tool_call_id, tool_name=call.tool_name, args=call.args_as_dict(),
+                tool_call_id=call.tool_call_id, tool_name=call.tool_name,
+                args=self.validated_args.get(call.tool_call_id, call.args_as_dict()),
                 schema=tool_def.parameters_json_schema if tool_def else None,
                 description=tool_def.description if tool_def else None,
             )
@@ -279,20 +391,21 @@ class PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
             return ev.ToolCallResult(tool_call_id=part.tool_call_id, content=part.model_response_str(wrap_if_error=False), is_error=True)
         return ev.ToolCallResult(tool_call_id=part.tool_call_id, content=part.content)
 
-    def _artifact(self, artifact: ArtifactEvent, tool_call_id: str | None) -> ev.ArtifactPublished:
+    def _artifact(self, artifact: _ArtifactEvent, tool_call_id: str | None) -> ev.ArtifactPublished:
         return ev.ArtifactPublished(
             artifact_id=artifact.artifact_id, value=artifact.value, kind=artifact.kind, title=artifact.title,
             tool_call_id=artifact.tool_call_id or tool_call_id, metadata=dict(artifact.metadata),
+            applied=artifact.applied,
         )
 
     async def handle_custom_event(self, event: CustomEvent) -> AsyncIterator[ev.Event]:
-        if isinstance(event, ArtifactEvent):
+        if isinstance(event, _ArtifactEvent):
             yield self._artifact(event, event.tool_call_id)
         else:
             yield ev.Custom(name=event.name, value=event.to_payload())
 
     async def handle_capability_event(self, event: CapabilityEvent) -> AsyncIterator[ev.Event]:
-        if isinstance(event, UsageEvent):
+        if isinstance(event, _UsageEvent):
             yield ev.Usage(
                 model=event.model, input_tokens=event.input_tokens, output_tokens=event.output_tokens,
                 cached_tokens=event.cached_tokens, cost_usd=event.cost_usd,
@@ -334,6 +447,10 @@ class AgentRunner(param.Parameterized):
 
     run_kwargs = param.Dict(default={}, doc="Extra keyword arguments passed to ``Agent.run_stream_events``.")
 
+    approval_policy = param.ClassSelector(class_=ApprovalPolicy, default=None, allow_None=True, doc="""
+        Rules deciding which tool calls need approval and who may give
+        it. Applies to every tool the agent can call during a run.""")
+
     running = param.Boolean(default=False, constant=True)
 
     run_id = param.String(default=None, allow_None=True, constant=True, doc="Id of the current or last run.")
@@ -349,21 +466,72 @@ class AgentRunner(param.Parameterized):
         params["deps"] = deps
         super().__init__(**params)
         self._tool_defs: dict[str, ToolDefinition] = {}
+        self._validated: dict[str, dict[str, Any]] = {}
+        self._validators: dict[str, Any] = {}
+        self._notes: list[str] = []
         self._waiters: dict[str, asyncio.Future[ev.ApprovalResolved]] = {}
         self._early: dict[str, ev.ApprovalResolved] = {}
         self._token: CancellationToken | None = None
         self._unsubscribe = self.state.subscribe(self._on_event)
+        self.state._decision_check = self._refusal
+
+    def _validate_args(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
+        """
+        Validate ``args`` for ``tool_name`` the way the tool will, returning
+        them as JSON-compatible values with every default filled in.
+        """
+        validator = self._validators.get(tool_name)
+        if validator is None:
+            tool_def = self._tool_defs.get(tool_name)
+            return _with_defaults(args, tool_def.parameters_json_schema if tool_def else None)
+        return to_jsonable_python(validator.validate_python(dict(args)), fallback=str)
+
+    def _refusal(self, request: ApprovalRequest, user: str | None, args: dict[str, Any] | None, approved: bool) -> str | None:
+        policy = self.approval_policy
+        if policy is None:
+            return None
+        who = user or "This user"
+        if not approved:
+            return None if policy.can_approve(request, user) else f"{who} may not decide this {request.tool_name} call."
+        final = None
+        if args is not None:
+            try:
+                final = self._validate_args(request.tool_name, args)
+            except Exception as e:
+                return f"Invalid arguments for {request.tool_name}: {e}"
+        return None if policy.can_decide(request, user, final) else f"{who} may not approve this {request.tool_name} call."
 
     def _on_event(self, event: ev.Event):
+        if isinstance(event, (ev.ArtifactApplied, ev.ArtifactPublished)):
+            self._note_artifact_change(event)
+            return
         if not isinstance(event, ev.ApprovalResolved):
+            return
+        # Only the decision the state accepted counts.
+        request = self.state.approvals.get(event.tool_call_id)
+        if request is None or getattr(request, "_decision", None) is not event:
             return
         future = self._waiters.get(event.tool_call_id)
         if future is None:
             # The run may not have reached its approval handler yet.
             if self.running and event.run_id == self.run_id:
-                self._early[event.tool_call_id] = event
+                self._early.setdefault(event.tool_call_id, event)
         elif not future.done():
             future.set_result(event)
+
+    def _note_artifact_change(self, event: ev.ArtifactApplied | ev.ArtifactPublished):
+        # Changes made outside the agent's tools are reported with the next prompt, so the model's view stays current.
+        artifact = self.state.artifacts.artifacts.get(event.artifact_id)
+        # Titles may come from the model or a tool, so they are quoted and shortened rather than pasted in.
+        name = repr(_shorten(event.artifact_id))
+        if artifact is not None and artifact.title and artifact.title != event.artifact_id:
+            name = f"{_shorten(artifact.title)!r} ({name})"
+        if isinstance(event, ev.ArtifactApplied):
+            who = f"{_shorten(event.user)!r} " if event.user else "The user "
+            self._notes.append(f"{who}applied version {event.version} of the artifact {name}; the app now holds that version.")
+        elif not self.running and artifact is not None:
+            held = " and now holds it" if event.applied else ""
+            self._notes.append(f"The app published version {len(artifact.versions)} of the artifact {name}{held}.")
 
     async def _wait_for_decision(self, tool_call_id: str) -> ev.ApprovalResolved:
         if tool_call_id in self._early:
@@ -384,21 +552,25 @@ class AgentRunner(param.Parameterized):
         """Run the agent on ``prompt`` and return its output."""
         if self.running:
             raise RuntimeError("AgentRunner is already running; await the current run or cancel it first.")
-        run_id = new_id("run-")
+        run_id = _new_id("run-")
         with param.edit_constant(self):
             self.param.update(running=True, run_id=run_id, error=None, deferred=None)
         if isinstance(prompt, str) and prompt:
             self.state.add_user_message(prompt, run_id=run_id)
         self._token = CancellationToken()
-        stream = PanelEventStream(
+        stream = _PanelEventStream(
             run_id=run_id, thread_id=self.thread_id, agent_name=self.agent.name,
-            input=prompt, tool_defs=self._tool_defs,
+            input=prompt, tool_defs=self._tool_defs, validated_args=self._validated,
         )
+        model_prompt = prompt
+        if self._notes and isinstance(prompt, str):
+            model_prompt = "\n".join(f"[{note}]" for note in self._notes) + "\n\n" + prompt
+            self._notes.clear()
         run_kwargs = {**self.run_kwargs, **kwargs}
         capabilities = [*run_kwargs.pop("capabilities", []), _RunCapability(runner=self)]
         try:
             async with self.agent.run_stream_events(
-                prompt, message_history=self.messages or None, deferred_tool_results=deferred_tool_results,
+                model_prompt, message_history=self.messages or None, deferred_tool_results=deferred_tool_results,
                 deps=self.deps, capabilities=capabilities, cancellation_token=self._token, **run_kwargs,
             ) as events:
                 async for event in stream.transform_stream(events):
@@ -417,13 +589,13 @@ class AgentRunner(param.Parameterized):
                 self.running = False
         return self._finish(stream)
 
-    def _apply(self, stream: PanelEventStream, event: ev.Event):
+    def _apply(self, stream: _PanelEventStream, event: ev.Event):
         if isinstance(event, ev.RunError):
             self._close(stream, event)
         else:
             self.state.apply(event)
 
-    def _close(self, stream: PanelEventStream, error: ev.RunError):
+    def _close(self, stream: _PanelEventStream, error: ev.RunError):
         # Approvals of a dead run can no longer be acted on, so close them before the error.
         for request in list(self.state.pending_approvals):
             if request.run_id == stream.run_id:
@@ -432,7 +604,7 @@ class AgentRunner(param.Parameterized):
                 ))
         self.state.apply(error)
 
-    def _finish(self, stream: PanelEventStream) -> Any:
+    def _finish(self, stream: _PanelEventStream) -> Any:
         result: AgentRunResult | None = stream._result
         if stream.cancelled is not None:
             self.messages = list(stream.cancelled.all_messages())

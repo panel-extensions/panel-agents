@@ -12,10 +12,8 @@ import panel as pn
 import panel_material_ui as pmui
 from pydantic import BaseModel, Field
 
-from panel_agents import RunState
+from panel_agents import ApprovalQueue, AuditLog, RunState
 from panel_agents import events as ev
-from panel_agents.audit import AuditLog
-from panel_agents.components.approval import ApprovalQueue
 
 
 class RunQuery(BaseModel):

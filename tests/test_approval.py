@@ -9,9 +9,9 @@ from panel_agents.audit import AuditLog
 from panel_agents.components.approval import (
     ApprovalCard,
     ApprovalQueue,
+    _diff_args,
+    _prune_args,
     approval_factory,
-    diff_args,
-    prune_args,
 )
 
 
@@ -53,6 +53,13 @@ def test_approve_without_edits():
     assert not request.edited
     assert request.user == "alice"
     assert state.tool_calls["t1"].status == "running"
+
+
+def test_edit_is_offered_only_with_arguments():
+    state = make_state()
+    state.apply(ev.ApprovalRequested(tool_call_id="t3", tool_name="delete_report", run_id="r"))
+    assert card_for(state, "t1")._edit_toggle.visible
+    assert not card_for(state, "t3")._edit_toggle.visible
 
 
 def test_deny():
@@ -238,9 +245,9 @@ def test_queue_propagates_policy():
 
 def test_diff_and_prune():
     schema = RunQuery.model_json_schema()
-    assert prune_args({"sql": "a"}, {"sql": "a", "limit": 100, "timeout": None}, schema) == {"sql": "a"}
-    assert prune_args({"sql": "a"}, {"sql": "a", "limit": 5}, schema) == {"sql": "a", "limit": 5}
-    changes = diff_args({"a": 1, "n": {"x": 1}, "gone": 2}, {"a": 2, "n": {"x": 1, "y": 3}})
+    assert _prune_args({"sql": "a"}, {"sql": "a", "limit": 100, "timeout": None}, schema) == {"sql": "a"}
+    assert _prune_args({"sql": "a"}, {"sql": "a", "limit": 5}, schema) == {"sql": "a", "limit": 5}
+    changes = _diff_args({"a": 1, "n": {"x": 1}, "gone": 2}, {"a": 2, "n": {"x": 1, "y": 3}})
     assert [c[0] for c in changes] == ["a", "gone", "n.y"]
 
 

@@ -1,8 +1,9 @@
 import pandas as pd
+import pytest
 
-from panel_agents import Recorder, RunState, load_events, load_state
+from panel_agents import Recorder, RunState, dump_events, load_events, load_state
 from panel_agents import events as ev
-from panel_agents.recording import decode_value, encode_value
+from panel_agents.recording import _decode_value, _encode_value
 
 from .test_state import run_events
 
@@ -33,4 +34,33 @@ def test_unknown_values_fall_back_to_repr():
     class Foo:
         def __repr__(self):
             return "Foo()"
-    assert decode_value(encode_value({"x": Foo()})) == {"x": "Foo()"}
+    assert _decode_value(_encode_value({"x": Foo()})) == {"x": "Foo()"}
+
+
+def test_recordings_start_with_the_format_version(tmp_path):
+    import json
+
+    from panel_agents.recording import FORMAT_VERSION
+
+    state = RunState(flush_interval=0)
+    path = tmp_path / "run.jsonl"
+    with Recorder(state, path):
+        state.add_user_message("hi")
+    lines = path.read_text().splitlines()
+    assert json.loads(lines[0]) == {"panel_agents_recording": FORMAT_VERSION}
+    assert [e.type for e in load_events(path)][0] == "TEXT_MESSAGE_START"
+    with Recorder(state, path):
+        state.add_user_message("again")
+    assert sum("panel_agents_recording" in line for line in path.read_text().splitlines()) == 1
+
+    dumped = tmp_path / "dump.jsonl"
+    dump_events(state.events, dumped)
+    assert json.loads(dumped.read_text().splitlines()[0]) == {"panel_agents_recording": FORMAT_VERSION}
+    assert len(load_events(dumped)) == len(state.events)
+
+
+def test_newer_recordings_are_rejected(tmp_path):
+    path = tmp_path / "future.jsonl"
+    path.write_text('{"panel_agents_recording": 99}\n')
+    with pytest.raises(ValueError, match="version 99"):
+        load_events(path)

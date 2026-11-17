@@ -9,6 +9,7 @@ from events, replaying a recording reproduces the same state.
 from __future__ import annotations
 
 import copy
+import threading
 import time
 import uuid
 from collections.abc import Callable, Iterable
@@ -21,11 +22,11 @@ from . import events as ev
 from .artifacts import ArtifactStore
 
 
-def new_id(prefix: str = "") -> str:
+def _new_id(prefix: str = "") -> str:
     return f"{prefix}{uuid.uuid4().hex[:12]}"
 
 
-def parse_partial_json(text: str) -> dict[str, Any]:
+def _parse_partial_json(text: str) -> dict[str, Any]:
     if not text:
         return {}
     try:
@@ -216,6 +217,9 @@ class RunState(param.Parameterized):
         self._subscribers: list[Callable[[ev.Event], Any]] = []
         self._buffers: dict[tuple[type, str], list[str]] = {}
         self._last_flush = 0.0
+        # Set by an adapter enforcing an approval policy: (request, user, args, approved) -> refusal message or None.
+        self._decision_check: Callable[[ApprovalRequest, str | None, dict[str, Any] | None, bool], str | None] | None = None
+        self._decision_lock = threading.Lock()
 
     @classmethod
     def from_events(cls, events: Iterable[ev.Event], **params) -> RunState:
@@ -274,7 +278,7 @@ class RunState(param.Parameterized):
                 call = self.tool_calls.get(key)
                 if call is not None:
                     text = call.args_text + delta
-                    call.param.update(args_text=text, args=parse_partial_json(text))
+                    call.param.update(args_text=text, args=_parse_partial_json(text))
             else:
                 message = self.messages.get(key)
                 if message is not None:
@@ -283,7 +287,7 @@ class RunState(param.Parameterized):
     # Convenience API for UIs
 
     def add_user_message(self, content: str, run_id: str | None = None) -> str:
-        message_id = new_id("msg-")
+        message_id = _new_id("msg-")
         self.apply(ev.TextMessageStart(message_id=message_id, role="user", run_id=run_id))
         self.apply(ev.TextMessageContent(message_id=message_id, delta=content, run_id=run_id))
         self.apply(ev.TextMessageEnd(message_id=message_id, run_id=run_id))
@@ -297,11 +301,55 @@ class RunState(param.Parameterized):
         reason: str | None = None,
         user: str | None = None,
     ):
-        request = self.approvals[tool_call_id]
-        self.apply(ev.ApprovalResolved(
-            tool_call_id=tool_call_id, approved=approved, args=args,
-            reason=reason, user=user, run_id=request.run_id,
+        """
+        Approve or deny a pending tool call, optionally with edited ``args``.
+
+        Raises ``ValueError`` if the request was already decided or the
+        edited arguments are not valid for the tool, and ``PermissionError``
+        if the runner's approval policy does not allow ``user`` to make
+        this decision.
+        """
+        with self._decision_lock:
+            request = self.approvals[tool_call_id]
+            if request.status != "pending":
+                raise ValueError(f"The approval for {tool_call_id!r} was already {request.status}.")
+            check = self._decision_check
+            if check is not None and (refusal := check(request, user, args if approved else None, approved)):
+                raise (ValueError if refusal.startswith("Invalid") else PermissionError)(refusal)
+            self.apply(ev.ApprovalResolved(
+                tool_call_id=tool_call_id, approved=approved, args=args,
+                reason=reason, user=user, run_id=request.run_id,
+            ))
+
+    def publish_artifact(
+        self,
+        artifact_id: str,
+        value: Any,
+        *,
+        kind: str | None = None,
+        title: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        applied: bool = False,
+    ):
+        """
+        Publish a version of an artifact from the host app rather than a
+        tool, e.g. after the user edited a document directly. With
+        ``applied=True`` the version becomes the one the host document holds.
+        """
+        self.apply(ev.ArtifactPublished(
+            artifact_id=artifact_id, value=value, kind=kind, title=title, metadata=metadata or {}, applied=applied,
         ))
+        return self.artifacts[artifact_id]
+
+    def apply_artifact_version(self, artifact_id: str, version: int, user: str | None = None):
+        """
+        Record that a person applied ``version`` (counting from 1) of a
+        document artifact to the host document.
+        """
+        artifact = self.artifacts[artifact_id]
+        if not 1 <= version <= len(artifact.versions):
+            raise ValueError(f"{artifact_id!r} has no version {version}.")
+        self.apply(ev.ArtifactApplied(artifact_id=artifact_id, version=version, user=user))
 
     # Event handlers
 
@@ -375,7 +423,7 @@ class RunState(param.Parameterized):
     def _on_tool_call_end(self, event: ev.ToolCallEnd):
         call = self.tool_calls.get(event.tool_call_id)
         if call is not None and call.status == "pending":
-            call.param.update(status="running", args=parse_partial_json(call.args_text))
+            call.param.update(status="running", args=_parse_partial_json(call.args_text))
 
     def _on_tool_call_result(self, event: ev.ToolCallResult):
         call = self.tool_calls.get(event.tool_call_id)
@@ -390,13 +438,18 @@ class RunState(param.Parameterized):
         self.agent_state = copy.deepcopy(event.snapshot)
 
     def _on_state_delta(self, event: ev.StateDelta):
-        self.agent_state = apply_json_patch(self.agent_state, event.delta)
+        self.agent_state = _apply_json_patch(self.agent_state, event.delta)
 
     def _on_artifact_published(self, event: ev.ArtifactPublished):
         self.artifacts.publish(
             event.artifact_id, event.value, kind=event.kind, title=event.title,
             tool_call_id=event.tool_call_id, metadata=event.metadata, created_at=event.timestamp,
+            applied=event.applied,
         )
+
+    def _on_artifact_applied(self, event: ev.ArtifactApplied):
+        if event.artifact_id in self.artifacts:
+            self.artifacts.mark_applied(event.artifact_id, event.version)
 
     def _on_approval_requested(self, event: ev.ApprovalRequested):
         request = ApprovalRequest(
@@ -418,8 +471,14 @@ class RunState(param.Parameterized):
 
     def _on_approval_resolved(self, event: ev.ApprovalResolved):
         request = self.approvals.get(event.tool_call_id)
-        if request is None:
+        # A request is decided once, and only by someone the policy allows; other
+        # decisions stay in the event log but change nothing.
+        if request is None or request.status != "pending":
             return
+        check = self._decision_check
+        if check is not None and check(request, event.user, event.args if event.approved else None, event.approved):
+            return
+        request._decision = event
         request.param.update(
             status="approved" if event.approved else "denied",
             final_args=event.args if event.approved else None,
@@ -453,7 +512,7 @@ def _resolve(doc, parts):
     return doc
 
 
-def apply_json_patch(document: dict[str, Any], patch: list[dict[str, Any]]) -> dict[str, Any]:
+def _apply_json_patch(document: dict[str, Any], patch: list[dict[str, Any]]) -> dict[str, Any]:
     """Apply an RFC 6902 patch, returning a new document."""
     doc = copy.deepcopy(document)
     for op in patch:
@@ -488,3 +547,12 @@ def apply_json_patch(document: dict[str, Any], patch: list[dict[str, Any]]) -> d
         elif kind == "remove":
             del parent[key]
     return doc
+
+
+__all__ = [
+    "ApprovalRequest",
+    "MessageState",
+    "RunInfo",
+    "RunState",
+    "ToolCallState",
+]

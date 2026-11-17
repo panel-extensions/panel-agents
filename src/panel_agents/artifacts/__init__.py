@@ -1,3 +1,17 @@
+from .diff import (
+    Change,
+    Diff,
+    StructuredDiff,
+    TableDiff,
+    TextDiff,
+    ValueDiff,
+    diff,
+    diff_structured,
+    diff_table,
+    diff_text,
+    diff_values,
+    register_diff,
+)
 from .model import (
     Artifact,
     ArtifactStore,
@@ -5,4 +19,21 @@ from .model import (
     infer_kind,
 )
 
-__all__ = ["Artifact", "ArtifactStore", "ArtifactVersion", "infer_kind"]
+__all__ = [
+    "Artifact",
+    "ArtifactStore",
+    "ArtifactVersion",
+    "Change",
+    "Diff",
+    "StructuredDiff",
+    "TableDiff",
+    "TextDiff",
+    "ValueDiff",
+    "diff",
+    "diff_structured",
+    "diff_table",
+    "diff_text",
+    "diff_values",
+    "infer_kind",
+    "register_diff",
+]

@@ -13,11 +13,13 @@ import panel_material_ui as pmui
 import param
 from panel.viewable import Viewer
 
+from ..security import untrusted_markdown
 from ..state import MessageState, RunState, ToolCallState
+from .approval import ApprovalCard
 from .approval import approval_factory as default_approval_factory
-from .tool_call import ToolCallCard
+from .tool_call import ToolCallCard, _format_duration
 
-THINKING_CSS = """
+_THINKING_CSS = """
 :host { width: 100%; }
 .markdown { font-size: 0.85rem; opacity: 0.75; }
 """
@@ -58,12 +60,31 @@ class AgentChat(Viewer):
         pending approvals inside tool call cards. Defaults to the
         ApprovalCard factory; set to None to show a placeholder.""")
 
+    can_approve = param.Callable(default=None, allow_None=True, doc="""
+        Permission hook ``(request, user) -> bool`` set on the approval
+        cards the default factory creates. Defaults to the runner's
+        ``approval_policy.can_approve`` when it has one.""")
+
     user = param.String(default="User", doc="Name shown for user messages.")
 
     assistant = param.String(default="Assistant", doc="""
         Name shown for assistant messages when the run has no agent name.""")
 
     placeholder = param.String(default="Ask the agent…", doc="Placeholder of the input.")
+
+    tool_labels = param.Dict(default={}, doc="""
+        Labels for tool calls in the user's words, keyed by tool name: a
+        string, or a callable taking the call's arguments and returning
+        one, e.g. ``{"get_report": "Read the report", "update_report":
+        lambda args: f"Change {', '.join(args)}"}``. Imperative labels
+        read right whether the call runs, succeeded, failed or waits. See
+        ``ToolCallCard.label``.""")
+
+    group_tool_calls = param.Boolean(default=True, doc="""
+        Whether consecutive tool calls of a run that finished without
+        trouble fold into one row, "3 steps · 2.1s", that expands to show
+        them. Calls that failed, were denied, wait for approval or
+        published an artifact are always shown.""")
 
     feed_params = param.Dict(default={}, doc="""
         Additional parameters passed to the underlying pmui ChatFeed or ChatInterface.""")
@@ -74,20 +95,28 @@ class AgentChat(Viewer):
             params["state"] = state
         elif params.get("runner") is not None and "state" not in params:
             params["state"] = params["runner"].state
+        runner = params.get("runner")
+        follow_policy = "can_approve" not in params and isinstance(runner, param.Parameterized) and "approval_policy" in runner.param
+        if follow_policy and runner.approval_policy is not None:
+            params["can_approve"] = runner.approval_policy.can_approve
         super().__init__(**params)
-        feed_params = dict(
-            sizing_mode="stretch_both", show_activity_dot=False, min_height=300,
+        if follow_policy:
+            runner.param.watch(lambda e: setattr(self, "can_approve", e.new.can_approve if e.new is not None else None), "approval_policy")
+        feed_params = {
+            "sizing_mode": "stretch_both", "show_activity_dot": False, "min_height": 300,
             **self.feed_params,
-        )
+        }
         if self.readonly:
             self._feed = pmui.ChatFeed(**feed_params)
         else:
             self._feed = pmui.ChatInterface(
                 on_submit=self._on_submit, show_rerun=False, show_undo=False, show_clear=False,
-                input_params={"placeholder": self.placeholder}, **feed_params,
+                input_params={"placeholder": self.placeholder, "enable_upload": False}, **feed_params,
             )
         self._rendered: list[Any] = []
         self._views: dict[int, Any] = {}
+        self._messages: dict[int, pmui.ChatMessage] = {}
+        self._groups: dict[int, _StepGroup] = {}
         self._watchers: list[tuple[param.Parameterized, Any]] = []
         self.state.param.watch(self._update_items, "items")
         self.state.param.watch(self._update_running, "running")
@@ -147,7 +176,9 @@ class AgentChat(Viewer):
             message = self._build(item)
             self._rendered.append(item)
             if message is not None:
+                self._messages[id(item)] = message
                 self._feed.send(message, respond=False)
+        self._regroup()
 
     def _clear(self):
         for obj, watcher in self._watchers:
@@ -155,6 +186,8 @@ class AgentChat(Viewer):
         self._watchers = []
         self._rendered = []
         self._views = {}
+        self._messages = {}
+        self._groups = {}
         self._feed.clear()
 
     def _watch(self, obj, callback, names):
@@ -179,29 +212,40 @@ class AgentChat(Viewer):
 
     def _build(self, item) -> pmui.ChatMessage | None:
         if isinstance(item, ToolCallState):
-            card = ToolCallCard(item, state=self.state, approval_factory=self.approval_factory)
+            card = ToolCallCard(
+                item, state=self.state, approval_factory=self._approval_factory(),
+                label=self.tool_labels.get(item.tool_name),
+            )
             self._views[id(item)] = card
-            self._watch(self, lambda e, c=card: setattr(c, "approval_factory", e.new), "approval_factory")
+            self._watch(self, lambda e, c=card: setattr(c, "approval_factory", self._approval_factory()), ["approval_factory", "can_approve"])
+            self._watch(self, lambda e, c=card, i=item: setattr(c, "label", self.tool_labels.get(i.tool_name)), "tool_labels")
+            self._watch(item, self._regroup, "status")
             return pmui.ChatMessage(card, **self._message_params(self._agent_name(item.run_id), item.started_at, compact=True))
         if not isinstance(item, MessageState):
             return None
         if item.kind == "thinking":
             return self._build_thinking(item)
         user = self.user if item.role == "user" else self._agent_name(item.run_id)
-        pane = pn.pane.Markdown(item.content)
+        # Message text may carry injected content, so it is rendered inert: no images or HTML that load by themselves.
+        pane = untrusted_markdown(item.content)
         message = pmui.ChatMessage(pane, visible=bool(item.content), **self._message_params(user, item.created_at))
         self._views[id(item)] = message
 
         def stream(*_):
             pane.object = item.content
-            message.visible = bool(item.content)
+            shown = bool(item.content)
+            if message.visible != shown:
+                message.visible = shown
+                self._regroup()
             self._scroll()
 
         self._watch(item, stream, "content")
         return message
 
     def _build_thinking(self, item: MessageState) -> pmui.ChatMessage:
-        pane = pn.pane.Markdown(item.content, sizing_mode="stretch_width", margin=0, stylesheets=[THINKING_CSS], css_classes=["thinking"])
+        pane = untrusted_markdown(
+            item.content, sizing_mode="stretch_width", margin=0, stylesheets=[_THINKING_CSS], css_classes=["thinking"],
+        )
         step = pmui.ChatStep(
             pane, running_title="Thinking…", success_title="Thought process",
             status="success" if item.finished else "running",
@@ -222,9 +266,112 @@ class AgentChat(Viewer):
         self._watch(item, update, ["content", "finished"])
         return message
 
+    def _foldable(self, item: ToolCallState) -> bool:
+        if item.status != "success":
+            return False
+        if item.approval is not None and item.approval.status != "approved":
+            return False
+        card = self._views.get(id(item))
+        return card is not None and not card.published_artifacts()
+
+    def _breaks_group(self, item) -> bool:
+        message = self._messages.get(id(item))
+        return message is not None and message.visible
+
+    @param.depends("group_tool_calls", watch=True)
+    def _regroup(self, *_):
+        """Fold runs of two or more untroubled tool calls of one run into a step group."""
+        runs: list[list[ToolCallState]] = []
+        current: list[ToolCallState] = []
+        for item in self._rendered:
+            if isinstance(item, ToolCallState):
+                if self.group_tool_calls and self._foldable(item) and (not current or current[-1].run_id == item.run_id):
+                    current.append(item)
+                    continue
+                runs.append(current)
+                current = [item] if self.group_tool_calls and self._foldable(item) else []
+            elif self._breaks_group(item):
+                runs.append(current)
+                current = []
+        runs.append(current)
+        wanted = {id(run[0]): run for run in runs if len(run) > 1}
+
+        objects = list(self._feed.objects)
+        changed = False
+        for key in [k for k in self._groups if k not in wanted]:
+            group = self._groups.pop(key)
+            group.release()
+            if group.message in objects:
+                objects.remove(group.message)
+                changed = True
+        for key, members in wanted.items():
+            group = self._groups.get(key)
+            if group is None:
+                first = self._messages[key]
+                group = self._groups[key] = _StepGroup(self, first.user)
+                if first in objects:
+                    objects.insert(objects.index(first), group.message)
+                    changed = True
+            group.update([self._messages[id(m)] for m in members], members)
+        if changed:
+            self._feed.objects = objects
+
+    def _approval_factory(self):
+        factory, can_approve = self.approval_factory, self.can_approve
+        if factory is None or can_approve is None:
+            return factory
+
+        def build(request, state):
+            view = factory(request, state)
+            if isinstance(view, ApprovalCard) and view.can_approve is None:
+                view.can_approve = can_approve
+            return view
+        return build
+
     def _scroll(self):
         # ChatFeed exposes no public scroll API; this mirrors what its own stream() does.
         self._feed._chat_log.scroll_to_latest(scroll_limit=self._feed.auto_scroll_limit)
+
+
+class _StepGroup:
+    """The folded row standing in for a run of tool call messages."""
+
+    def __init__(self, chat: AgentChat, user: str):
+        self.expanded = False
+        self.members: list[pmui.ChatMessage] = []
+        self.button = pmui.Button(
+            variant="text", size="small", icon="expand_more", margin=0,
+            sx={"textTransform": "none", "fontWeight": 400, "justifyContent": "flex-start", "color": "text.secondary"},
+            on_click=lambda e: self.toggle(),
+        )
+        self.message = pmui.ChatMessage(self.button, **chat._message_params(user, None, compact=True))
+        self.calls: list[ToolCallState] = []
+
+    def update(self, members: list[pmui.ChatMessage], calls: list[ToolCallState]):
+        self.members, self.calls = members, calls
+        self._sync()
+
+    def toggle(self):
+        self.expanded = not self.expanded
+        self._sync()
+
+    def release(self):
+        for message in self.members:
+            message.visible = True
+
+    def _sync(self):
+        n = len(self.calls)
+        total = sum(c.duration or 0 for c in self.calls)
+        duration = _format_duration(total) if total >= 0.05 else ""
+        spoken = f"{n} steps" + (f", {duration}" if duration else "")
+        self.button.param.update(
+            label=f"{n} steps" + (f" · {duration}" if duration else ""),
+            icon="expand_less" if self.expanded else "expand_more",
+            # The tooltip is the button's accessible name.
+            description=f"{spoken}, {'collapse' if self.expanded else 'expand'}",
+        )
+        for message in self.members:
+            message.visible = self.expanded
 
 
 def _show_thinking(item: MessageState) -> bool:

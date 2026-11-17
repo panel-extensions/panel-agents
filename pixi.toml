@@ -55,6 +55,7 @@ pytest-cov = "*"
 pytest-rerunfailures = "<16"
 pytest-xdist = "*"
 pyarrow = "*"
+fastmcp = ">=4.1,<5"
 
 [feature.test-unit-task.tasks]
 _install = "pip install --no-deps --disable-pip-version-check -e ."
