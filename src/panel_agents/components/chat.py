@@ -87,10 +87,10 @@ class AgentChat(Viewer):
         super().__init__(**params)
         if follow_policy:
             runner.param.watch(lambda e: setattr(self, "can_approve", e.new.can_approve if e.new is not None else None), "approval_policy")
-        feed_params = dict(
-            sizing_mode="stretch_both", show_activity_dot=False, min_height=300,
+        feed_params = {
+            "sizing_mode": "stretch_both", "show_activity_dot": False, "min_height": 300,
             **self.feed_params,
-        )
+        }
         if self.readonly:
             self._feed = pmui.ChatFeed(**feed_params)
         else:

@@ -5,6 +5,7 @@ from .artifacts import Artifact, ArtifactStore, ArtifactVersion
 from .audit import AuditLog
 from .components import (
     AgentChat,
+    AgentDrawer,
     ApprovalCard,
     ApprovalQueue,
     ArtifactPane,
@@ -26,6 +27,7 @@ __all__ = [
     "Action",
     "ActionRegistry",
     "AgentChat",
+    "AgentDrawer",
     "ApprovalCard",
     "ApprovalQueue",
     "ArtifactPane",

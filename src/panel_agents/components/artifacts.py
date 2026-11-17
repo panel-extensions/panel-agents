@@ -232,7 +232,7 @@ class ArtifactView(Viewer):
         self._icon = pmui.Chip(size="small", variant="outlined", margin=(0, 8, 0, 0))
         self._title = pmui.Typography(variant="h6", margin=(0, 8), styles={"font-weight": "600"})
         self._count = pmui.Typography(variant="caption", color="text.secondary", margin=(0, 8))
-        self._version = pmui.Select(label="Version", options={}, width=260, size="small", margin=(0, 8))
+        self._version = pmui.Select(label="Version", options={}, width=240, size="small", margin=(0, 8))
         self._download = pmui.FileDownload(
             label="Download", icon="download", variant="outlined", size="small", color="primary",
             callback=self._download_payload, margin=(0, 0, 0, 8), embed=False,
@@ -242,10 +242,12 @@ class ArtifactView(Viewer):
             disable_elevation=True, visible=False, margin=(0, 0, 0, 8), on_click=self._on_apply_click,
         )
         self._apply_error = pmui.Alert(object="", severity="error", visible=False, closeable=True, sizing_mode="stretch_width", margin=(4, 0))
-        self._header = pmui.Row(
-            self._icon, self._title, self._count, pn.HSpacer(), self._version, self._apply, self._download,
-            align="center", sizing_mode="stretch_width", visible=self.param.show_header, margin=(12, 0, 0, 0),
-            styles={"align-items": "center", "flex-wrap": "wrap"},
+        # Wraps the controls below the title when the view is narrow, e.g. in a drawer.
+        self._header = pmui.FlexBox(
+            pmui.Row(self._icon, self._title, self._count, align="center", margin=0, styles={"align-items": "center"}),
+            pmui.Row(self._version, self._apply, self._download, align="center", margin=0, styles={"align-items": "center"}),
+            flex_wrap="wrap", justify_content="space-between", align_items="center", gap="8px",
+            sizing_mode="stretch_width", visible=self.param.show_header, margin=(12, 0, 0, 0),
         )
 
         self._preview = pmui.Column(sizing_mode="stretch_width")
@@ -259,8 +261,10 @@ class ArtifactView(Viewer):
         self._summary = pmui.Row(sizing_mode="stretch_width", styles={"flex-wrap": "wrap", "gap": "6px"}, margin=(8, 5))
         self._compare_body = pmui.Column(sizing_mode="stretch_width")
         compare = pmui.Column(
-            pmui.Row(self._base, pmui.Typography("→", margin=(0, 4), align="center"), self._target, pn.HSpacer(), self._layout,
-                     sizing_mode="stretch_width", styles={"align-items": "center"}),
+            pmui.FlexBox(
+                self._base, pmui.Typography("→", margin=(0, 4), align="center"), self._target, pn.HSpacer(), self._layout,
+                flex_wrap="wrap", align_items="center", gap="4px", sizing_mode="stretch_width",
+            ),
             self._summary, self._compare_body, sizing_mode="stretch_width",
         )
 
@@ -622,10 +626,11 @@ class ArtifactPane(Viewer):
         self._container = pmui.Column(self._empty, sizing_mode="stretch_both")
         self._sidebar = pmui.Paper(
             pmui.Typography("Artifacts", variant="overline", margin=(8, 16, 0, 16)),
-            self._list, variant="outlined", width=self.param.list_width, visible=self.param.show_list,
+            self._list, variant="outlined", width=self.param.list_width,
             sizing_mode="stretch_height", margin=(5, 10, 5, 5),
         )
-        self._layout = pmui.Row(self._sidebar, self._container, sizing_mode="stretch_both")
+        self._layout = pmui.Row(sizing_mode="stretch_both")
+        self._sync_list()
         self._watchers: list = []
         self._bind_store()
 
@@ -682,6 +687,11 @@ class ArtifactPane(Viewer):
         view = self._views[active].__panel__()
         if self._container.objects != [view]:
             self._container.objects = [view]
+
+    @param.depends("show_list", watch=True)
+    def _sync_list(self):
+        # A hidden list would still count towards the pane's minimum width.
+        self._layout.objects = [self._sidebar, self._container] if self.show_list else [self._container]
 
     @param.depends("on_apply", "state", watch=True)
     def _propagate(self):
