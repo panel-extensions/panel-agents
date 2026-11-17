@@ -33,6 +33,8 @@ replayed = load_state("runs/session.jsonl")
 
 ## Guides
 
+The documentation is at [panel-extensions.github.io/panel-agents](https://panel-extensions.github.io/panel-agents), with a getting-started tutorial, the guides below and the API reference.
+
 - [Dock an agent beside an existing app](docs/how-to/agent-drawer.md) with `AgentDrawer`.
 - [Require approval for tool calls](docs/how-to/approvals.md) with `ApprovalPolicy`.
 - [Edit documents with versions you can apply and revert](docs/how-to/document-artifacts.md), with semantic diffs.

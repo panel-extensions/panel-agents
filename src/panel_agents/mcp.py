@@ -317,6 +317,11 @@ async def create_server(
     """
     Create a FastMCP server exposing the tools of ``source``.
 
+    The tools are listed when the server is created. Run the server with
+    ``server.run()`` (stdio) or ``server.run(transport="http")``, or
+    mount ``server.http_app()`` in an ASGI app, behind authentication if
+    it is reachable by anyone but the user.
+
     Parameters
     ----------
     source
@@ -350,11 +355,6 @@ async def create_server(
         worker of a server running several processes the same key. A
         state signed with another key is refused with a logged warning.
         Approvals expire after 10 minutes.
-
-    The tools are listed when the server is created. Run the server with
-    ``server.run()`` (stdio) or ``server.run(transport="http")``, or
-    mount ``server.http_app()`` in an ASGI app, behind authentication if
-    it is reachable by anyone but the user.
     """
     from .adapters.pydantic_ai import ActionToolset, AgentRunner
 

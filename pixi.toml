@@ -46,6 +46,7 @@ test-313 = ["py313", "test-core", "test-unit-task"]
 test-floor = ["floor", "test-core", "test-unit-task"]
 test-ui = ["py312", "test-core", "test-ui"]
 build = ["py312", "build"]
+docs = ["py312", "docs"]
 lint = { features = ["lint"], no-default-feature = true }
 
 [feature.test-core.dependencies]
@@ -92,3 +93,11 @@ pre-commit = "*"
 [feature.lint.tasks]
 pre-commit-install = "pre-commit install"
 pre-commit-run = "pre-commit run -a"
+
+[feature.docs.dependencies]
+zensical = "*"
+mkdocstrings-python = "*"
+
+[feature.docs.tasks]
+docs-serve = "zensical serve"
+docs-build = "zensical build --clean --strict"
