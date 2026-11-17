@@ -31,11 +31,19 @@ PUBLIC = {
     "panel_agents.security": ["inert_markdown", "set_trusted_image_origins", "trusted_image_origins", "untrusted_markdown"],
     "panel_agents.recording": ["Codec", "FORMAT_VERSION", "Recorder", "dump_events", "load_events", "load_state", "register_codec"],
     "panel_agents.state": ["ApprovalRequest", "MessageState", "RunInfo", "RunState", "ToolCallState"],
-    "panel_agents.adapters.pydantic_ai": ["ActionToolset", "AgentRunner", "artifact_return", "publish_artifact"],
+    "panel_agents.adapters.pydantic_ai": [
+        "ActionToolset", "AgentRunner", "ModelCall", "ModelTraceRecorder", "artifact_return", "fingerprint",
+        "load_messages", "load_model_calls", "publish_artifact",
+    ],
+    "panel_agents.adapters.model_trace": [
+        "FORMAT_VERSION", "ModelCall", "ModelTraceRecorder", "fingerprint", "load_messages", "load_model_calls",
+    ],
     "panel_agents.mcp": ["create_server"],
 }
 
-OPTIONAL = {"panel_agents.adapters.pydantic_ai": "pydantic_ai", "panel_agents.mcp": "fastmcp"}
+OPTIONAL = {
+    "panel_agents.adapters.pydantic_ai": "pydantic_ai", "panel_agents.adapters.model_trace": "pydantic_ai", "panel_agents.mcp": "fastmcp",
+}
 
 
 @pytest.mark.parametrize("module", list(PUBLIC))

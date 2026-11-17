@@ -82,6 +82,14 @@ The docstrings of the public modules, generated from the source. The [API overvi
       show_source: false
       heading_level: 3
 
+## Model traces
+
+::: panel_agents.adapters.model_trace
+    options:
+      show_root_heading: false
+      show_source: false
+      heading_level: 3
+
 ## MCP
 
 ::: panel_agents.mcp

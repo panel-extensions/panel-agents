@@ -18,8 +18,10 @@ import asyncio
 import json
 import logging
 import re
+import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from typing import Any
 
 import param
@@ -55,6 +57,15 @@ from .. import events as ev
 from ..actions import Action, ActionRegistry
 from ..policy import ApprovalPolicy
 from ..recording import _dump_event
+from .model_trace import (
+    _METADATA_KEY,
+    ModelCall,
+    ModelTraceRecorder,
+    _response_cost,
+    fingerprint,
+    load_messages,
+    load_model_calls,
+)
 
 _log = logging.getLogger(__name__)
 from ..state import ApprovalRequest, RunState, _new_id
@@ -62,7 +73,12 @@ from ..state import ApprovalRequest, RunState, _new_id
 __all__ = [
     "ActionToolset",
     "AgentRunner",
+    "ModelCall",
+    "ModelTraceRecorder",
     "artifact_return",
+    "fingerprint",
+    "load_messages",
+    "load_model_calls",
     "publish_artifact",
 ]
 
@@ -90,6 +106,7 @@ class _UsageEvent(CapabilityEvent, namespace="panel_agents"):
     output_tokens: int = 0
     cached_tokens: int = 0
     cost_usd: float | None = None
+    duration: float | None = None
 
 
 async def publish_artifact(
@@ -146,6 +163,8 @@ class _RecordingApprovalToolset(ApprovalRequiredToolset[Any]):
 
     async def call_tool(self, name: str, tool_args: dict[str, Any], ctx: RunContext[Any], tool: Any) -> Any:
         self.runner._validators[name] = tool.args_validator
+        # The response that called the tool is complete in the history by now.
+        self.runner._trace(ctx.messages)
         return await super().call_tool(name, tool_args, ctx, tool)
 
 
@@ -233,21 +252,13 @@ class ActionToolset(AbstractToolset[Any]):
             raise ToolFailed(f"{type(e).__name__}: {e}") from e
 
 
-def _response_cost(response: ModelResponse) -> float | None:
-    # Recent pydantic-ai versions price the usage already; older ones only offer the genai-prices lookup.
-    if (cost := getattr(response.usage, "cost", None)) is not None:
-        return float(cost)
-    try:
-        return float(response.cost().total_price)
-    except Exception:
-        return None
-
-
 @dataclass
 class _RunCapability(AbstractCapability[Any]):
     """Run-scoped hooks that need the run context rather than the event stream."""
 
     runner: AgentRunner | None = None
+    request: dict[str, Any] | None = None
+    messages: list[Any] = field(default_factory=list)
 
     async def prepare_tools(self, ctx: RunContext[Any], tool_defs: list[ToolDefinition]) -> list[ToolDefinition]:
         self.runner._tool_defs.update({td.name: td for td in tool_defs})
@@ -266,13 +277,34 @@ class _RunCapability(AbstractCapability[Any]):
 
         return _RecordingApprovalToolset(toolset, needs_approval, runner=runner)
 
+    async def before_model_request(self, ctx: RunContext[Any], request_context: Any) -> Any:
+        self.messages = ctx.messages
+        self.request = {
+            "model": request_context.model.model_name, "started": time.perf_counter(),
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+        self.runner._trace(ctx.messages)
+        return request_context
+
     async def after_model_request(self, ctx: RunContext[Any], *, request_context: Any, response: ModelResponse) -> ModelResponse:
+        request, self.request = self.request, None
+        duration = time.perf_counter() - request["started"] if request else None
+        stamp = {"duration": duration, "fingerprint": fingerprint(request_context.model_request_parameters, ctx.messages)}
+        response = replace(response, metadata={**(response.metadata or {}), _METADATA_KEY: stamp})
         usage = response.usage
         await ctx.emit(_UsageEvent(
             model=response.model_name, input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
-            cached_tokens=usage.cache_read_tokens, cost_usd=_response_cost(response),
+            cached_tokens=usage.cache_read_tokens, cost_usd=_response_cost(response), duration=duration,
         ))
         return response
+
+    def failed_request(self) -> dict[str, Any] | None:
+        """The model request that was in flight when the run failed, if any."""
+        if self.request is None:
+            return None
+        request = dict(self.request)
+        request["duration"] = time.perf_counter() - request.pop("started")
+        return request
 
     async def handle_deferred_tool_calls(self, ctx: RunContext[Any], *, requests: DeferredToolRequests) -> DeferredToolResults | None:
         # External calls (CallDeferred) are left unresolved so the run ends with them as its output.
@@ -431,7 +463,7 @@ class _PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
         if isinstance(event, _UsageEvent):
             yield ev.Usage(
                 model=event.model, input_tokens=event.input_tokens, output_tokens=event.output_tokens,
-                cached_tokens=event.cached_tokens, cost_usd=event.cost_usd,
+                cached_tokens=event.cached_tokens, cost_usd=event.cost_usd, duration=event.duration,
             )
 
 
@@ -497,6 +529,7 @@ class AgentRunner(param.Parameterized):
         self._waiters: dict[str, asyncio.Future[ev.ApprovalResolved]] = {}
         self._early: dict[str, ev.ApprovalResolved] = {}
         self._token: CancellationToken | None = None
+        self._trace_listeners: list[ModelTraceRecorder] = []
         self._unsubscribe = self.state.subscribe(self._on_event)
         self.state._decision_check = self._refusal
 
@@ -591,8 +624,11 @@ class AgentRunner(param.Parameterized):
         if self._notes and isinstance(prompt, str):
             model_prompt = "\n".join(f"[{note}]" for note in self._notes) + "\n\n" + prompt
             self._notes.clear()
-        run_kwargs = {**self.run_kwargs, **kwargs}
-        capabilities = [*run_kwargs.pop("capabilities", []), _RunCapability(runner=self)]
+        run_kwargs = {"run_id": run_id, **self.run_kwargs, **kwargs}
+        capability = _RunCapability(runner=self)
+        capabilities = [*run_kwargs.pop("capabilities", []), capability]
+        for listener in self._trace_listeners:
+            listener._run_started(self.messages)
         try:
             async with self.agent.run_stream_events(
                 model_prompt, message_history=self.messages or None, deferred_tool_results=deferred_tool_results,
@@ -600,8 +636,9 @@ class AgentRunner(param.Parameterized):
             ) as events:
                 async for event in stream.transform_stream(events):
                     self._apply(stream, event)
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as e:
             self._close(stream, ev.RunError(run_id=run_id, message="Run cancelled", code="cancelled"))
+            self._trace_failure(run_id, capability, e)
             raise
         except Exception as e:
             # Errors raised outside the event stream, e.g. invalid run arguments.
@@ -612,7 +649,7 @@ class AgentRunner(param.Parameterized):
             self._early.clear()
             with param.edit_constant(self):
                 self.running = False
-        return self._finish(stream)
+        return self._finish(stream, capability)
 
     def _apply(self, stream: _PanelEventStream, event: ev.Event):
         if isinstance(event, ev.RunError):
@@ -629,12 +666,27 @@ class AgentRunner(param.Parameterized):
                 ))
         self.state.apply(error)
 
-    def _finish(self, stream: _PanelEventStream) -> Any:
+    def _trace(self, messages: list[Any]):
+        for listener in self._trace_listeners:
+            listener._messages(messages)
+
+    def _trace_failure(self, run_id: str, capability: _RunCapability, error: BaseException):
+        # The messages of a failed run stay out of the conversation, but the trace keeps what was sent.
+        self._trace(capability.messages)
+        request = capability.failed_request()
+        for listener in self._trace_listeners:
+            listener._run_failed(run_id, error, request)
+
+    def _finish(self, stream: _PanelEventStream, capability: _RunCapability) -> Any:
         result: AgentRunResult | None = stream._result
         if stream.cancelled is not None:
             self.messages = list(stream.cancelled.all_messages())
         elif result is not None:
             self.messages = list(result.all_messages())
+        if stream.cancelled is not None or result is not None:
+            self._trace(self.messages)
+        elif stream.error is not None:
+            self._trace_failure(stream.run_id, capability, stream.error)
         with param.edit_constant(self):
             self.error = stream.error
             if result is not None and isinstance(result.output, DeferredToolRequests):
