@@ -32,12 +32,12 @@ PUBLIC = {
     "panel_agents.recording": ["Codec", "FORMAT_VERSION", "Recorder", "dump_events", "load_events", "load_state", "register_codec"],
     "panel_agents.state": ["ApprovalRequest", "MessageState", "RunInfo", "RunState", "ToolCallState"],
     "panel_agents.adapters.pydantic_ai": [
-        "ActionToolset", "AgentRunner", "Cassette", "CassetteError", "Divergence", "ModelCall", "ModelTraceRecorder",
-        "artifact_return", "fingerprint", "load_messages", "load_model_calls", "publish_artifact",
+        "ActionToolset", "AgentRunner", "Cassette", "CassetteError", "Divergence", "ModelRequestSummary",
+        "ModelTraceRecorder", "artifact_return", "fingerprint", "load_messages", "load_model_calls", "publish_artifact",
     ],
     "panel_agents.adapters.cassette": ["Cassette", "CassetteError", "Divergence"],
     "panel_agents.adapters.model_trace": [
-        "FORMAT_VERSION", "ModelCall", "ModelTraceRecorder", "fingerprint", "load_messages", "load_model_calls",
+        "FORMAT_VERSION", "ModelRequestSummary", "ModelTraceRecorder", "fingerprint", "load_messages", "load_model_calls",
     ],
     "panel_agents.mcp": ["create_server"],
 }

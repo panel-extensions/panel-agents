@@ -1,3 +1,5 @@
+import asyncio
+import asyncio
 import io
 import json
 import os
@@ -8,18 +10,23 @@ import pytest
 
 pytest.importorskip("pydantic_ai")
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, ModelRetry, exceptions
 from pydantic_ai.capabilities import AbstractCapability
-from pydantic_ai import exceptions
 from pydantic_ai.messages import (
+    BinaryContent,
     ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
     TextPart,
+    ThinkingPart,
     ToolCallPart,
+    ToolReturn,
     UserPromptPart,
 )
+from pydantic_ai.models.function import DeltaThinkingPart, DeltaToolCall, FunctionModel
+from pydantic_ai.tools import DeferredToolRequests, DeferredToolResults
 
+from panel_agents import ApprovalPolicy
 from panel_agents import events as ev
 from panel_agents.adapters.model_trace import FORMAT_VERSION
 from panel_agents.adapters.pydantic_ai import (
@@ -30,7 +37,7 @@ from panel_agents.adapters.pydantic_ai import (
     load_model_calls,
 )
 
-from .test_pydantic_ai import make_runner, streaming
+from .test_pydantic_ai import make_runner, resolve_on_request, streaming
 
 os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
 
@@ -153,6 +160,7 @@ async def test_trace_appends_runs_and_resumes_a_conversation(tmp_path):
     assert dumped(load_messages(path)) == dumped(resumed.messages)
     assert [c.run_id for c in load_model_calls(path)] == [runner.run_id] * 2 + [resumed.run_id] * 2
     assert sum("panel_agents_model_trace" in r for r in lines(path)) == 1
+    assert not [r for r in lines(path) if "rewind" in r]
 
 
 async def test_new_trace_starts_with_the_existing_history(tmp_path):
@@ -295,3 +303,305 @@ def test_newer_trace_version_is_rejected(tmp_path):
 async def test_usage_event_round_trips_duration():
     event = ev.Usage(model="m", duration=1.5)
     assert ev.Event.from_dict(event.to_dict()).duration == 1.5
+
+
+def acting_agent(**kwargs):
+    def model(messages, info):
+        if any(isinstance(p, UserPromptPart) for p in messages[-1].parts):
+            step = len(prompts(messages))
+            return ModelResponse([ToolCallPart("act", {"x": step}, tool_call_id=f"c{step}")])
+        return ModelResponse([TextPart("done")])
+
+    agent = Agent(streaming(model), instructions="Be good.", **kwargs)
+
+    @agent.tool_plain
+    def act(x: int) -> str:
+        return f"acted {x}"
+
+    return agent
+
+
+def attach_on_approval(runner, path, holder):
+    def callback(event):
+        if isinstance(event, ev.ApprovalRequested):
+            def attach_and_approve():
+                holder.append(ModelTraceRecorder(runner, path))
+                runner.state.resolve_approval(event.tool_call_id, approved=True)
+            asyncio.get_running_loop().call_soon(attach_and_approve)
+    return runner.state.subscribe(callback)
+
+
+async def test_clear_rewinds_the_trace(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    runner = make_runner(acting_agent())
+    with ModelTraceRecorder(runner, path):
+        await runner.run("one")
+        runner.clear()
+        await runner.run("two")
+    assert dumped(load_messages(path)) == dumped(runner.messages)
+    assert {"rewind": 0} in lines(path)
+    assert len(load_model_calls(path)) == 4
+
+
+async def test_history_rewritten_by_a_capability(tmp_path):
+    from pydantic_ai.capabilities import ProcessHistory
+
+    path = tmp_path / "trace.jsonl"
+    runner = make_runner(acting_agent(capabilities=[ProcessHistory(lambda messages: messages[-1:])]))
+    with ModelTraceRecorder(runner, path):
+        await runner.run("one")
+        await runner.run("two")
+    assert dumped(load_messages(path)) == dumped(runner.messages)
+    assert len(load_model_calls(path)) == 4
+
+
+@pytest.mark.parametrize("earlier_run", [False, True])
+async def test_attach_while_a_run_waits_for_approval(tmp_path, earlier_run):
+    path = tmp_path / "trace.jsonl"
+    runner = make_runner(acting_agent(), approval_policy=ApprovalPolicy(["act"]))
+    if earlier_run:
+        unsubscribe = resolve_on_request(runner.state, approved=True)
+        await runner.run("first")
+        unsubscribe()
+    holder = []
+    attach_on_approval(runner, path, holder)
+    await runner.run("second")
+    holder[0].close()
+    assert dumped(load_messages(path)) == dumped(runner.messages)
+
+
+async def test_cancel_in_a_tool_then_continue(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    runner = make_runner(Agent(streaming(lambda messages, info: (
+        ModelResponse([ToolCallPart("stop", {}, tool_call_id="s")]) if len(messages) == 1 else ModelResponse([TextPart("done")])
+    ))))
+
+    @runner.agent.tool_plain
+    async def stop() -> str:
+        runner.cancel()
+        await asyncio.sleep(0.05)
+        return "stopped"
+
+    with ModelTraceRecorder(runner, path):
+        await runner.run("go")
+        assert dumped(load_messages(path)) == dumped(runner.messages)
+        await runner.run("again")
+    assert dumped(load_messages(path)) == dumped(runner.messages)
+
+
+async def test_cancel_while_waiting_for_approval_then_continue(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    runner = make_runner(acting_agent(), approval_policy=ApprovalPolicy(["act"]))
+
+    def cancel_on_request(event):
+        if isinstance(event, ev.ApprovalRequested):
+            asyncio.get_running_loop().call_soon(runner.cancel)
+
+    unsubscribe = runner.state.subscribe(cancel_on_request)
+    with ModelTraceRecorder(runner, path):
+        await runner.run("go")
+        assert dumped(load_messages(path)) == dumped(runner.messages)
+        unsubscribe()
+        runner.approval_policy = None
+        await runner.run("again")
+    assert dumped(load_messages(path)) == dumped(runner.messages)
+
+
+async def test_cancel_mid_stream_marks_the_response_interrupted(tmp_path):
+    path = tmp_path / "trace.jsonl"
+
+    async def stream(messages, info):
+        if len(messages) == 1:
+            yield "partial "
+            runner.cancel()
+            await asyncio.sleep(0.2)
+            yield "never"
+        else:
+            yield "fine"
+
+    runner = make_runner(Agent(FunctionModel(stream_function=stream)))
+    with ModelTraceRecorder(runner, path):
+        await runner.run("go")
+        await runner.run("again")
+    assert dumped(load_messages(path)) == dumped(runner.messages)
+    interrupted, answered = load_model_calls(path)
+    assert interrupted.error == "Interrupted" and interrupted.duration is not None
+    assert answered.error is None
+
+
+async def test_task_cancel_counts_the_request_once(tmp_path):
+    path = tmp_path / "trace.jsonl"
+
+    async def stream(messages, info):
+        yield "partial "
+        await asyncio.sleep(10)
+        yield "never"
+
+    runner = make_runner(Agent(FunctionModel(stream_function=stream)))
+    with ModelTraceRecorder(runner, path):
+        task = asyncio.ensure_future(runner.run("go"))
+        await asyncio.sleep(0.1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    (call,) = load_model_calls(path)
+    assert call.error == "CancelledError" and call.duration is not None
+    assert dumped(load_messages(path)) == dumped(runner.messages)
+
+
+async def test_call_deferred_and_resume(tmp_path):
+    path = tmp_path / "trace.jsonl"
+
+    def model(messages, info):
+        if any(isinstance(p, UserPromptPart) for p in messages[-1].parts):
+            return ModelResponse([ToolCallPart("local", {}, tool_call_id="l1"), ToolCallPart("external", {}, tool_call_id="e1")])
+        return ModelResponse([TextPart("done")])
+
+    agent = Agent(streaming(model), output_type=[str, DeferredToolRequests])
+
+    @agent.tool_plain
+    def local() -> str:
+        return "local ok"
+
+    @agent.tool_plain
+    def external() -> str:
+        raise exceptions.CallDeferred()
+
+    runner = make_runner(agent)
+    with ModelTraceRecorder(runner, path):
+        assert isinstance(await runner.run("go"), DeferredToolRequests)
+        assert dumped(load_messages(path)) == dumped(runner.messages)
+        await runner.run(deferred_tool_results=DeferredToolResults(calls={"e1": "external ok"}))
+    assert dumped(load_messages(path)) == dumped(runner.messages)
+
+
+async def test_tool_and_output_retries(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    responses = [
+        ModelResponse([ToolCallPart("act", {"x": -1}, tool_call_id="a1")]),
+        ModelResponse([ToolCallPart("act", {"x": 1}, tool_call_id="a2")]),
+        ModelResponse([TextPart("bad")]),
+        ModelResponse([TextPart("good")]),
+    ]
+    agent = Agent(streaming(lambda messages, info: responses[sum(isinstance(m, ModelResponse) for m in messages)]))
+
+    @agent.tool_plain
+    def act(x: int) -> str:
+        if x < 0:
+            raise ModelRetry("x must be positive")
+        return "ok"
+
+    @agent.output_validator
+    def check(output: str) -> str:
+        if output == "bad":
+            raise ModelRetry("not good")
+        return output
+
+    runner = make_runner(agent)
+    with ModelTraceRecorder(runner, path):
+        assert await runner.run("go") == "good"
+    assert dumped(load_messages(path)) == dumped(runner.messages)
+    assert len(load_model_calls(path)) == 4
+
+
+def streaming_all(function):
+    """Like ``streaming``, but also streams thinking."""
+    async def stream(messages, info):
+        for i, part in enumerate(function(messages, info).parts):
+            if isinstance(part, TextPart):
+                yield part.content
+            elif isinstance(part, ThinkingPart):
+                yield {i: DeltaThinkingPart(content=part.content, signature=part.signature)}
+            else:
+                yield {i: DeltaToolCall(name=part.tool_name, json_args=part.args_as_json_str(), tool_call_id=part.tool_call_id)}
+    return FunctionModel(function, stream_function=stream)
+
+
+async def test_trace_without_content_keeps_every_part(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    secrets = ["S_PROMPT", "S_INSTR", "S_SYS", "S_THINK", "S_SIG", "S_TEXT", "S_ARGS", "S_DICT", "S_RETRY", "S_OUTRETRY", "S_RICH"]
+    responses = [
+        ModelResponse([
+            ThinkingPart("S_THINK", signature="S_SIG"),
+            TextPart("S_TEXT"),
+            ToolCallPart("dict_tool", {"q": "S_ARGS"}, tool_call_id="d1"),
+            ToolCallPart("retry_tool", {"q": "x"}, tool_call_id="r1"),
+            ToolCallPart("bin_tool", {}, tool_call_id="b1"),
+            ToolCallPart("rich_tool", {}, tool_call_id="u1"),
+        ]),
+        ModelResponse([TextPart("bad")]),
+        ModelResponse([TextPart("fine")]),
+    ]
+    agent = Agent(
+        streaming_all(lambda messages, info: responses[sum(isinstance(m, ModelResponse) for m in messages)]),
+        instructions="S_INSTR", system_prompt="S_SYS",
+    )
+
+    @agent.tool_plain
+    def dict_tool(q: str) -> dict:
+        return {"answer": "S_DICT"}
+
+    @agent.tool_plain
+    def retry_tool(q: str) -> str:
+        raise ModelRetry("S_RETRY")
+
+    @agent.tool_plain
+    def bin_tool() -> BinaryContent:
+        return BinaryContent(b"S_BINARY_DATA", media_type="image/png")
+
+    @agent.tool_plain
+    def rich_tool() -> ToolReturn:
+        return ToolReturn(return_value="ok", content=["S_RICH"])
+
+    @agent.output_validator
+    def check(output: str) -> str:
+        if output == "bad":
+            raise ModelRetry("S_OUTRETRY")
+        return output
+
+    runner = make_runner(agent)
+    with ModelTraceRecorder(runner, path, include_content=False):
+        await runner.run("S_PROMPT")
+    text = path.read_text()
+    assert [s for s in secrets if s in text] == []
+    assert "S_BINARY_DATA" not in text and "U19CSU5BUlk" not in text
+
+    def shape(messages):
+        return [(m.kind, [(p.part_kind, getattr(p, "tool_call_id", None)) for p in m.parts]) for m in messages]
+
+    assert shape(load_messages(path)) == shape(runner.messages)
+
+
+async def test_trace_without_content_keeps_only_error_types(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    agent = Agent(streaming(lambda messages, info: ModelResponse([ToolCallPart("boom", {}, tool_call_id="x")])))
+
+    @agent.tool_plain
+    def boom() -> str:
+        raise ValueError("customer 4111 S_ERROR")
+
+    runner = make_runner(agent)
+    with ModelTraceRecorder(runner, path, include_content=False):
+        await runner.run("hi")
+    assert "S_ERROR" not in path.read_text()
+    assert [r["error"] for r in lines(path) if "failed_run" in r] == ["ValueError"]
+
+
+async def test_run_id_passed_to_run_is_the_run_id():
+    runner = make_runner(make_agent())
+    await runner.run("What is k1?", run_id="run-mine")
+    assert runner.run_id == "run-mine" and "run-mine" in runner.state.runs
+    assert {m.run_id for m in runner.messages} == {"run-mine"}
+    runner.run_kwargs = {"run_id": "run-fixed"}
+    with pytest.raises(ValueError, match="run_kwargs cannot hold a run_id"):
+        await runner.run("again")
+
+
+async def test_second_recorder_on_a_stream_writes_no_second_header():
+    buffer = io.StringIO()
+    runner = make_runner(make_agent())
+    with ModelTraceRecorder(runner, buffer):
+        await runner.run("What is k1?")
+    with ModelTraceRecorder(runner, buffer):
+        await runner.run("And k2?")
+    assert sum("panel_agents_model_trace" in line for line in buffer.getvalue().splitlines()) == 1

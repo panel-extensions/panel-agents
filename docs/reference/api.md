@@ -67,14 +67,14 @@ Requires the `pydantic-ai` extra.
 | `publish_artifact(ctx, artifact_id, value, *, title, kind, metadata, applied=False)` | Publish an artifact version from an async tool. |
 | `artifact_return(return_value, artifact_id, value, *, title, kind, metadata, applied=False)` | Return a value to the model and publish an artifact, from any tool. |
 | `ActionToolset(registry, *, id=None, max_retries=1)` | An `ActionRegistry` as a pydantic-ai toolset. |
-| `ModelTraceRecorder(runner, path, *, include_content=True)` | Appends a runner's pydantic-ai message history to a JSON Lines model trace while it runs, with a `failed_run` line for runs that fail. `close()`. |
-| `load_messages(path, *, include_failed=False)` | The messages of a model trace as pydantic-ai `ModelMessage`s; assign them to `AgentRunner.messages` to continue the conversation. |
-| `load_model_calls(path)` | One `ModelCall(run_id, model, timestamp, duration, tool_calls, input_tokens, output_tokens, cached_tokens, cost_usd, error, provider_response_id)` per model request, including failed ones. |
+| `ModelTraceRecorder(runner, path, *, include_content=True)` | Keeps a JSON Lines model trace in sync with a runner's pydantic-ai message history while it runs, with `rewind` records where the history was rewritten and `failed_run` records for runs that fail. `close()`. |
+| `load_messages(path, *, include_failed=False)` | The history a model trace ends with, as pydantic-ai `ModelMessage`s; assign it to `AgentRunner.messages` to continue the conversation. |
+| `load_model_calls(path)` | One `ModelRequestSummary(run_id, model, timestamp, duration, tool_calls, input_tokens, output_tokens, cached_tokens, cost_usd, error, provider_response_id)` per model request, including failed ones. |
 | `Cassette(messages, *, strict=False, check_fingerprint=True)`, `Cassette.from_trace(path, **kwargs)` | A pydantic-ai `FunctionModel` that plays recorded responses back in order, streamed or not. `divergences`, `played`, `remaining`, `responses`. |
 | `Divergence(request, kind, expected, actual, tool_name=None, tool_call_id=None)`, `CassetteError` | A difference between playback and the recording (`kind` is `"tool_return"`, `"prompt"`, `"retry"` or `"fingerprint"`), and the error raised when playback cannot continue. |
 | `fingerprint(model_request_parameters, messages=())` | A short hash of the instructions, system prompts and function tools offered to the model, stored on every recorded response. |
 
-`AgentRunner` passes its `run_id` to pydantic-ai and stores the request's `duration` and `fingerprint` on each `ModelResponse` under `metadata["panel_agents"]`. The trace names also live in `panel_agents.adapters.model_trace`, together with its `FORMAT_VERSION`, and the cassette names in `panel_agents.adapters.cassette`.
+`AgentRunner` passes its `run_id` to pydantic-ai (`run(..., run_id=...)` chooses it) and stores the request's `duration` and `fingerprint` on each `ModelResponse` under `metadata["panel_agents"]`. The trace names also live in `panel_agents.adapters.model_trace`, together with its `FORMAT_VERSION`, and the cassette names in `panel_agents.adapters.cassette`.
 
 ## `panel_agents.mcp`
 
