@@ -9,9 +9,9 @@ from panel_agents.audit import AuditLog
 from panel_agents.components.approval import (
     ApprovalCard,
     ApprovalQueue,
+    _diff_args,
+    _prune_args,
     approval_factory,
-    diff_args,
-    prune_args,
 )
 
 
@@ -238,9 +238,9 @@ def test_queue_propagates_policy():
 
 def test_diff_and_prune():
     schema = RunQuery.model_json_schema()
-    assert prune_args({"sql": "a"}, {"sql": "a", "limit": 100, "timeout": None}, schema) == {"sql": "a"}
-    assert prune_args({"sql": "a"}, {"sql": "a", "limit": 5}, schema) == {"sql": "a", "limit": 5}
-    changes = diff_args({"a": 1, "n": {"x": 1}, "gone": 2}, {"a": 2, "n": {"x": 1, "y": 3}})
+    assert _prune_args({"sql": "a"}, {"sql": "a", "limit": 100, "timeout": None}, schema) == {"sql": "a"}
+    assert _prune_args({"sql": "a"}, {"sql": "a", "limit": 5}, schema) == {"sql": "a", "limit": 5}
+    changes = _diff_args({"a": 1, "n": {"x": 1}, "gone": 2}, {"a": 2, "n": {"x": 1, "y": 3}})
     assert [c[0] for c in changes] == ["a", "gone", "n.y"]
 
 

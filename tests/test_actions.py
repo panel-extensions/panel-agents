@@ -9,7 +9,7 @@ from panel.io.state import set_curdoc
 from pydantic import BaseModel, Field, ValidationError
 
 from panel_agents import Action, ActionRegistry
-from panel_agents.actions import parse_docstring
+from panel_agents.actions import _parse_docstring
 
 os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
 
@@ -35,10 +35,10 @@ def set_filter(column: str, value: Annotated[int, Field(ge=0, description="Lowes
 
 
 def test_parse_docstring():
-    description, args = parse_docstring(set_filter.__doc__)
+    description, args = _parse_docstring(set_filter.__doc__)
     assert description == "Filter the table shown to the user."
     assert args == {"column": "Column to filter on.", "mode": "Whether value is a minimum or a maximum."}
-    assert parse_docstring(None) == ("", {})
+    assert _parse_docstring(None) == ("", {})
 
 
 def test_action_schema_from_signature_and_docstring():

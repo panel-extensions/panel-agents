@@ -26,11 +26,12 @@ from ..artifacts.diff import (
     diff,
 )
 from ..artifacts.model import Artifact, ArtifactStore, ArtifactVersion
+from ..security import _escape_markdown, _plain_typography
 from ..state import RunState
 from ._diff import DiffViewer
 from .renderers import render
 
-KIND_ICONS = {
+_KIND_ICONS = {
     "table": "table_chart",
     "sql": "storage",
     "code": "code",
@@ -43,7 +44,7 @@ KIND_ICONS = {
     "plot": "insert_chart",
 }
 
-DOWNLOAD_EXTENSIONS = {
+_DOWNLOAD_EXTENSIONS = {
     "table": "csv",
     "sql": "sql",
     "json": "json",
@@ -54,14 +55,14 @@ DOWNLOAD_EXTENSIONS = {
     "markdown": "md",
 }
 
-CELL_STYLES = {
+_CELL_STYLES = {
     "added": "background-color: rgba(46, 125, 50, 0.18)",
     "removed": "background-color: rgba(211, 47, 47, 0.18)",
     "modified": "background-color: rgba(237, 108, 2, 0.28); font-weight: 600",
 }
 
 
-CHANGES_CSS = """
+_CHANGES_CSS = """
 :host { width: 100%; }
 .pa-changes { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; }
 .pa-change { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding: 2px 0; }
@@ -94,7 +95,7 @@ def _short(value: Any, limit: int = 80) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def changes_html(changes: list[Change]) -> str:
+def _changes_html(changes: list[Change]) -> str:
     """HTML listing the changes of a ``StructuredDiff``."""
     rows = []
     for change in changes:
@@ -115,11 +116,11 @@ def changes_html(changes: list[Change]) -> str:
     return f'<div class="pa-changes">{"".join(rows)}</div>'
 
 
-def kind_icon(kind: str) -> str:
-    return KIND_ICONS.get(kind, "inventory_2")
+def _kind_icon(kind: str) -> str:
+    return _KIND_ICONS.get(kind, "inventory_2")
 
 
-def version_label(version: ArtifactVersion, applied: bool = False) -> str:
+def _version_label(version: ArtifactVersion, applied: bool = False) -> str:
     parts = [f"v{version.version}"]
     if version.created_at:
         parts.append(datetime.fromtimestamp(version.created_at).strftime("%H:%M:%S"))
@@ -130,13 +131,13 @@ def version_label(version: ArtifactVersion, applied: bool = False) -> str:
     return " · ".join(parts)
 
 
-def version_bytes(value: Any, kind: str) -> tuple[bytes, str]:
+def _version_bytes(value: Any, kind: str) -> tuple[bytes, str]:
     """Serialize a version for download, returning the payload and file extension."""
     if kind == "table" and hasattr(value, "to_csv"):
         return value.to_csv(index=not isinstance(value.index, pd.RangeIndex)).encode(), "csv"
     if kind == "json" and not isinstance(value, str):
         return json.dumps(value, indent=2, default=repr).encode(), "json"
-    return ("" if value is None else str(value)).encode(), DOWNLOAD_EXTENSIONS.get(kind, "txt")
+    return ("" if value is None else str(value)).encode(), _DOWNLOAD_EXTENSIONS.get(kind, "txt")
 
 
 def _row_labels(df: pd.DataFrame, table_diff: TableDiff, key: list[str]) -> list[Any]:
@@ -148,7 +149,7 @@ def _row_labels(df: pd.DataFrame, table_diff: TableDiff, key: list[str]) -> list
     return list(df.index)
 
 
-def table_styles(df: pd.DataFrame, table_diff: TableDiff, side: str, key: list[str] | None = None) -> pd.DataFrame:
+def _table_styles(df: pd.DataFrame, table_diff: TableDiff, side: str, key: list[str] | None = None) -> pd.DataFrame:
     """CSS for each cell of one side of a table diff, positionally aligned with ``df``."""
     styles = pd.DataFrame("", index=range(len(df)), columns=range(len(df.columns)))
     if table_diff.alignment is None:
@@ -162,13 +163,13 @@ def table_styles(df: pd.DataFrame, table_diff: TableDiff, side: str, key: list[s
         modified.setdefault(row, set()).add(col)
     for r, label in enumerate(_row_labels(df, table_diff, key or [])):
         if label in extra_rows:
-            styles.iloc[r, :] = CELL_STYLES[status]
+            styles.iloc[r, :] = _CELL_STYLES[status]
             continue
         for c, name in enumerate(columns):
             if name in extra_cols:
-                styles.iloc[r, c] = CELL_STYLES[status]
+                styles.iloc[r, c] = _CELL_STYLES[status]
             elif name in modified.get(label, ()):
-                styles.iloc[r, c] = CELL_STYLES["modified"]
+                styles.iloc[r, c] = _CELL_STYLES["modified"]
     return styles
 
 
@@ -230,7 +231,7 @@ class ArtifactView(Viewer):
         self._diff_viewer = DiffViewer(context=3, max_height=520)
 
         self._icon = pmui.Chip(size="small", variant="outlined", margin=(0, 8, 0, 0))
-        self._title = pmui.Typography(variant="h6", margin=(0, 8), styles={"font-weight": "600"})
+        self._title = _plain_typography(variant="h6", margin=(0, 8), styles={"font-weight": "600"})
         self._count = pmui.Typography(variant="caption", color="text.secondary", margin=(0, 8))
         self._version = pmui.Select(label="Version", options={}, width=240, size="small", margin=(0, 8))
         self._download = pmui.FileDownload(
@@ -312,8 +313,8 @@ class ArtifactView(Viewer):
 
     def _update_header(self, *events):
         artifact = self.artifact
-        self._icon.param.update(label=artifact.kind, icon=kind_icon(artifact.kind))
-        self._title.object = artifact.title or artifact.artifact_id
+        self._icon.param.update(label=artifact.kind, icon=_kind_icon(artifact.kind))
+        self._title.object = _escape_markdown(artifact.title or artifact.artifact_id)
         n = len(artifact.versions)
         self._count.object = f"{n} version{'s' if n != 1 else ''}"
 
@@ -341,7 +342,7 @@ class ArtifactView(Viewer):
 
     def _version_options(self) -> dict[str, int]:
         applied = self.artifact.applied if self.artifact else None
-        return {version_label(v, applied=v.version == applied): v.version for v in self.versions}
+        return {_version_label(v, applied=v.version == applied): v.version for v in self.versions}
 
     def _on_applied(self, *events):
         options = self._version_options()
@@ -389,7 +390,7 @@ class ArtifactView(Viewer):
             if inspect.isawaitable(result):
                 result = await result
         except Exception as e:
-            self._apply_error.param.update(object=str(e) or type(e).__name__, visible=True, closed=False)
+            self._apply_error.param.update(object=_escape_markdown(str(e) or type(e).__name__), visible=True, closed=False)
             return False
         finally:
             self._applying = False
@@ -425,7 +426,7 @@ class ArtifactView(Viewer):
         self._version.value = current
         self._preview.objects = [self._render_version(current - 1)]
         self._update_metadata(current - 1)
-        ext = DOWNLOAD_EXTENSIONS.get(self.artifact.kind, "txt")
+        ext = _DOWNLOAD_EXTENSIONS.get(self.artifact.kind, "txt")
         self._download.filename = f"{self.artifact.artifact_id}_v{current}.{ext}"
 
     def _render_version(self, index: int) -> pn.viewable.Viewable:
@@ -450,7 +451,7 @@ class ArtifactView(Viewer):
 
     def _download_payload(self):
         version = self.versions[self.artifact.current - 1]
-        data, ext = version_bytes(version.value, self.artifact.kind)
+        data, ext = _version_bytes(version.value, self.artifact.kind)
         self._download.filename = f"{self.artifact.artifact_id}_v{version.version}.{ext}"
         return io.BytesIO(data)
 
@@ -479,7 +480,7 @@ class ArtifactView(Viewer):
         elif isinstance(result, TextDiff):
             self._diff_viewer.param.update(
                 old=result.old_text, new=result.new_text, mode=self.diff_layout,
-                old_label=version_label(old), new_label=version_label(new),
+                old_label=_version_label(old), new_label=_version_label(new),
             )
             self._compare_body.objects = [self._diff_viewer]
         elif isinstance(result, TableDiff):
@@ -542,12 +543,12 @@ class ArtifactView(Viewer):
         return [self._chip("Values differ", "warning")]
 
     def _structured_comparison(self, old: ArtifactVersion, new: ArtifactVersion, result: StructuredDiff):
-        changes = pn.pane.HTML(changes_html(result.changes), stylesheets=[CHANGES_CSS], sizing_mode="stretch_width", margin=(4, 8))
+        changes = pn.pane.HTML(_changes_html(result.changes), stylesheets=[_CHANGES_CSS], sizing_mode="stretch_width", margin=(4, 8))
         if not (result.old_text or result.new_text):
             return changes
         text = DiffViewer(
             old=result.old_text, new=result.new_text, context=3, max_height=520,
-            old_label=version_label(old), new_label=version_label(new), mode=self.diff_layout,
+            old_label=_version_label(old), new_label=_version_label(new), mode=self.diff_layout,
         )
         return pmui.Tabs(("Changes", changes), ("Text", text), sizing_mode="stretch_width")
 
@@ -559,9 +560,9 @@ class ArtifactView(Viewer):
             df = version.value if version.value is not None else pd.DataFrame()
             table = render(df, kind="table", layout="fit_data_table")
             if isinstance(table, pn.widgets.Tabulator):
-                _apply_styles(table, table_styles(df, result, side, key))
+                _apply_styles(table, _table_styles(df, result, side, key))
             sides.append(pmui.Column(
-                pmui.Typography(version_label(version), variant="subtitle2", margin=(0, 5)),
+                _plain_typography(_version_label(version), variant="subtitle2", margin=(0, 5)),
                 table, sizing_mode="stretch_width",
             ))
         return pmui.Row(*sides, sizing_mode="stretch_width")
@@ -569,8 +570,8 @@ class ArtifactView(Viewer):
     def _value_comparison(self, old: ArtifactVersion, new: ArtifactVersion, result: ValueDiff):
         def block(version, text):
             return pmui.Column(
-                pmui.Typography(version_label(version), variant="subtitle2", margin=(0, 5)),
-                pn.pane.Markdown(f"```\n{text}\n```", sizing_mode="stretch_width"),
+                _plain_typography(_version_label(version), variant="subtitle2", margin=(0, 5)),
+                pn.pane.HTML(f"<pre>{html.escape(text)}</pre>", sizing_mode="stretch_width"),
                 sizing_mode="stretch_width",
             )
         return pmui.Row(block(old, result.old_repr), block(new, result.new_repr), sizing_mode="stretch_width")
@@ -664,7 +665,7 @@ class ArtifactPane(Viewer):
         self._list.items = [
             {
                 "label": artifact.title or artifact.artifact_id,
-                "icon": kind_icon(artifact.kind),
+                "icon": _kind_icon(artifact.kind),
                 "secondary": _secondary(artifact),
             }
             for artifact in artifacts.values()
@@ -703,3 +704,9 @@ class ArtifactPane(Viewer):
         if index is None or index >= len(self._ids):
             return
         self.store.active = self._ids[index]
+
+
+__all__ = [
+    "ArtifactPane",
+    "ArtifactView",
+]

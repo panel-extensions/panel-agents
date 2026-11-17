@@ -22,11 +22,11 @@ from . import events as ev
 from .artifacts import ArtifactStore
 
 
-def new_id(prefix: str = "") -> str:
+def _new_id(prefix: str = "") -> str:
     return f"{prefix}{uuid.uuid4().hex[:12]}"
 
 
-def parse_partial_json(text: str) -> dict[str, Any]:
+def _parse_partial_json(text: str) -> dict[str, Any]:
     if not text:
         return {}
     try:
@@ -278,7 +278,7 @@ class RunState(param.Parameterized):
                 call = self.tool_calls.get(key)
                 if call is not None:
                     text = call.args_text + delta
-                    call.param.update(args_text=text, args=parse_partial_json(text))
+                    call.param.update(args_text=text, args=_parse_partial_json(text))
             else:
                 message = self.messages.get(key)
                 if message is not None:
@@ -287,7 +287,7 @@ class RunState(param.Parameterized):
     # Convenience API for UIs
 
     def add_user_message(self, content: str, run_id: str | None = None) -> str:
-        message_id = new_id("msg-")
+        message_id = _new_id("msg-")
         self.apply(ev.TextMessageStart(message_id=message_id, role="user", run_id=run_id))
         self.apply(ev.TextMessageContent(message_id=message_id, delta=content, run_id=run_id))
         self.apply(ev.TextMessageEnd(message_id=message_id, run_id=run_id))
@@ -423,7 +423,7 @@ class RunState(param.Parameterized):
     def _on_tool_call_end(self, event: ev.ToolCallEnd):
         call = self.tool_calls.get(event.tool_call_id)
         if call is not None and call.status == "pending":
-            call.param.update(status="running", args=parse_partial_json(call.args_text))
+            call.param.update(status="running", args=_parse_partial_json(call.args_text))
 
     def _on_tool_call_result(self, event: ev.ToolCallResult):
         call = self.tool_calls.get(event.tool_call_id)
@@ -438,7 +438,7 @@ class RunState(param.Parameterized):
         self.agent_state = copy.deepcopy(event.snapshot)
 
     def _on_state_delta(self, event: ev.StateDelta):
-        self.agent_state = apply_json_patch(self.agent_state, event.delta)
+        self.agent_state = _apply_json_patch(self.agent_state, event.delta)
 
     def _on_artifact_published(self, event: ev.ArtifactPublished):
         self.artifacts.publish(
@@ -512,7 +512,7 @@ def _resolve(doc, parts):
     return doc
 
 
-def apply_json_patch(document: dict[str, Any], patch: list[dict[str, Any]]) -> dict[str, Any]:
+def _apply_json_patch(document: dict[str, Any], patch: list[dict[str, Any]]) -> dict[str, Any]:
     """Apply an RFC 6902 patch, returning a new document."""
     doc = copy.deepcopy(document)
     for op in patch:
@@ -547,3 +547,12 @@ def apply_json_patch(document: dict[str, Any], patch: list[dict[str, Any]]) -> d
         elif kind == "remove":
             del parent[key]
     return doc
+
+
+__all__ = [
+    "ApprovalRequest",
+    "MessageState",
+    "RunInfo",
+    "RunState",
+    "ToolCallState",
+]

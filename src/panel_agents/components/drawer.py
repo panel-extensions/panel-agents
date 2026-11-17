@@ -17,7 +17,7 @@ from .approval import ApprovalQueue
 from .artifacts import ArtifactPane
 from .chat import AgentChat
 
-TABS = ("chat", "artifacts", "approvals")
+_TABS = ("chat", "artifacts", "approvals")
 
 
 class AgentDrawer(Viewer):
@@ -56,7 +56,7 @@ class AgentDrawer(Viewer):
         persistent: the drawer sits beside the content and narrows it.
         temporary: the drawer overlays the content and closes on outside clicks.""")
 
-    tab = param.Selector(default="chat", objects=list(TABS), doc="The tab shown in the drawer.")
+    tab = param.Selector(default="chat", objects=list(_TABS), doc="The tab shown in the drawer.")
 
     show_artifacts = param.Boolean(default=True, doc="Whether to show the Artifacts tab.")
 
@@ -210,7 +210,7 @@ class AgentDrawer(Viewer):
         self.state.reset()
 
     def _visible_tabs(self) -> list[str]:
-        return [t for t in TABS if t == "chat" or getattr(self, f"show_{t}")]
+        return [t for t in _TABS if t == "chat" or getattr(self, f"show_{t}")]
 
     def _label(self, tab: str) -> str:
         if tab == "artifacts":

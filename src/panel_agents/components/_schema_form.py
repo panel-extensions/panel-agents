@@ -11,6 +11,7 @@ Shapes outside that subset fall back to a JSON editor for that field.
 from __future__ import annotations
 
 import datetime as dt
+import html
 import json
 import re
 from typing import Any
@@ -274,7 +275,8 @@ class _Field:
             card = Card(
                 *([] if not header else [_help_text(header)]),
                 *(c.widget for c in self.children),
-                title=self.label, collapsible=True, outlined=True,
+                # Card titles render as HTML, and schemas may come from a third-party tool server.
+                title=html.escape(self.label), collapsible=True, outlined=True,
                 sizing_mode="stretch_width", margin=(5, 0), title_variant="subtitle1",
             )
             return card
@@ -466,8 +468,9 @@ class _Field:
 
 
 def _help_text(text: str):
-    from panel_material_ui.pane import Typography
-    return Typography(text, variant="body2", color="text.secondary", margin=(0, 5, 5, 5))
+    from ..security import _plain_typography
+    # Schema descriptions may come from a third-party tool server.
+    return _plain_typography(text, variant="body2", color="text.secondary", margin=(0, 5, 5, 5))
 
 
 class SchemaForm(Viewer):

@@ -11,10 +11,9 @@ import pandas as pd
 import panel as pn
 import panel_material_ui as pmui
 
-from panel_agents import RunState
+from panel_agents import ArtifactPane, RunState
 from panel_agents import events as ev
-from panel_agents.artifacts.diff import diff_structured, register_diff
-from panel_agents.components.artifacts import ArtifactPane
+from panel_agents.artifacts import diff_structured, register_diff
 
 SQL_VERSIONS = [
     """SELECT region, SUM(revenue) AS revenue
