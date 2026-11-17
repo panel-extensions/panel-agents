@@ -94,15 +94,17 @@ def test_reset_clears_feed():
     assert len(chat.feed.objects) == 1
 
 
-def test_input_disabled_while_running():
+def test_only_sending_is_disabled_while_running():
     state = RunState(flush_interval=0)
     chat = AgentChat(state)
     assert isinstance(chat.feed, pmui.ChatInterface)
-    assert not chat.feed.disabled
+    widget = chat.feed._widget
+    assert not widget.disabled_enter
     state.apply(ev.RunStarted(run_id="r1"))
-    assert chat.feed.disabled
+    assert widget.disabled_enter
+    assert not chat.feed.disabled and not widget.disabled
     state.apply(ev.RunFinished(run_id="r1"))
-    assert not chat.feed.disabled
+    assert not widget.disabled_enter
 
 
 def test_readonly_has_no_input():
@@ -279,3 +281,20 @@ def test_tool_labels_name_calls_in_the_users_words():
     assert chat.view_for(state.tool_calls["a"])._tool_section.visible
     chat.tool_labels = {}
     assert "tc-name" in header("a")
+
+
+def test_stop_cancels_the_runner():
+    class Runner:
+        state = RunState(flush_interval=0)
+        cancelled = 0
+
+        def run(self, text):
+            pass
+
+        def cancel(self):
+            self.cancelled += 1
+
+    runner = Runner()
+    chat = AgentChat(runner=runner)
+    chat._on_stop()
+    assert runner.cancelled == 1
