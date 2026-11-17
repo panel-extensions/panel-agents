@@ -18,6 +18,7 @@ from panel.viewable import Viewer
 from ..artifacts.model import infer_kind
 from ..security import _escape_markdown
 from ..state import ApprovalRequest, RunState, ToolCallState
+from .approval import ApprovalCard
 from .renderers import render
 
 # ChatStep only knows four statuses; the extra ones are conveyed by a badge.
@@ -278,7 +279,12 @@ class ToolCallCard(Viewer):
         html = _format_args(self.call.args, self.call.args_text)
         if html:
             self._args.object = html
-        self._args_section.visible = bool(html)
+        # A pending approval card already lists the arguments, editable.
+        self._args_section.visible = bool(html) and not self._awaiting_approval()
+
+    def _awaiting_approval(self) -> bool:
+        request = self.call.approval
+        return request is not None and request.status == "pending" and self.approval_factory is not None
 
     def _update_status(self, *_):
         status = self.call.status
@@ -325,6 +331,7 @@ class ToolCallCard(Viewer):
 
     def _update_approval(self, *_):
         request: ApprovalRequest | None = self.call.approval
+        self._update_args()
         if request is None or request.status != "pending":
             self._approval.param.update(objects=[], visible=False)
             if request is not None:
@@ -332,6 +339,9 @@ class ToolCallCard(Viewer):
             return
         if self.approval_factory is not None:
             widget = self.approval_factory(request, self.state)
+            if isinstance(widget, ApprovalCard):
+                # The card's own header already names the tool.
+                widget._title.visible = False
         else:
             widget = pmui.Alert(
                 object=_escape_markdown(request.description or "Waiting for a decision before this tool runs."),

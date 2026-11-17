@@ -1,9 +1,10 @@
 """
-The header button opening and closing an AgentDrawer.
+Browser-side helpers of AgentDrawer. Component class names cannot start
+with an underscore, so they live in this private module instead.
 
-A native button, so that it can carry ``aria-expanded`` and an
-accessible name that includes the number of pending approvals, which the
-panel-material-ui buttons do not expose.
+The header toggle is a native button, so that it can carry
+``aria-expanded`` and an accessible name that includes the number of
+pending approvals, which the panel-material-ui buttons do not expose.
 """
 
 from __future__ import annotations
@@ -78,3 +79,23 @@ class DrawerToggle(JSComponent):
 
     def focus(self):
         self._send_msg({"type": "focus"})
+
+
+class DrawerResizeNotifier(JSComponent):
+    """
+    Tells the page its layout changed once the drawer has opened or closed.
+
+    Plots and maps beside an inline drawer only measure themselves on window
+    resizes, so without this they keep the width they had before.
+    """
+
+    open = param.Boolean(default=False)
+
+    _esm = """
+    export function render({ model }) {
+      model.on("open", () => {
+        // After MUI's drawer transition (225ms).
+        setTimeout(() => window.dispatchEvent(new Event("resize")), 260)
+      })
+    }
+    """

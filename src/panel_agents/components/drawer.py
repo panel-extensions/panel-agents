@@ -12,7 +12,7 @@ import param
 from panel.viewable import Viewable, Viewer
 
 from ..state import RunState
-from ._toggle import DrawerToggle
+from ._toggle import DrawerResizeNotifier, DrawerToggle
 from .approval import ApprovalQueue
 from .artifacts import ArtifactPane
 from .chat import AgentChat
@@ -22,8 +22,8 @@ _TABS = ("chat", "artifacts", "approvals")
 
 class AgentDrawer(Viewer):
     """
-    A collapsible right-hand drawer holding an ``AgentChat`` with tabs
-    for the session's artifacts and pending approvals.
+    A collapsible right-hand drawer holding an ``AgentChat``, with views
+    of the session's artifacts and pending approvals.
 
     Given ``main``, the drawer renders beside that content and, in the
     persistent variant, narrows it while open. Place ``toggle`` in the
@@ -56,11 +56,14 @@ class AgentDrawer(Viewer):
         persistent: the drawer sits beside the content and narrows it.
         temporary: the drawer overlays the content and closes on outside clicks.""")
 
-    tab = param.Selector(default="chat", objects=list(_TABS), doc="The tab shown in the drawer.")
+    tab = param.Selector(default="chat", objects=list(_TABS), doc="""
+        The view shown in the drawer: the chat, the artifacts (opened from
+        the header) or the pending approvals (opened from the bar above the
+        chat).""")
 
-    show_artifacts = param.Boolean(default=True, doc="Whether to show the Artifacts tab.")
+    show_artifacts = param.Boolean(default=True, doc="Whether the artifacts view can be opened.")
 
-    show_approvals = param.Boolean(default=True, doc="Whether to show the Approvals tab.")
+    show_approvals = param.Boolean(default=True, doc="Whether the pending approvals bar and view are shown.")
 
     open_on_approval = param.Boolean(default=True, doc="""
         Whether a new pending approval opens a persistent drawer, so a
@@ -102,16 +105,42 @@ class AgentDrawer(Viewer):
         self._artifact_select.param.watch(self._on_artifact_select, "value")
         self._approvals = ApprovalQueue(self.state, can_approve=self.can_approve, title="Pending approvals")
 
-        self._tab_items = {
+        self._views = {
             "chat": pmui.Column(self._chat, sizing_mode="stretch_both", margin=0),
             "artifacts": pmui.Column(self._artifact_select, self._artifacts, sizing_mode="stretch_both", margin=0, scroll=True),
             "approvals": pmui.Column(self._approvals, sizing_mode="stretch_both", margin=(8, 8), scroll=True),
         }
-        self._tabs = pmui.Tabs(sizing_mode="stretch_both", margin=0, dynamic=False)
-        self._tabs.param.watch(self._on_tab_click, "active")
+        self._body = pmui.Column(sizing_mode="stretch_both", margin=0, styles={"min-height": "0"})
+
+        # No tab strip: artifacts and approvals are views reached from the header
+        # and from the pending bar, with a back button to the chat.
+        self._back = pmui.IconButton(
+            icon="arrow_back", description="Back to chat", size="small",
+            on_click=lambda e: self.param.update(tab="chat"),
+        )
+        self._heading = pmui.Typography(variant="subtitle1", margin=(0, 8), sx={"fontWeight": 500})
+        self._artifacts_button = pmui.IconButton(
+            icon="history", description="Artifacts", size="small", on_click=lambda e: self.param.update(tab="artifacts"),
+        )
+        # The count must not swallow clicks meant for the button.
+        self._artifacts_badge = pmui.Badge(
+            self._artifacts_button, content=0, color="primary", margin=0,
+            sx={"& .MuiBadge-badge": {"pointerEvents": "none", "top": "6px", "right": "6px"}},
+        )
+        self._pending_text = pmui.Typography(variant="body2", margin=(0, 8), sizing_mode="stretch_width")
+        self._pending_bar = pmui.Row(
+            self._pending_text,
+            pmui.Button(label="Review", variant="text", size="small", margin=0, on_click=lambda e: self.param.update(tab="approvals")),
+            sizing_mode="stretch_width", margin=(8, 12, 0, 12), align="center", visible=False,
+            styles={
+                "align-items": "center", "border-radius": "8px", "padding": "2px 4px 2px 6px",
+                "border": "1px solid var(--mui-palette-warning-main)",
+                "background": "rgba(var(--mui-palette-warning-mainChannel) / 0.12)",
+            },
+        )
 
         self._clear = pmui.IconButton(
-            icon="add_comment", description="New conversation", size="small",
+            icon="edit_square", description="New conversation", size="small",
             on_click=lambda e: self._ask_new_conversation(), visible=hasattr(self.runner, "clear"),
             disabled=self.state.param.running,
         )
@@ -130,11 +159,14 @@ class AgentDrawer(Viewer):
         )
         close = pmui.IconButton(icon="close", description="Close", size="small", on_click=lambda e: self._close_drawer())
         header = pmui.Row(
-            pmui.Typography(self.param.title, variant="h6", margin=(0, 8)),
-            pn.HSpacer(), self._clear, close,
-            sizing_mode="stretch_width", margin=(8, 4, 0, 8), align="center", styles={"align-items": "center"},
+            self._back, self._heading, pn.HSpacer(), self._artifacts_badge, self._clear, close,
+            sizing_mode="stretch_width", margin=0, align="center",
+            styles={"align-items": "center", "padding": "6px 6px 6px 12px", "min-height": "52px",
+                    "border-bottom": "1px solid var(--mui-palette-divider)"},
         )
-        self._content = pmui.Column(header, self._tabs, self._confirm, sizing_mode="stretch_both", margin=0, styles={"height": "100%"})
+        self._content = pmui.Column(
+            header, self._pending_bar, self._body, self._confirm, sizing_mode="stretch_both", margin=0, styles={"height": "100%"},
+        )
 
         self._drawer = pmui.Drawer(
             self._content, anchor="right", open=self.open, size=self.width,
@@ -148,9 +180,9 @@ class AgentDrawer(Viewer):
         self._toggle.param.watch(self._on_toggle, "expanded")
 
         self._layout = pmui.Row(sizing_mode="stretch_both", margin=0)
+        self._resize = DrawerResizeNotifier(open=self.open, width=0, height=0, margin=0)
 
         self.state.param.watch(self._on_pending, "pending_approvals")
-        self.state.param.watch(self._update_labels, "items")
         self._watch_store()
         self.state.param.watch(lambda e: self._watch_store(), "artifacts")
         self._sync_tabs()
@@ -212,46 +244,36 @@ class AgentDrawer(Viewer):
     def _visible_tabs(self) -> list[str]:
         return [t for t in _TABS if t == "chat" or getattr(self, f"show_{t}")]
 
-    def _label(self, tab: str) -> str:
-        if tab == "artifacts":
-            n = len(self.state.artifacts)
-            return f"Artifacts ({n})" if n else "Artifacts"
-        if tab == "approvals":
-            n = len(self.state.pending_approvals)
-            return f"Approvals ({n})" if n else "Approvals"
-        return "Chat"
-
     @param.depends("show_artifacts", "show_approvals", watch=True)
     def _sync_tabs(self):
-        tabs = self._visible_tabs()
-        if self.tab not in tabs:
+        if self.tab not in self._visible_tabs():
             self.tab = "chat"
-        self._labels = None
-        self._update_labels()
-        self._tabs.active = tabs.index(self.tab)
-
-    def _update_labels(self, *events):
-        tabs = self._visible_tabs()
-        labels = [self._label(t) for t in tabs]
-        if labels != getattr(self, "_labels", None):
-            self._labels = labels
-            self._tabs[:] = [(label, self._tab_items[t]) for label, t in zip(labels, tabs, strict=True)]
+        self._on_tab()
 
     @param.depends("tab", watch=True)
     def _on_tab(self):
-        tabs = self._visible_tabs()
-        if self.tab in tabs and self._tabs.active != tabs.index(self.tab):
-            self._tabs.active = tabs.index(self.tab)
+        view = self._views[self.tab]
+        if self._body.objects != [view]:
+            self._body.objects = [view]
+        self._update_labels()
 
-    def _on_tab_click(self, event):
-        tabs = self._visible_tabs()
-        if event.new is not None and event.new < len(tabs):
-            self.tab = tabs[event.new]
+    @param.depends("title", watch=True)
+    def _update_labels(self, *events):
+        chat = self.tab == "chat"
+        self._back.visible = not chat
+        self._heading.object = self.title if chat else self.tab.capitalize()
+        n = len(self.state.artifacts)
+        self._artifacts_badge.content = n
+        self._artifacts_badge.visible = chat and self.show_artifacts and n > 0
+        pending = len(self.state.pending_approvals)
+        self._pending_bar.visible = chat and self.show_approvals and pending > 0
+        self._pending_text.object = f"{pending} {'action waits' if pending == 1 else 'actions wait'} for you"
 
     @param.depends("open", "width", watch=True)
     def _sync_open(self):
         self._drawer.param.update(open=self.open, size=self.width)
         self._toggle.expanded = self.open
+        self._resize.open = self.open
 
     def _on_drawer_open(self, event):
         if self.open and not event.new:
@@ -278,10 +300,10 @@ class AgentDrawer(Viewer):
     def _sync_layout(self):
         self._drawer.param.update(variant=self.variant, inline=self.variant == "persistent")
         if self.main is None:
-            self._layout.objects = [self._drawer]
+            self._layout.objects = [self._drawer, self._resize]
         else:
             main = pmui.Column(self.main, sizing_mode="stretch_both", margin=0, styles={"min-width": "0"})
-            self._layout.objects = [main, self._drawer]
+            self._layout.objects = [main, self._drawer, self._resize]
 
     @param.depends("can_approve", "on_apply", watch=True)
     def _propagate(self):
