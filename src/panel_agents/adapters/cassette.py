@@ -47,6 +47,19 @@ __all__ = ["Cassette", "CassetteError", "Divergence"]
 # Output validator retries are RetryPromptParts without a tool in older pydantic-ai releases.
 _RetryFeedbackPart = getattr(_messages, "RetryFeedbackPart", None)
 
+try:
+    # No public API gives a model the run's history in a non-streamed request.
+    from pydantic_ai._run_context import get_current_run_context as _current_run_context
+except ImportError:
+    def _current_run_context() -> Any:
+        return None
+
+
+def _history(messages: list[ModelMessage], run_context: Any) -> list[ModelMessage]:
+    """The run's history, which is what was recorded; the messages sent to the model may render some parts differently."""
+    history = getattr(run_context, "messages", None)
+    return list(history) if history else messages
+
 
 class CassetteError(RuntimeError):
     """Playback cannot continue: the agent no longer matches the recording."""
@@ -129,6 +142,7 @@ class Cassette(FunctionModel):
         self._responses: list[ModelResponse] = []
         self._requests: list[list[ModelRequest]] = []
         self._unprepared: ModelRequestParameters | None = None
+        self._run_history: list[ModelMessage] | None = None
         pending: list[ModelRequest] = []
         for message in self.messages:
             if isinstance(message, ModelResponse):
@@ -218,24 +232,23 @@ class Cassette(FunctionModel):
         return dataclasses.replace(copy.deepcopy(recorded), run_id=None, conversation_id=None)
 
     def _respond(self, messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        response = self._play(messages, self._unprepared or info.model_request_parameters)
+        response = self._play(self._run_history or messages, self._unprepared or info.model_request_parameters)
         self._model_name_played = response.model_name
         return response
 
     async def request(self, messages, model_settings, model_request_parameters) -> ModelResponse:
         self._unprepared = model_request_parameters
+        self._run_history = _history(messages, _current_run_context())
         try:
             response = await super().request(messages, model_settings, model_request_parameters)
         finally:
-            self._unprepared = None
+            self._unprepared = self._run_history = None
         # FunctionModel names every response after itself; the recorded name is the one to keep.
         response.model_name = self._model_name_played
         return response
 
     @asynccontextmanager
     async def request_stream(self, messages, model_settings, model_request_parameters, run_context=None) -> AsyncIterator[StreamedResponse]:
-        # The run's history is what was recorded; the messages sent to the model may render some parts differently.
-        history = list(run_context.messages) if run_context is not None and run_context.messages else messages
-        recorded = self._play(history, model_request_parameters)
+        recorded = self._play(_history(messages, run_context or _current_run_context()), model_request_parameters)
         model_settings, model_request_parameters = self.prepare_request(model_settings, model_request_parameters)
         yield CompletedStreamedResponse(recorded, model_request_parameters=model_request_parameters, replay_events=True)
