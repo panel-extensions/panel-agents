@@ -230,3 +230,204 @@ async def test_resumed_conversation_plays_back(tmp_path):
     await runner.run("And again?")
     assert (cassette.remaining, cassette.divergences) == (0, [])
     assert runner.state.items[-1].content == resumed.state.items[-1].content == "East sold 65."
+
+
+async def test_played_responses_take_the_ids_of_the_playback(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    recorded = await record(path)
+    cassette = Cassette.from_trace(path)
+    result = await make_agent(cassette).run("How much did east sell?")
+    assert {m.run_id for m in result.all_messages()} == {result.run_id} != {recorded.run_id}
+
+    cassette = Cassette.from_trace(path)
+    runner = play(cassette)
+    with ModelTraceRecorder(runner, tmp_path / "played.jsonl"):
+        await runner.run("How much did east sell?")
+    assert {m.run_id for m in load_messages(tmp_path / "played.jsonl")} == {runner.run_id}
+
+
+def hand_recorded(returns):
+    return [
+        ModelRequest.user_text_prompt("Go"),
+        ModelResponse([ToolCallPart("total", {"region": "east"}, tool_call_id="call-total")], model_name="m"),
+        ModelRequest([ToolReturnPart(name, content, tool_call_id=call_id) for name, content, call_id in returns]),
+        ModelResponse([TextPart("Done.")], model_name="m"),
+    ]
+
+
+@pytest.mark.parametrize("returns, expected, actual, call_id", [
+    ([("total", 65, "call-total"), ("total", 1, "call-ghost")], 1, None, "call-ghost"),
+    ([], None, 65, "call-total"),
+])
+async def test_missing_and_extra_tool_returns_are_divergences(returns, expected, actual, call_id):
+    cassette = Cassette(hand_recorded(returns))
+    result = await make_agent(cassette).run("Go")
+    assert result.output == "Done."
+    assert [(d.kind, d.tool_call_id, d.expected, d.actual) for d in cassette.divergences] == [
+        ("tool_return", call_id, expected, actual),
+    ]
+
+
+async def test_changed_output_retry_is_a_divergence(tmp_path):
+    from pydantic_ai import ModelRetry
+
+    def agent_for(model, feedback):
+        agent = Agent(model)
+
+        @agent.output_validator
+        def check(output: str) -> str:
+            if output == "bad":
+                raise ModelRetry(feedback)
+            return output
+
+        return agent
+
+    def model(messages, info):
+        return ModelResponse([TextPart("bad" if len(messages) == 1 else "good")])
+
+    path = tmp_path / "trace.jsonl"
+    with ModelTraceRecorder(recorder_runner := make_runner(agent_for(streaming(model), "Say good")), path):
+        await recorder_runner.run("Go")
+    cassette = Cassette.from_trace(path)
+    assert await play(cassette, agent_for(cassette, "Say good"), approval_policy=None).run("Go") == "good"
+    assert cassette.divergences == []
+
+    cassette = Cassette.from_trace(path)
+    await play(cassette, agent_for(cassette, "Something else"), approval_policy=None).run("Go")
+    assert [d.kind for d in cassette.divergences] == ["retry"]
+
+
+@pytest.mark.parametrize("request_only_context", [False, True])
+async def test_streamed_and_non_streamed_playback_agree(tmp_path, request_only_context):
+    from dataclasses import dataclass
+
+    from pydantic_ai import ModelRetry
+    from pydantic_ai.capabilities import AbstractCapability
+    from pydantic_ai.messages import BinaryContent, ToolReturn, UserPromptPart
+
+    @dataclass
+    class AddContext(AbstractCapability):
+        async def before_model_request(self, ctx, request_context):
+            last = request_context.messages[-1]
+            request_context.messages = [*request_context.messages[:-1], ModelRequest([*last.parts, UserPromptPart("note")])]
+            return request_context
+
+    responses = [
+        ModelResponse([
+            ToolCallPart("dict_tool", {"q": "a"}, tool_call_id="d1"),
+            ToolCallPart("retry_tool", {"q": "x"}, tool_call_id="r1"),
+            ToolCallPart("bin_tool", {}, tool_call_id="b1"),
+            ToolCallPart("rich_tool", {}, tool_call_id="u1"),
+        ], model_name="m"),
+        ModelResponse([TextPart("bad")], model_name="m"),
+        ModelResponse([TextPart("fine")], model_name="m"),
+    ]
+
+    def agent_for(model):
+        agent = Agent(model, instructions="I", capabilities=[AddContext()] if request_only_context else [])
+
+        @agent.tool_plain
+        def dict_tool(q: str) -> dict:
+            return {"answer": q}
+
+        @agent.tool_plain
+        def retry_tool(q: str) -> str:
+            raise ModelRetry("nope")
+
+        @agent.tool_plain
+        def bin_tool() -> BinaryContent:
+            return BinaryContent(b"png", media_type="image/png")
+
+        @agent.tool_plain
+        def rich_tool() -> ToolReturn:
+            return ToolReturn(return_value="ok", content=["extra"])
+
+        @agent.output_validator
+        def check(output: str) -> str:
+            if output == "bad":
+                raise ModelRetry("again")
+            return output
+
+        return agent
+
+    path = tmp_path / "trace.jsonl"
+    recorder_runner = make_runner(agent_for(streaming(lambda messages, info: responses[sum(isinstance(m, ModelResponse) for m in messages)])))
+    with ModelTraceRecorder(recorder_runner, path):
+        await recorder_runner.run("go")
+
+    streamed = Cassette.from_trace(path, strict=True)
+    assert await make_runner(agent_for(streamed), raise_errors=True).run("go") == "fine"
+    non_streamed = Cassette.from_trace(path, strict=True)
+    assert (await agent_for(non_streamed).run("go")).output == "fine"
+    assert streamed.divergences == non_streamed.divergences == []
+    assert streamed.remaining == non_streamed.remaining == 0
+
+
+async def test_changed_output_retry_is_a_divergence_without_streaming(tmp_path):
+    from pydantic_ai import ModelRetry
+
+    def agent_for(model, feedback):
+        agent = Agent(model)
+
+        @agent.output_validator
+        def check(output: str) -> str:
+            if output == "bad":
+                raise ModelRetry(feedback)
+            return output
+
+        return agent
+
+    path = tmp_path / "trace.jsonl"
+    runner = make_runner(agent_for(streaming(lambda messages, info: ModelResponse([TextPart("bad" if len(messages) == 1 else "good")])), "Say good"))
+    with ModelTraceRecorder(runner, path):
+        await runner.run("Go")
+    same = Cassette.from_trace(path)
+    assert (await agent_for(same, "Say good").run("Go")).output == "good"
+    assert same.divergences == []
+    changed = Cassette.from_trace(path)
+    await agent_for(changed, "Something else").run("Go")
+    assert [d.kind for d in changed.divergences] == ["retry"]
+
+
+async def test_non_streamed_playback_without_the_run_context_lookup(tmp_path, monkeypatch):
+    import importlib
+    import sys
+
+    from pydantic_ai import ModelRetry
+
+    from panel_agents.adapters import cassette as cassette_module
+
+    original = dict(vars(cassette_module))
+    monkeypatch.setitem(sys.modules, "pydantic_ai._run_context", None)
+    try:
+        importlib.reload(cassette_module)
+    finally:
+        monkeypatch.undo()
+    try:
+        assert cassette_module._current_run_context() is None
+
+        def agent_for(model):
+            agent = Agent(model)
+
+            @agent.output_validator
+            def check(output: str) -> str:
+                if output == "bad":
+                    raise ModelRetry("Say good")
+                return output
+
+            return agent
+
+        path = tmp_path / "trace.jsonl"
+        runner = make_runner(agent_for(streaming(lambda messages, info: ModelResponse([TextPart("bad" if len(messages) == 1 else "good")]))))
+        with ModelTraceRecorder(runner, path):
+            await runner.run("Go")
+        cassette = cassette_module.Cassette.from_trace(path)
+        assert (await agent_for(cassette).run("Go")).output == "good"
+        # Without the run's history, the retry is compared as the user prompt the model was shown.
+        assert {d.kind for d in cassette.divergences} == {"prompt", "retry"}
+        assert cassette.remaining == 0
+    finally:
+        # Put back the original module contents, so the classes other modules imported stay the ones it raises and returns.
+        vars(cassette_module).update(original)
+    assert cassette_module._current_run_context.__module__ == "pydantic_ai._run_context"
+    assert cassette_module.CassetteError is CassetteError
