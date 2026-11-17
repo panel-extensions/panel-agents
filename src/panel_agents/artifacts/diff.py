@@ -103,6 +103,52 @@ class TableDiff(Diff):
         return ", ".join(parts) or "values differ"
 
 
+@dataclass
+class Change:
+    """One semantic change between two versions of a structured value."""
+
+    op: str
+    """'add', 'remove' or 'change'."""
+    path: tuple[str | int, ...]
+    """Keys and list positions leading to the change, e.g. ``("nodes", "sales", "config")``."""
+    old: Any = None
+    new: Any = None
+    label: str | None = None
+    """Human readable description shown instead of the path, e.g. "Node 'sales' added"."""
+
+    @property
+    def path_str(self) -> str:
+        """The path for display, e.g. ``nodes.sales.config`` or ``edges[2]``; not meant to be parsed."""
+        text = ""
+        for key in self.path:
+            text += f"[{key}]" if isinstance(key, int) else (f".{key}" if text else str(key))
+        return text
+
+
+@dataclass
+class StructuredDiff(Diff):
+    """
+    A list of semantic changes, the result to return from a custom diff
+    strategy for documents such as configurations or dashboards.
+
+    Set ``old_text`` and ``new_text`` to also offer a line diff of the
+    serialized versions.
+    """
+
+    kind: str = "structured"
+    changes: list[Change] = field(default_factory=list)
+    old_text: str = ""
+    new_text: str = ""
+
+    @property
+    def summary(self) -> str:
+        if self.identical:
+            return "identical"
+        counts = {op: sum(c.op == op for c in self.changes) for op in ("add", "remove", "change")}
+        labels = {"add": "added", "remove": "removed", "change": "changed"}
+        return ", ".join(f"{n} {labels[op]}" for op, n in counts.items() if n) or "values differ"
+
+
 DIFF_STRATEGIES: dict[str, Callable[..., Diff]] = {}
 
 
@@ -137,6 +183,57 @@ def diff_values(old: Any, new: Any, **options) -> ValueDiff:
     except Exception:
         identical = repr(old) == repr(new)
     return ValueDiff(identical=identical, old_repr=repr(old), new_repr=repr(new))
+
+
+def _join(path: tuple, key: Any) -> tuple:
+    return (*path, key)
+
+
+def _changes(old: Any, new: Any, path: tuple) -> list[Change]:
+    if isinstance(old, dict) and isinstance(new, dict):
+        changes = []
+        for key in old:
+            if key not in new:
+                changes.append(Change("remove", _join(path, key), old=old[key]))
+            else:
+                changes.extend(_changes(old[key], new[key], _join(path, key)))
+        changes.extend(Change("add", _join(path, key), new=new[key]) for key in new if key not in old)
+        return changes
+    if isinstance(old, list) and isinstance(new, list):
+        a = [json.dumps(v, sort_keys=True, default=repr) for v in old]
+        b = [json.dumps(v, sort_keys=True, default=repr) for v in new]
+        changes = []
+        for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes():
+            if tag == "equal":
+                continue
+            if tag == "replace" and i2 - i1 == j2 - j1:
+                for k in range(i2 - i1):
+                    changes.extend(_changes(old[i1 + k], new[j1 + k], _join(path, j1 + k)))
+                continue
+            changes.extend(Change("remove", _join(path, i), old=old[i]) for i in range(i1, i2))
+            changes.extend(Change("add", _join(path, j), new=new[j]) for j in range(j1, j2))
+        return changes
+    try:
+        equal = bool(old == new) and type(old) is type(new)
+    except Exception:
+        equal = repr(old) == repr(new)
+    return [] if equal else [Change("change", path, old=old, new=new)]
+
+
+def diff_structured(old: Any, new: Any, **options) -> StructuredDiff:
+    """
+    Diff two nested dict/list values into the changes needed to turn
+    ``old`` into ``new``: keys added and removed, list items inserted and
+    deleted, and leaf values changed.
+
+    Custom strategies for structured documents can start from this and
+    relabel the changes, e.g. ``("nodes", "sales")`` added as "Node 'sales' added".
+    """
+    changes = _changes({} if old is None else old, {} if new is None else new, ())
+    return StructuredDiff(identical=not changes, changes=changes)
+
+
+register_diff("structured")(diff_structured)
 
 
 def _to_text(value: Any, kind: str) -> str:

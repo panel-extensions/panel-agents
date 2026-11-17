@@ -76,6 +76,7 @@ class ArtifactEvent(CustomEvent, name="panel_agents.artifact"):
     title: str | None = None
     kind: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    applied: bool = False
 
 
 @dataclass(kw_only=True)
@@ -95,14 +96,19 @@ async def publish_artifact(
     title: str | None = None,
     kind: str | None = None,
     metadata: dict[str, Any] | None = None,
+    applied: bool = False,
 ) -> None:
     """
     Publish a new version of an artifact from inside an async tool.
 
     The event is stamped with the calling tool's ``tool_call_id`` and
-    reaches the UI in stream order, before the tool's result.
+    reaches the UI in stream order, before the tool's result. Pass
+    ``applied=True`` when the tool edited a host document in place and
+    ``value`` is what the document now holds.
     """
-    await ctx.emit(ArtifactEvent(artifact_id=artifact_id, value=value, title=title, kind=kind, metadata=metadata or {}))
+    await ctx.emit(ArtifactEvent(
+        artifact_id=artifact_id, value=value, title=title, kind=kind, metadata=metadata or {}, applied=applied,
+    ))
 
 
 def artifact_return(
@@ -113,14 +119,18 @@ def artifact_return(
     title: str | None = None,
     kind: str | None = None,
     metadata: dict[str, Any] | None = None,
+    applied: bool = False,
 ) -> ToolReturn:
     """
     Return ``return_value`` to the model and publish ``value`` as an artifact.
 
     Works from sync and async tools. The artifact travels in the tool
-    return's metadata, which pydantic-ai never sends to the model.
+    return's metadata, which pydantic-ai never sends to the model. See
+    ``publish_artifact`` for ``applied``.
     """
-    artifact = ArtifactEvent(artifact_id=artifact_id, value=value, title=title, kind=kind, metadata=metadata or {})
+    artifact = ArtifactEvent(
+        artifact_id=artifact_id, value=value, title=title, kind=kind, metadata=metadata or {}, applied=applied,
+    )
     return ToolReturn(return_value=return_value, metadata={_ARTIFACTS_KEY: [artifact]})
 
 
@@ -133,6 +143,10 @@ class _RecordingApprovalToolset(ApprovalRequiredToolset[Any]):
     async def call_tool(self, name: str, tool_args: dict[str, Any], ctx: RunContext[Any], tool: Any) -> Any:
         self.runner._validators[name] = tool.args_validator
         return await super().call_tool(name, tool_args, ctx, tool)
+
+
+def _shorten(text: str, limit: int = 80) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def _with_defaults(args: dict[str, Any], schema: dict[str, Any] | None) -> dict[str, Any]:
@@ -326,6 +340,7 @@ class PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
         return ev.ArtifactPublished(
             artifact_id=artifact.artifact_id, value=artifact.value, kind=artifact.kind, title=artifact.title,
             tool_call_id=artifact.tool_call_id or tool_call_id, metadata=dict(artifact.metadata),
+            applied=artifact.applied,
         )
 
     async def handle_custom_event(self, event: CustomEvent) -> AsyncIterator[ev.Event]:
@@ -398,6 +413,7 @@ class AgentRunner(param.Parameterized):
         self._tool_defs: dict[str, ToolDefinition] = {}
         self._validated: dict[str, dict[str, Any]] = {}
         self._validators: dict[str, Any] = {}
+        self._notes: list[str] = []
         self._waiters: dict[str, asyncio.Future[ev.ApprovalResolved]] = {}
         self._early: dict[str, ev.ApprovalResolved] = {}
         self._token: CancellationToken | None = None
@@ -431,6 +447,9 @@ class AgentRunner(param.Parameterized):
         return None if policy.can_decide(request, user, final) else f"{who} may not approve this {request.tool_name} call."
 
     def _on_event(self, event: ev.Event):
+        if isinstance(event, (ev.ArtifactApplied, ev.ArtifactPublished)):
+            self._note_artifact_change(event)
+            return
         if not isinstance(event, ev.ApprovalResolved):
             return
         # Only the decision the state accepted counts.
@@ -444,6 +463,20 @@ class AgentRunner(param.Parameterized):
                 self._early.setdefault(event.tool_call_id, event)
         elif not future.done():
             future.set_result(event)
+
+    def _note_artifact_change(self, event: ev.ArtifactApplied | ev.ArtifactPublished):
+        # Changes made outside the agent's tools are reported with the next prompt, so the model's view stays current.
+        artifact = self.state.artifacts.artifacts.get(event.artifact_id)
+        # Titles may come from the model or a tool, so they are quoted and shortened rather than pasted in.
+        name = repr(_shorten(event.artifact_id))
+        if artifact is not None and artifact.title and artifact.title != event.artifact_id:
+            name = f"{_shorten(artifact.title)!r} ({name})"
+        if isinstance(event, ev.ArtifactApplied):
+            who = f"{_shorten(event.user)!r} " if event.user else "The user "
+            self._notes.append(f"{who}applied version {event.version} of the artifact {name}; the app now holds that version.")
+        elif not self.running and artifact is not None:
+            held = " and now holds it" if event.applied else ""
+            self._notes.append(f"The app published version {len(artifact.versions)} of the artifact {name}{held}.")
 
     async def _wait_for_decision(self, tool_call_id: str) -> ev.ApprovalResolved:
         if tool_call_id in self._early:
@@ -474,11 +507,15 @@ class AgentRunner(param.Parameterized):
             run_id=run_id, thread_id=self.thread_id, agent_name=self.agent.name,
             input=prompt, tool_defs=self._tool_defs, validated_args=self._validated,
         )
+        model_prompt = prompt
+        if self._notes and isinstance(prompt, str):
+            model_prompt = "\n".join(f"[{note}]" for note in self._notes) + "\n\n" + prompt
+            self._notes.clear()
         run_kwargs = {**self.run_kwargs, **kwargs}
         capabilities = [*run_kwargs.pop("capabilities", []), _RunCapability(runner=self)]
         try:
             async with self.agent.run_stream_events(
-                prompt, message_history=self.messages or None, deferred_tool_results=deferred_tool_results,
+                model_prompt, message_history=self.messages or None, deferred_tool_results=deferred_tool_results,
                 deps=self.deps, capabilities=capabilities, cancellation_token=self._token, **run_kwargs,
             ) as events:
                 async for event in stream.transform_stream(events):

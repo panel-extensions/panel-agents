@@ -217,6 +217,21 @@ class ArtifactPublished(Event):
     title: str | None = None
     tool_call_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    applied: bool = False
+    """Whether the host document already holds this version, e.g. because
+    the tool edited the document in place."""
+
+
+@dataclass(kw_only=True)
+class ArtifactApplied(Event):
+    """A person applied a version of a document artifact to the host document."""
+
+    type: ClassVar[str] = "ARTIFACT_APPLIED"
+
+    artifact_id: str
+    version: int
+    """The applied ``ArtifactVersion.version``, counting from 1."""
+    user: str | None = None
 
 
 @dataclass(kw_only=True)
@@ -264,7 +279,7 @@ class GuardrailFired(Event):
     message_id: str | None = None
 
 
-KIT_EVENTS = (ArtifactPublished, ApprovalRequested, ApprovalResolved, Usage, GuardrailFired)
+KIT_EVENTS = (ArtifactPublished, ArtifactApplied, ApprovalRequested, ApprovalResolved, Usage, GuardrailFired)
 
 __all__ = [name for name, obj in list(globals().items()) if isinstance(obj, type) and issubclass(obj, Event)] + [
     "EVENT_TYPES",

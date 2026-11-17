@@ -44,8 +44,28 @@ class Artifact(param.Parameterized):
 
     versions = param.List(default=[], item_type=ArtifactVersion)
 
-    current = param.Integer(default=0, doc="""
-        Index of the version currently selected for display.""")
+    current = param.Integer(default=None, allow_None=True, bounds=(1, None), doc="""
+        Number of the version currently selected for display, counting
+        from 1 like ``ArtifactVersion.version``. None while there are no versions.""")
+
+    applied = param.Integer(default=None, allow_None=True, constant=True, doc="""
+        Number of the version the host document holds, counting from 1;
+        None unless the artifact is a document. Changed by publishing an
+        applied version or by ``RunState.apply_artifact_version``.""")
+
+    @property
+    def is_document(self) -> bool:
+        """
+        Whether the artifact mirrors a document the host app owns, i.e. one
+        of its versions was published as applied or applied by a person.
+        """
+        return self.applied is not None
+
+    @property
+    def applied_version(self) -> ArtifactVersion | None:
+        """The version the host document holds, or None if the artifact is not a document."""
+        number = self.applied
+        return self.versions[number - 1] if number is not None and number <= len(self.versions) else None
 
     @property
     def latest(self) -> ArtifactVersion | None:
@@ -53,7 +73,7 @@ class Artifact(param.Parameterized):
 
     @property
     def value(self) -> Any:
-        return self.versions[self.current].value if self.versions else None
+        return self.versions[self.current - 1].value if self.versions and self.current else None
 
     def add_version(
         self,
@@ -61,6 +81,7 @@ class Artifact(param.Parameterized):
         tool_call_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         created_at: float | None = None,
+        applied: bool = False,
     ) -> ArtifactVersion:
         version = ArtifactVersion(
             version=len(self.versions) + 1,
@@ -69,7 +90,11 @@ class Artifact(param.Parameterized):
             tool_call_id=tool_call_id,
             metadata=metadata or {},
         )
-        self.param.update(versions=[*self.versions, version], current=len(self.versions))
+        update = {"versions": [*self.versions, version], "current": version.version}
+        if applied:
+            update["applied"] = version.version
+        with param.edit_constant(self):
+            self.param.update(update)
         return version
 
 
@@ -103,13 +128,19 @@ class ArtifactStore(param.Parameterized):
         tool_call_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         created_at: float | None = None,
+        applied: bool = False,
     ) -> Artifact:
-        """Create an artifact, or add a new version if the id exists."""
+        """
+        Create an artifact, or add a new version if the id exists.
+
+        ``applied`` marks the version as the one the host document now
+        holds, which makes the artifact a document.
+        """
         if artifact_id in self.artifacts:
             artifact = self.artifacts[artifact_id]
             if title:
                 artifact.title = title
-            artifact.add_version(value, tool_call_id, metadata, created_at)
+            artifact.add_version(value, tool_call_id, metadata, created_at, applied)
             self.param.trigger("artifacts")
         else:
             artifact = Artifact(
@@ -117,7 +148,16 @@ class ArtifactStore(param.Parameterized):
                 kind=kind or infer_kind(value),
                 title=title or artifact_id,
             )
-            artifact.add_version(value, tool_call_id, metadata, created_at)
+            artifact.add_version(value, tool_call_id, metadata, created_at, applied)
             self.artifacts = {**self.artifacts, artifact_id: artifact}
         self.active = artifact_id
         return artifact
+
+    def mark_applied(self, artifact_id: str, version: int):
+        """Record that the host document now holds ``version`` (counting from 1) of an artifact."""
+        artifact = self.artifacts[artifact_id]
+        if not 1 <= version <= len(artifact.versions):
+            raise ValueError(f"{artifact_id!r} has no version {version}.")
+        with param.edit_constant(artifact):
+            artifact.applied = version
+        self.param.trigger("artifacts")

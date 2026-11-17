@@ -122,12 +122,12 @@ def test_view_version_selector(store):
     publish_sql(store)
     view = ArtifactView(store["query"])
     assert list(view._version.options) == [version_label(v) for v in store["query"].versions]
-    assert view._version.value == 2
-    view._version.value = 0
-    assert store["query"].current == 0
+    assert view._version.value == 3
+    view._version.value = 1
+    assert store["query"].current == 1
     assert view._preview.objects[0].value == "line 0"
-    store["query"].current = 1
-    assert view._version.value == 1
+    store["query"].current = 2
+    assert view._version.value == 2
 
 
 def test_version_label():
@@ -141,9 +141,9 @@ def test_version_label():
 def test_view_new_version_selects_latest(store):
     publish_sql(store, 2)
     view = ArtifactView(store["query"])
-    view._version.value = 0
+    view._version.value = 1
     publish_sql(store, 3)
-    assert view._version.value == 2
+    assert view._version.value == 3
     assert len(view._version.options) == 3
     assert view._count.object == "3 versions"
 
@@ -161,7 +161,7 @@ def test_view_download_text(store):
     view = ArtifactView(store["query"])
     assert view._download.filename == "query_v2.sql"
     assert view._download_payload().read() == b"line 0\nline 1"
-    store["query"].current = 0
+    store["query"].current = 1
     assert view._download.filename == "query_v1.sql"
     assert view._download_payload().read() == b"line 0"
 
@@ -185,7 +185,7 @@ def test_version_bytes():
 def test_view_compare_defaults(store):
     publish_sql(store)
     view = ArtifactView(store["query"])
-    assert (view.base, view.target) == (1, 2)
+    assert (view.base, view.target) == (2, 3)
     view.mode = "compare"
     assert view._tabs.active == 1
     diff_viewer = view._compare_body.objects[0]
@@ -198,8 +198,8 @@ def test_view_compare_defaults(store):
 def test_view_compare_selects(store):
     publish_sql(store)
     view = ArtifactView(store["query"], mode="compare")
-    view._base.value = 0
-    assert view.base == 0
+    view._base.value = 1
+    assert view.base == 1
     assert view._diff_viewer.added == 2
     view.diff_layout = "split"
     assert view._diff_viewer.mode == "split"
@@ -209,16 +209,16 @@ def test_view_compare_follows_new_versions(store):
     publish_sql(store, 2)
     view = ArtifactView(store["query"], mode="compare")
     publish_sql(store, 3)
-    assert (view.base, view.target) == (1, 2)
+    assert (view.base, view.target) == (2, 3)
     assert view._diff_viewer.new == "line 0\nline 1\nline 2"
 
 
 def test_view_compare_pinned_target_does_not_follow(store):
     publish_sql(store, 3)
     view = ArtifactView(store["query"], mode="compare", diff_layout="split")
-    view.param.update(base=0, target=1)
+    view.param.update(base=1, target=2)
     store.publish("query", "new", kind="sql")
-    assert (view.base, view.target) == (0, 1)
+    assert (view.base, view.target) == (1, 2)
 
 
 def test_view_compare_tab_click(store):
@@ -240,7 +240,7 @@ def test_view_compare_identical(store):
 def test_view_compare_single_version(store):
     store.publish("q", "x", kind="sql")
     view = ArtifactView(store["q"], mode="compare")
-    assert (view.base, view.target) == (0, 0)
+    assert (view.base, view.target) == (1, 1)
     assert [c.label for c in view._summary] == ["Identical"]
 
 

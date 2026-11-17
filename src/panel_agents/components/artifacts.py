@@ -4,6 +4,8 @@ Components displaying versioned artifacts and the differences between versions.
 
 from __future__ import annotations
 
+import html
+import inspect
 import io
 import json
 from datetime import datetime
@@ -15,8 +17,16 @@ import panel_material_ui as pmui
 import param
 from panel.viewable import Viewer
 
-from ..artifacts.diff import TableDiff, TextDiff, ValueDiff, diff
+from ..artifacts.diff import (
+    Change,
+    StructuredDiff,
+    TableDiff,
+    TextDiff,
+    ValueDiff,
+    diff,
+)
 from ..artifacts.model import Artifact, ArtifactStore, ArtifactVersion
+from ..state import RunState
 from ._diff import DiffViewer
 from .renderers import render
 
@@ -51,16 +61,72 @@ CELL_STYLES = {
 }
 
 
+CHANGES_CSS = """
+:host { width: 100%; }
+.pa-changes { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; }
+.pa-change { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding: 2px 0; }
+.pa-op {
+  flex: none; width: 1.2em; text-align: center; font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.pa-op.add { color: var(--mui-palette-success-main, #2e7d32); }
+.pa-op.remove { color: var(--mui-palette-error-main, #d32f2f); }
+.pa-op.change { color: var(--mui-palette-warning-main, #ed6c02); }
+.pa-what { color: var(--mui-palette-text-primary, inherit); }
+.pa-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem;
+  color: var(--mui-palette-text-secondary, #6b6b6b);
+}
+.pa-old, .pa-new {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem;
+  padding: 0 4px; border-radius: 4px;
+}
+.pa-old { text-decoration: line-through; color: var(--mui-palette-error-main, #c62828); background: rgba(198, 40, 40, 0.08); }
+.pa-new { color: var(--mui-palette-success-dark, #1b5e20); background: rgba(46, 125, 50, 0.1); }
+.pa-arrow { color: var(--mui-palette-text-disabled, #9e9e9e); }
+"""
+
+_OP_SIGNS = {"add": "+", "remove": "−", "change": "~"}
+
+
+def _short(value: Any, limit: int = 80) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, default=str)
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def changes_html(changes: list[Change]) -> str:
+    """HTML listing the changes of a ``StructuredDiff``."""
+    rows = []
+    for change in changes:
+        parts = [f'<span class="pa-op {html.escape(change.op)}">{_OP_SIGNS.get(change.op, "·")}</span>']
+        if change.label:
+            parts.append(f'<span class="pa-what">{html.escape(change.label)}</span>')
+        else:
+            parts.append(f'<span class="pa-path">{html.escape(change.path_str)}</span>')
+        if change.op == "change" and not change.label:
+            parts.append(
+                f'<span class="pa-old">{html.escape(_short(change.old))}</span><span class="pa-arrow">→</span>'
+                f'<span class="pa-new">{html.escape(_short(change.new))}</span>'
+            )
+        elif not change.label:
+            value, cls = (change.new, "pa-new") if change.op == "add" else (change.old, "pa-old")
+            parts.append(f'<span class="{cls}">{html.escape(_short(value))}</span>')
+        rows.append(f'<div class="pa-change">{"".join(parts)}</div>')
+    return f'<div class="pa-changes">{"".join(rows)}</div>'
+
+
 def kind_icon(kind: str) -> str:
     return KIND_ICONS.get(kind, "inventory_2")
 
 
-def version_label(version: ArtifactVersion) -> str:
+def version_label(version: ArtifactVersion, applied: bool = False) -> str:
     parts = [f"v{version.version}"]
     if version.created_at:
         parts.append(datetime.fromtimestamp(version.created_at).strftime("%H:%M:%S"))
     if version.tool_call_id:
         parts.append(version.tool_call_id)
+    if applied:
+        parts.append("applied")
     return " · ".join(parts)
 
 
@@ -126,10 +192,12 @@ class ArtifactView(Viewer):
         Which tab is shown.""")
 
     base = param.Integer(default=None, allow_None=True, doc="""
-        Index of the version compared against; defaults to the one before the target.""")
+        Number of the version compared against, counting from 1. Defaults
+        to the applied version of a document, otherwise to the one before
+        the target.""")
 
     target = param.Integer(default=None, allow_None=True, doc="""
-        Index of the version compared; defaults to the latest.""")
+        Number of the version compared, counting from 1; defaults to the latest.""")
 
     diff_layout = param.Selector(default="unified", objects=["unified", "split"], doc="""
         Layout of text diffs.""")
@@ -139,9 +207,25 @@ class ArtifactView(Viewer):
 
     show_header = param.Boolean(default=True, doc="Whether to show the title row.")
 
+    on_apply = param.Callable(default=None, allow_None=True, doc="""
+        Callback ``(artifact, version) -> None | bool``, possibly async,
+        making the host document match a version of a document artifact.
+        When set, the header offers "Apply" for versions after the
+        applied one and "Revert to" for earlier ones. Raise an exception
+        or return False to refuse; the message is shown.""")
+
+    state = param.ClassSelector(class_=RunState, default=None, allow_None=True, doc="""
+        RunState recording applied versions as ``ArtifactApplied`` events,
+        so they show up in recordings. Without it the artifact is updated
+        directly.""")
+
+    user = param.String(default=None, allow_None=True, doc="""
+        User recorded on applied versions. Defaults to pn.state.user.""")
+
     def __init__(self, artifact: Artifact | None = None, **params):
         super().__init__(artifact=artifact, **params)
         self._rendered: dict[tuple[str, int], pn.viewable.Viewable] = {}
+        self._applying = False
         self._watchers: list = []
         self._diff_viewer = DiffViewer(context=3, max_height=520)
 
@@ -153,8 +237,13 @@ class ArtifactView(Viewer):
             label="Download", icon="download", variant="outlined", size="small", color="primary",
             callback=self._download_payload, margin=(0, 0, 0, 8), embed=False,
         )
+        self._apply = pmui.Button(
+            label="Apply", icon="restore", variant="contained", size="small", color="primary",
+            disable_elevation=True, visible=False, margin=(0, 0, 0, 8), on_click=self._on_apply_click,
+        )
+        self._apply_error = pmui.Alert(object="", severity="error", visible=False, closeable=True, sizing_mode="stretch_width", margin=(4, 0))
         self._header = pmui.Row(
-            self._icon, self._title, self._count, pn.HSpacer(), self._version, self._download,
+            self._icon, self._title, self._count, pn.HSpacer(), self._version, self._apply, self._download,
             align="center", sizing_mode="stretch_width", visible=self.param.show_header, margin=(12, 0, 0, 0),
             styles={"align-items": "center", "flex-wrap": "wrap"},
         )
@@ -181,7 +270,7 @@ class ArtifactView(Viewer):
             ("Preview", self._preview), ("Compare", compare), ("Metadata", self._metadata),
             active=["preview", "compare", "metadata"].index(self.mode), sizing_mode="stretch_width",
         )
-        self._layout_obj = pmui.Column(self._header, self._tabs, sizing_mode="stretch_width")
+        self._layout_obj = pmui.Column(self._header, self._apply_error, self._tabs, sizing_mode="stretch_width")
 
         self._version.param.watch(self._on_version_select, "value")
         self._base.param.watch(lambda e: self.param.update(base=e.new), "value")
@@ -212,6 +301,7 @@ class ArtifactView(Viewer):
             (artifact, artifact.param.watch(self._on_versions, "versions")),
             (artifact, artifact.param.watch(self._on_current, "current")),
             (artifact, artifact.param.watch(self._update_header, ["title", "kind"])),
+            (artifact, artifact.param.watch(self._on_applied, "applied")),
         ]
         self._update_header()
         self._on_versions()
@@ -227,31 +317,112 @@ class ArtifactView(Viewer):
         versions = self.versions
         previous_latest = None
         if events:
-            previous_latest = len(events[0].old) - 1 if events[0].old else None
-        options = {version_label(v): i for i, v in enumerate(versions)}
+            previous_latest = len(events[0].old) or None
+        options = self._version_options()
         self._update_header()
         self._version.options = options
         self._base.options = options
         self._target.options = options
-        latest = len(versions) - 1
+        latest = len(versions)
         if self.target is None or self.target == previous_latest or self.target > latest:
-            self.param.update(
-                target=latest if versions else None,
-                base=max(latest - 1, 0) if versions else None,
-            )
+            self.param.update(target=latest if versions else None, base=self._default_base(latest) if versions else None)
         self._on_current()
 
+    def _default_base(self, target: int) -> int:
+        # A new document version is compared with what the host holds, which after a revert is not the previous one.
+        applied = self.artifact.applied if self.artifact else None
+        if applied is not None and applied != target:
+            return applied
+        return max(target - 1, 1)
+
+    def _version_options(self) -> dict[str, int]:
+        applied = self.artifact.applied if self.artifact else None
+        return {version_label(v, applied=v.version == applied): v.version for v in self.versions}
+
+    def _on_applied(self, *events):
+        options = self._version_options()
+        self._version.options = options
+        self._base.options = options
+        self._target.options = options
+        # The labels changed but not the values, so the selects must be told to redraw them.
+        for select in (self._version, self._base, self._target):
+            select.param.trigger("value")
+        self._update_apply()
+
+    @param.depends("on_apply", watch=True)
+    def _update_apply(self):
+        artifact = self.artifact
+        if artifact is None or not artifact.is_document or self.on_apply is None or not self.versions:
+            self._apply.visible = False
+            return
+        current, applied = artifact.current, artifact.applied
+        self._apply.param.update(
+            visible=current != applied,
+            label=f"Revert to v{current}" if current < applied else f"Apply v{current}",
+            icon="history" if current < applied else "done",
+        )
+
+    async def apply_version(self, version: int | None = None) -> bool:
+        """
+        Apply version number ``version`` (default: the one shown) to the
+        host document through ``on_apply`` and record it. Returns whether
+        it was applied; False also while another apply is in progress.
+        """
+        if self.on_apply is None:
+            raise RuntimeError("ArtifactView.apply_version needs an on_apply callback that changes the host document.")
+        if self._applying:
+            return False
+        artifact = self.artifact
+        number = artifact.current if version is None else version
+        if not isinstance(number, int) or not 1 <= number <= len(self.versions):
+            raise ValueError(f"{artifact.artifact_id!r} has no version {number}.")
+        version = self.versions[number - 1]
+        self._apply_error.visible = False
+        self._applying = True
+        self._apply.param.update(disabled=True, loading=True)
+        try:
+            result = self.on_apply(artifact, version)
+            if inspect.isawaitable(result):
+                result = await result
+        except Exception as e:
+            self._apply_error.param.update(object=str(e) or type(e).__name__, visible=True, closed=False)
+            return False
+        finally:
+            self._applying = False
+            self._apply.param.update(disabled=False, loading=False)
+        if result is False:
+            self._apply_error.param.update(object=f"v{version.version} could not be applied.", visible=True, closed=False)
+            return False
+        if self.state is not None and self.state.artifacts.artifacts.get(artifact.artifact_id) is artifact:
+            self.state.apply_artifact_version(artifact.artifact_id, version.version, user=self._user())
+        else:
+            with param.edit_constant(artifact):
+                artifact.applied = number
+        return True
+
+    def _user(self) -> str | None:
+        if self.user is not None:
+            return self.user
+        try:
+            return pn.state.user
+        except Exception:
+            return None
+
+    async def _on_apply_click(self, event):
+        await self.apply_version()
+
     def _on_current(self, *events):
+        self._update_apply()
         if not self.versions:
             self._preview.objects = []
             self._metadata.object = {}
             return
-        current = min(max(self.artifact.current, 0), len(self.versions) - 1)
+        current = min(max(self.artifact.current or 1, 1), len(self.versions))
         self._version.value = current
-        self._preview.objects = [self._render_version(current)]
-        self._update_metadata(current)
+        self._preview.objects = [self._render_version(current - 1)]
+        self._update_metadata(current - 1)
         ext = DOWNLOAD_EXTENSIONS.get(self.artifact.kind, "txt")
-        self._download.filename = f"{self.artifact.artifact_id}_v{self.versions[current].version}.{ext}"
+        self._download.filename = f"{self.artifact.artifact_id}_v{current}.{ext}"
 
     def _render_version(self, index: int) -> pn.viewable.Viewable:
         # Versions are immutable, so rendered output can be cached.
@@ -274,7 +445,7 @@ class ArtifactView(Viewer):
             self.artifact.current = event.new
 
     def _download_payload(self):
-        version = self.versions[self.artifact.current]
+        version = self.versions[self.artifact.current - 1]
         data, ext = version_bytes(version.value, self.artifact.kind)
         self._download.filename = f"{self.artifact.artifact_id}_v{version.version}.{ext}"
         return io.BytesIO(data)
@@ -295,11 +466,13 @@ class ArtifactView(Viewer):
             self._summary.objects = []
             self._compare_body.objects = [pmui.Typography("Nothing to compare yet.", color="text.secondary")]
             return
-        old, new = versions[self.base], versions[self.target]
+        old, new = versions[self.base - 1], versions[self.target - 1]
         result = self.compute_diff()
         self._layout.visible = isinstance(result, TextDiff)
         self._summary.objects = self._summary_chips(result)
-        if isinstance(result, TextDiff):
+        if isinstance(result, StructuredDiff):
+            self._compare_body.objects = [self._structured_comparison(old, new, result)]
+        elif isinstance(result, TextDiff):
             self._diff_viewer.param.update(
                 old=result.old_text, new=result.new_text, mode=self.diff_layout,
                 old_label=version_label(old), new_label=version_label(new),
@@ -315,7 +488,7 @@ class ArtifactView(Viewer):
         versions = self.versions
         if self.base is None or self.target is None or not versions:
             return None
-        return diff(versions[self.base].value, versions[self.target].value, kind=self.artifact.kind, **self.diff_options)
+        return diff(versions[self.base - 1].value, versions[self.target - 1].value, kind=self.artifact.kind, **self.diff_options)
 
     @staticmethod
     def _chip(label: str, color: str = "default", icon: str | None = None):
@@ -356,7 +529,23 @@ class ArtifactView(Viewer):
             if result.columns_reordered:
                 chips.append(self._chip("Columns reordered"))
             return chips
+        if isinstance(result, StructuredDiff):
+            chips = []
+            for op, label, color in (("add", "added", "success"), ("remove", "removed", "error"), ("change", "changed", "warning")):
+                if n := sum(c.op == op for c in result.changes):
+                    chips.append(self._chip(f"{n} {label}", color))
+            return chips
         return [self._chip("Values differ", "warning")]
+
+    def _structured_comparison(self, old: ArtifactVersion, new: ArtifactVersion, result: StructuredDiff):
+        changes = pn.pane.HTML(changes_html(result.changes), stylesheets=[CHANGES_CSS], sizing_mode="stretch_width", margin=(4, 8))
+        if not (result.old_text or result.new_text):
+            return changes
+        text = DiffViewer(
+            old=result.old_text, new=result.new_text, context=3, max_height=520,
+            old_label=version_label(old), new_label=version_label(new), mode=self.diff_layout,
+        )
+        return pmui.Tabs(("Changes", changes), ("Text", text), sizing_mode="stretch_width")
 
     def _table_comparison(self, old: ArtifactVersion, new: ArtifactVersion, result: TableDiff):
         key = self.diff_options.get("key")
@@ -383,6 +572,14 @@ class ArtifactView(Viewer):
         return pmui.Row(block(old, result.old_repr), block(new, result.new_repr), sizing_mode="stretch_width")
 
 
+def _secondary(artifact: Artifact) -> str:
+    n = len(artifact.versions)
+    text = f"{artifact.kind} · {n} version{'s' if n != 1 else ''}"
+    if (version := artifact.applied_version) is not None:
+        text += f" · v{version.version} applied"
+    return text
+
+
 class ArtifactPane(Viewer):
     """
     Lists the artifacts in an `ArtifactStore` and shows the active one,
@@ -401,9 +598,18 @@ class ArtifactPane(Viewer):
     view_options = param.Dict(default={}, doc="""
         Parameters passed to each ArtifactView, e.g. ``{'diff_layout': 'split'}``.""")
 
+    on_apply = param.Callable(default=None, allow_None=True, doc="""
+        Callback applying a version of a document artifact to the host
+        document; see ``ArtifactView.on_apply``.""")
+
+    state = param.ClassSelector(class_=RunState, default=None, allow_None=True, doc="""
+        RunState recording applied versions. Its artifacts are shown when
+        no store is given.""")
+
     def __init__(self, store: ArtifactStore | None = None, **params):
         if store is None:
-            store = ArtifactStore()
+            state = params.get("state")
+            store = state.artifacts if state is not None else ArtifactStore()
         super().__init__(store=store, **params)
         self._views: dict[str, ArtifactView] = {}
         self._ids: list[str] = []
@@ -454,7 +660,7 @@ class ArtifactPane(Viewer):
             {
                 "label": artifact.title or artifact.artifact_id,
                 "icon": kind_icon(artifact.kind),
-                "secondary": f"{artifact.kind} · {len(artifact.versions)} version{'s' if len(artifact.versions) != 1 else ''}",
+                "secondary": _secondary(artifact),
             }
             for artifact in artifacts.values()
         ]
@@ -467,13 +673,20 @@ class ArtifactPane(Viewer):
             self._container.objects = [self._empty]
             return
         if active not in self._views:
-            self._views[active] = ArtifactView(self.store.artifacts[active], **self.view_options)
+            self._views[active] = ArtifactView(
+                self.store.artifacts[active], on_apply=self.on_apply, state=self.state, **self.view_options,
+            )
         index = (self._ids.index(active),)
         if self._list.active != index:
             self._list.active = index
         view = self._views[active].__panel__()
         if self._container.objects != [view]:
             self._container.objects = [view]
+
+    @param.depends("on_apply", "state", watch=True)
+    def _propagate(self):
+        for view in self._views.values():
+            view.param.update(on_apply=self.on_apply, state=self.state)
 
     def _on_list_select(self, event):
         index = event.new[0] if isinstance(event.new, tuple) else event.new

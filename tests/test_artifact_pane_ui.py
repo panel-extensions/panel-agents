@@ -37,7 +37,7 @@ def test_artifact_pane_switch_version_and_compare(page, store):
 
     page.locator(".select").first.click(force=True)
     page.locator(".MuiMenuItem-root").nth(0).click()
-    wait_until(lambda: store["query"].current == 0, page)
+    wait_until(lambda: store["query"].current == 1, page)
     expect(page.locator(".ace_content")).not_to_contain_text("LIMIT")
 
     page.get_by_role("tab", name="Compare").click()
