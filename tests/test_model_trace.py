@@ -605,3 +605,36 @@ async def test_second_recorder_on_a_stream_writes_no_second_header():
     with ModelTraceRecorder(runner, buffer):
         await runner.run("And k2?")
     assert sum("panel_agents_model_trace" in line for line in buffer.getvalue().splitlines()) == 1
+
+
+async def test_trace_to_a_callable_and_load_the_records(tmp_path):
+    records = []
+    path = tmp_path / "trace.jsonl"
+    runner = make_runner(make_agent())
+    with ModelTraceRecorder(runner, records.append), ModelTraceRecorder(runner, path):
+        await runner.run("What is k1?")
+        runner.clear()
+        await runner.run("And k2?")
+    assert records == lines(path)
+    assert dumped(load_messages(records)) == dumped(load_messages(iter(records))) == dumped(runner.messages)
+    assert load_model_calls(records) == load_model_calls(path)
+
+
+async def test_callable_sink_gets_redacted_records():
+    records = []
+    runner = make_runner(make_agent())
+    with ModelTraceRecorder(runner, records.append, include_content=False):
+        await runner.run("What is k1?")
+    assert records[0] == {"panel_agents_model_trace": FORMAT_VERSION, "include_content": False}
+    assert "secret" not in json.dumps(records) and "What is k1" not in json.dumps(records)
+
+
+async def test_callable_sink_attached_again_does_not_repeat_the_history():
+    records = []
+    runner = make_runner(make_agent())
+    with ModelTraceRecorder(runner, records.append):
+        await runner.run("What is k1?")
+    with ModelTraceRecorder(runner, records.append):
+        await runner.run("And k2?")
+    assert dumped(load_messages(records)) == dumped(runner.messages)
+    assert len(load_model_calls(records)) == 4

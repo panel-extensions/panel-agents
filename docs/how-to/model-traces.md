@@ -59,6 +59,23 @@ The chat shows only the new run unless you also replay the conversation recordin
 
 `AgentRunner` passes the id of each run to pydantic-ai. Pass `run_id` to `run()` to choose it; `run_kwargs` cannot hold one, since every run needs its own.
 
+## Store recordings in your own database
+
+Both recorders write to a sink. Besides a file path, a sink can be a text stream or a callable, which receives each record as the JSON-ready dict a line of the file would hold: the format record first, then one record per event or message, `rewind` and `failed_run` record. Redaction is applied before the callable sees anything. The loaders accept any iterable of those dicts in the order they were written, so a host can keep sessions next to its own data:
+
+```python
+def store(record):
+    db.execute("INSERT INTO model_trace (session, record) VALUES (?, ?)", (session_id, json.dumps(record)))
+
+ModelTraceRecorder(runner, store)
+Recorder(state, lambda record: db.execute("INSERT INTO events (session, record) VALUES (?, ?)", (session_id, json.dumps(record))))
+
+rows = db.execute("SELECT record FROM model_trace WHERE session = ? ORDER BY rowid", (session_id,))
+runner.messages = load_messages(json.loads(row[0]) for row in rows)
+```
+
+A callable cannot be asked what it already holds, so a recorder writing to one starts with a format record every time it is attached, and, if the runner already has a history, with a `{"rewind": 0}` record and that history. The loaders read repeated format records and apply the rewinds, so the result is the history the runner holds.
+
 ## Leave out the content
 
 The model trace is the most sensitive recording: it holds every prompt, the instructions, tool arguments and results, and anything the agent put in its context. Record without them when you only need usage and timing:

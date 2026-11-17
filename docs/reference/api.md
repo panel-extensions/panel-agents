@@ -25,7 +25,7 @@ This page lists the public API of panel-agents 1.x. Every name below is covered 
 | `RunState` | Reactive store built from events. `apply(event)`, `apply_many(events)`, `subscribe(callback)`, `reset()`, `flush()`, `from_events(events)`, `events`, `add_user_message(text)`, `resolve_approval(tool_call_id, approved, args=None, reason=None, user=None)` (raises `ValueError` if already decided and `PermissionError` if the runner's policy does not allow `user`), `publish_artifact(artifact_id, value, *, kind, title, metadata, applied=False)`, `apply_artifact_version(artifact_id, version, user=None)`. |
 | `MessageState`, `ToolCallState`, `ApprovalRequest`, `RunInfo` | The entities in a `RunState`, as parameterized objects components watch. |
 | `events` | The event classes, see below. |
-| `Recorder(state, path)`, `dump_events(events, path)`, `load_events(path)`, `load_state(path)` | Record runs as JSON Lines, starting with a format version line, and load them back for replay. |
+| `Recorder(state, sink)`, `dump_events(events, path)`, `load_events(source)`, `load_state(source)` | Record runs as JSON Lines, starting with a format version line, and load them back for replay. A sink is a file path, a text stream or a callable receiving each record as a dict; a source is a file path or an iterable of those dicts. |
 | `AuditLog(state=None, sink=None, include_existing=False)` | Writes one record per approval decision to a file or callable. |
 
 ### Artifacts, approvals and actions
@@ -67,10 +67,10 @@ Requires the `pydantic-ai` extra.
 | `publish_artifact(ctx, artifact_id, value, *, title, kind, metadata, applied=False)` | Publish an artifact version from an async tool. |
 | `artifact_return(return_value, artifact_id, value, *, title, kind, metadata, applied=False)` | Return a value to the model and publish an artifact, from any tool. |
 | `ActionToolset(registry, *, id=None, max_retries=1)` | An `ActionRegistry` as a pydantic-ai toolset. |
-| `ModelTraceRecorder(runner, path, *, include_content=True)` | Keeps a JSON Lines model trace in sync with a runner's pydantic-ai message history while it runs, with `rewind` records where the history was rewritten and `failed_run` records for runs that fail. `close()`. |
-| `load_messages(path, *, include_failed=False)` | The history a model trace ends with, as pydantic-ai `ModelMessage`s; assign it to `AgentRunner.messages` to continue the conversation. |
-| `load_model_calls(path)` | One `ModelRequestSummary(run_id, model, timestamp, duration, tool_calls, input_tokens, output_tokens, cached_tokens, cost_usd, error, provider_response_id)` per model request, including failed ones. |
-| `Cassette(messages, *, strict=False, check_fingerprint=True)`, `Cassette.from_trace(path, **kwargs)` | A pydantic-ai `FunctionModel` that plays recorded responses back in order, streamed or not. `divergences`, `played`, `remaining`, `responses`. |
+| `ModelTraceRecorder(runner, sink, *, include_content=True)` | Keeps a JSON Lines model trace in sync with a runner's pydantic-ai message history while it runs, with `rewind` records where the history was rewritten and `failed_run` records for runs that fail. `close()`. |
+| `load_messages(source, *, include_failed=False)` | The history a model trace ends with, as pydantic-ai `ModelMessage`s; assign it to `AgentRunner.messages` to continue the conversation. |
+| `load_model_calls(source)` | One `ModelRequestSummary(run_id, model, timestamp, duration, tool_calls, input_tokens, output_tokens, cached_tokens, cost_usd, error, provider_response_id)` per model request, including failed ones. |
+| `Cassette(messages, *, strict=False, check_fingerprint=True)`, `Cassette.from_trace(source, **kwargs)` | A pydantic-ai `FunctionModel` that plays recorded responses back in order, streamed or not. `divergences`, `played`, `remaining`, `responses`. |
 | `Divergence(request, kind, expected, actual, tool_name=None, tool_call_id=None)`, `CassetteError` | A difference between playback and the recording (`kind` is `"tool_return"`, `"prompt"`, `"retry"` or `"fingerprint"`), and the error raised when playback cannot continue. |
 | `fingerprint(model_request_parameters, messages=())` | A short hash of the instructions, system prompts and function tools offered to the model, stored on every recorded response. |
 

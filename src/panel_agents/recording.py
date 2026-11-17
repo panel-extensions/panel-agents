@@ -4,6 +4,11 @@ Record runs as JSON Lines and load them back for replay.
 Each line is one event. Values that are not JSON serializable are
 encoded by a registered codec so they round-trip, e.g. DataFrames come
 back as DataFrames and can be rendered by the same components.
+
+Recorders write to a sink: a file path, a text stream, or a callable
+that receives each record as the JSON-ready dict a line would hold, so
+a host can store recordings in its own database. Loaders read a path
+or any iterable of those dicts.
 """
 
 from __future__ import annotations
@@ -12,7 +17,7 @@ import base64
 import io
 import json
 import os
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any
@@ -111,19 +116,68 @@ def _header() -> str:
     return json.dumps({_HEADER_KEY: FORMAT_VERSION})
 
 
-def _read_header(line: str) -> int | None:
-    data = json.loads(line)
-    if isinstance(data, dict) and _HEADER_KEY in data:
-        return int(data[_HEADER_KEY])
-    return None
-
-
 def _dump_event(event: Event) -> str:
     return json.dumps(_encode_value(event.to_dict()))
 
 
-def _load_event(line: str) -> Event:
-    return Event.from_dict(_decode_value(json.loads(line)))
+# Where a recorder writes: a JSON Lines file, a text stream, or a callable receiving each record.
+_Sink = str | os.PathLike | IO[str] | Callable[[dict[str, Any]], Any]
+
+# What a loader reads: a JSON Lines file, or the records a callable sink received, in order.
+_Source = str | os.PathLike | Iterable[dict[str, Any]]
+
+
+class _JsonLinesSink:
+    """Writes JSON-ready records to a file, a text stream or a callable, one line or call per record."""
+
+    def __init__(self, sink: _Sink):
+        self.path: Path | None = None
+        self._file: IO[str] | None = None
+        self._callable: Callable[[dict[str, Any]], Any] | None = None
+        self._owned = False
+        if isinstance(sink, (str, os.PathLike)):
+            self.path = Path(sink)
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.new = not self.path.exists() or self.path.stat().st_size == 0
+            self._file = open(self.path, "a")
+            self._owned = True
+        elif hasattr(sink, "write"):
+            self._file = sink
+            try:
+                self.new = sink.tell() == 0
+            except (OSError, AttributeError):
+                self.new = True
+        elif callable(sink):
+            # A callable cannot be asked what it already holds, so every recorder starts with a header.
+            self._callable = sink
+            self.new = True
+        else:
+            raise TypeError(f"A recording sink must be a path, a text stream or a callable, not {type(sink).__name__}.")
+
+    def write(self, record: dict[str, Any]):
+        if self._callable is not None:
+            self._callable(record)
+        else:
+            self._file.write(json.dumps(record) + "\n")
+            self._file.flush()
+
+    def close(self):
+        if self._owned:
+            self._file.close()
+
+
+def _read_records(source: _Source) -> Iterator[dict[str, Any]]:
+    if isinstance(source, (str, os.PathLike)):
+        with open(source) as f:
+            for line in f:
+                if line.strip():
+                    yield json.loads(line)
+    else:
+        yield from source
+
+
+def _describe(source: _Source) -> str:
+    return str(source) if isinstance(source, (str, os.PathLike)) else "The recording"
 
 
 def dump_events(events: Iterable[Event], path: str | os.PathLike):
@@ -134,58 +188,54 @@ def dump_events(events: Iterable[Event], path: str | os.PathLike):
             f.write(_dump_event(event) + "\n")
 
 
-def load_events(path: str | os.PathLike) -> list[Event]:
+def load_events(source: _Source) -> list[Event]:
     """
-    Read the events of a recording. Recordings without a format line,
+    Read the events of a recording from a JSON Lines file or from the
+    records a callable sink received. Recordings without a format line,
     written before it existed, are read as version 1. A recording from a
     newer format version raises ``ValueError``.
     """
     events = []
-    with open(path) as f:
-        for line in f:
-            if not line.strip():
-                continue
-            version = _read_header(line)
-            if version is None:
-                events.append(_load_event(line))
-            elif version > FORMAT_VERSION:
-                raise ValueError(f"{path} is a version {version} recording; this panel-agents reads up to version {FORMAT_VERSION}.")
+    for record in _read_records(source):
+        if isinstance(record, dict) and _HEADER_KEY in record:
+            if (version := int(record[_HEADER_KEY])) > FORMAT_VERSION:
+                raise ValueError(
+                    f"{_describe(source)} is a version {version} recording; this panel-agents reads up to version {FORMAT_VERSION}."
+                )
+        else:
+            events.append(Event.from_dict(_decode_value(record)))
     return events
 
 
-def load_state(path: str | os.PathLike, **params) -> RunState:
-    return RunState.from_events(load_events(path), **params)
+def load_state(source: _Source, **params) -> RunState:
+    return RunState.from_events(load_events(source), **params)
 
 
 class Recorder:
     """
-    Append every event applied to a RunState to a JSON Lines file.
+    Record every event applied to a RunState.
+
+    ``sink`` is a JSON Lines file to append to, a text stream, or a
+    callable receiving each record as the JSON-ready dict a line would
+    hold: first the format record, then one per event. ``load_events``
+    and ``load_state`` read either back.
 
     Usable as a context manager; ``close`` detaches it from the state.
     """
 
-    def __init__(self, state: RunState, path: str | os.PathLike | IO[str]):
+    def __init__(self, state: RunState, sink: _Sink):
         self.state = state
-        if isinstance(path, (str, os.PathLike)):
-            Path(path).parent.mkdir(parents=True, exist_ok=True)
-            new = not Path(path).exists() or Path(path).stat().st_size == 0
-            self._file = open(path, "a")
-            self._owned = True
-            if new:
-                self._file.write(_header() + "\n")
-        else:
-            self._file = path
-            self._owned = False
+        self._sink = _JsonLinesSink(sink)
+        if self._sink.new:
+            self._sink.write({_HEADER_KEY: FORMAT_VERSION})
         self._unsubscribe = state.subscribe(self._write)
 
     def _write(self, event: Event):
-        self._file.write(_dump_event(event) + "\n")
-        self._file.flush()
+        self._sink.write(_encode_value(event.to_dict()))
 
     def close(self):
         self._unsubscribe()
-        if self._owned:
-            self._file.close()
+        self._sink.close()
 
     def __enter__(self):
         return self

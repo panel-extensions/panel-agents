@@ -20,6 +20,10 @@ the model was offered, under ``metadata["panel_agents"]``.
 runner holds, e.g. to continue the conversation with
 ``runner.messages = load_messages(path)``. ``load_model_calls``
 summarizes every model request that was ever recorded.
+
+Like the event ``Recorder``, ``ModelTraceRecorder`` writes to a file, a
+text stream or a callable receiving each record as a dict, and the
+loaders read a file or an iterable of those dicts.
 """
 
 from __future__ import annotations
@@ -27,11 +31,9 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
-import os
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from datetime import datetime
-from pathlib import Path
-from typing import IO, Any
+from typing import Any
 
 from pydantic_ai.messages import (
     ModelMessage,
@@ -42,6 +44,8 @@ from pydantic_ai.messages import (
     ToolCallPart,
 )
 from pydantic_core import to_jsonable_python
+
+from ..recording import _describe, _JsonLinesSink, _read_records, _Sink, _Source
 
 __all__ = [
     "FORMAT_VERSION",
@@ -169,13 +173,6 @@ def _header(include_content: bool) -> dict[str, Any]:
     return {_HEADER_KEY: FORMAT_VERSION, "include_content": include_content}
 
 
-def _records(path: str | os.PathLike) -> Iterator[dict[str, Any]]:
-    with open(path) as f:
-        for line in f:
-            if line.strip():
-                yield json.loads(line)
-
-
 @dataclasses.dataclass
 class _Trace:
     include_content: bool = True
@@ -186,13 +183,15 @@ class _Trace:
     """The dumped form of the messages in ``entries``, in the same order."""
 
 
-def _read(path: str | os.PathLike) -> _Trace:
+def _read(source: _Source) -> _Trace:
     trace = _Trace()
-    for record in _records(path):
+    for record in _read_records(source):
         if _HEADER_KEY in record:
             version = int(record[_HEADER_KEY])
             if version > FORMAT_VERSION:
-                raise ValueError(f"{path} is a version {version} model trace; this panel-agents reads up to version {FORMAT_VERSION}.")
+                raise ValueError(
+                    f"{_describe(source)} is a version {version} model trace; this panel-agents reads up to version {FORMAT_VERSION}."
+                )
             trace.include_content = trace.include_content and record.get("include_content", True)
         elif _FAILED_KEY in record or _REWIND_KEY in record:
             trace.entries.append(record)
@@ -221,9 +220,10 @@ def _conversation(trace: _Trace, include_failed: bool = False) -> tuple[list[Mod
     return messages, data
 
 
-def load_messages(path: str | os.PathLike, *, include_failed: bool = False) -> list[ModelMessage]:
+def load_messages(source: _Source, *, include_failed: bool = False) -> list[ModelMessage]:
     """
-    Read the message history of a model trace as pydantic-ai messages.
+    Read the message history of a model trace as pydantic-ai messages,
+    from a JSON Lines file or the records a callable sink received.
 
     The result is the history the recorded ``AgentRunner`` held, so
     assigning it to ``AgentRunner.messages`` continues the conversation
@@ -231,7 +231,7 @@ def load_messages(path: str | os.PathLike, *, include_failed: bool = False) -> l
     which the runner does not keep, are kept. A trace recorded with
     ``include_content=False`` loads, but has no content to continue from.
     """
-    return _conversation(_read(path), include_failed)[0]
+    return _conversation(_read(source), include_failed)[0]
 
 
 @dataclasses.dataclass
@@ -281,7 +281,7 @@ def _summaries(response: ModelResponse) -> list[ModelRequestSummary]:
     return summaries
 
 
-def load_model_calls(path: str | os.PathLike) -> list[ModelRequestSummary]:
+def load_model_calls(source: _Source) -> list[ModelRequestSummary]:
     """
     Summarize every model request in a model trace, in order: the model,
     run, tool calls, tokens, cost, duration and, for failed requests,
@@ -292,7 +292,7 @@ def load_model_calls(path: str | os.PathLike) -> list[ModelRequestSummary]:
     """
     summaries: list[ModelRequestSummary] = []
     seen = set()
-    for entry in _read(path).entries:
+    for entry in _read(source).entries:
         if isinstance(entry, ModelResponse):
             key = (entry.run_id, entry.timestamp, entry.model_name, entry.provider_response_id, len(entry.parts))
             if key not in seen:
@@ -316,7 +316,11 @@ def load_model_calls(path: str | os.PathLike) -> list[ModelRequestSummary]:
 
 class ModelTraceRecorder:
     """
-    Record the message history of an ``AgentRunner`` to a JSON Lines file.
+    Record the message history of an ``AgentRunner``.
+
+    ``sink`` is a JSON Lines file to append to, a text stream, or a
+    callable receiving each record as the JSON-ready dict a line would
+    hold, with redaction already applied.
 
     The history is synchronized with the file at the start of every model
     request, before the tools of a response run and when a run ends, so a
@@ -328,9 +332,10 @@ class ModelTraceRecorder:
     so ``load_messages`` always returns what the runner holds.
 
     Attaching writes the runner's current history: in full to a new file,
-    and to an existing file only where it differs from the conversation
-    the file ends with, so ``runner.messages = load_messages(path)``
-    followed by a recorder on the same file only appends.
+    stream or callable, and to an existing file only where it differs
+    from the conversation the file ends with, so
+    ``runner.messages = load_messages(path)`` followed by a recorder on
+    the same file only appends.
 
     Pass ``include_content=False`` to drop prompts, instructions, text,
     thinking, tool arguments and results and error messages, keeping the
@@ -339,37 +344,29 @@ class ModelTraceRecorder:
     Usable as a context manager; ``close`` detaches it from the runner.
     """
 
-    def __init__(self, runner: Any, path: str | os.PathLike | IO[str], *, include_content: bool = True):
+    def __init__(self, runner: Any, sink: _Sink, *, include_content: bool = True):
         self.runner = runner
         self.include_content = include_content
         self._written: list[dict[str, Any]] = []
         self._objects: list[Any] = []
-        if isinstance(path, (str, os.PathLike)):
-            Path(path).parent.mkdir(parents=True, exist_ok=True)
-            new = not Path(path).exists() or Path(path).stat().st_size == 0
-            if not new:
-                trace = _read(path)
-                if trace.include_content != include_content:
-                    raise ValueError(f"{path} was recorded with include_content={not include_content}; record to another file.")
-                self._written = _conversation(trace)[1]
-                self._objects = [None] * len(self._written)
-            self._file = open(path, "a")
-            self._owned = True
-        else:
-            self._file = path
-            self._owned = False
-            try:
-                new = path.tell() == 0
-            except (OSError, AttributeError):
-                new = True
-        if new:
+        self._sink = _JsonLinesSink(sink)
+        if self._sink.path is not None and not self._sink.new:
+            trace = _read(self._sink.path)
+            if trace.include_content != include_content:
+                self._sink.close()
+                raise ValueError(f"{sink} was recorded with include_content={not include_content}; record to another file.")
+            self._written = _conversation(trace)[1]
+            self._objects = [None] * len(self._written)
+        if self._sink.new:
             self._emit(_header(include_content))
+        if self._sink.path is None and runner.messages:
+            # A stream or callable may already hold this conversation; start it over rather than repeat it.
+            self._emit({_REWIND_KEY: 0})
         self._sync(list(runner.messages))
         runner._trace_listeners.append(self)
 
     def _emit(self, record: dict[str, Any]):
-        self._file.write(json.dumps(record) + "\n")
-        self._file.flush()
+        self._sink.write(record)
 
     def _sync(self, messages: Sequence[ModelMessage]):
         written, objects = self._written, self._objects
@@ -406,8 +403,7 @@ class ModelTraceRecorder:
     def close(self):
         if self in self.runner._trace_listeners:
             self.runner._trace_listeners.remove(self)
-        if self._owned:
-            self._file.close()
+        self._sink.close()
 
     def __enter__(self):
         return self
