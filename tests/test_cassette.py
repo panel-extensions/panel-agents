@@ -230,3 +230,68 @@ async def test_resumed_conversation_plays_back(tmp_path):
     await runner.run("And again?")
     assert (cassette.remaining, cassette.divergences) == (0, [])
     assert runner.state.items[-1].content == resumed.state.items[-1].content == "East sold 65."
+
+
+async def test_played_responses_take_the_ids_of_the_playback(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    recorded = await record(path)
+    cassette = Cassette.from_trace(path)
+    result = await make_agent(cassette).run("How much did east sell?")
+    assert {m.run_id for m in result.all_messages()} == {result.run_id} != {recorded.run_id}
+
+    cassette = Cassette.from_trace(path)
+    runner = play(cassette)
+    with ModelTraceRecorder(runner, tmp_path / "played.jsonl"):
+        await runner.run("How much did east sell?")
+    assert {m.run_id for m in load_messages(tmp_path / "played.jsonl")} == {runner.run_id}
+
+
+def hand_recorded(returns):
+    return [
+        ModelRequest.user_text_prompt("Go"),
+        ModelResponse([ToolCallPart("total", {"region": "east"}, tool_call_id="call-total")], model_name="m"),
+        ModelRequest([ToolReturnPart(name, content, tool_call_id=call_id) for name, content, call_id in returns]),
+        ModelResponse([TextPart("Done.")], model_name="m"),
+    ]
+
+
+@pytest.mark.parametrize("returns, expected, actual, call_id", [
+    ([("total", 65, "call-total"), ("total", 1, "call-ghost")], 1, None, "call-ghost"),
+    ([], None, 65, "call-total"),
+])
+async def test_missing_and_extra_tool_returns_are_divergences(returns, expected, actual, call_id):
+    cassette = Cassette(hand_recorded(returns))
+    result = await make_agent(cassette).run("Go")
+    assert result.output == "Done."
+    assert [(d.kind, d.tool_call_id, d.expected, d.actual) for d in cassette.divergences] == [
+        ("tool_return", call_id, expected, actual),
+    ]
+
+
+async def test_changed_output_retry_is_a_divergence(tmp_path):
+    from pydantic_ai import ModelRetry
+
+    def agent_for(model, feedback):
+        agent = Agent(model)
+
+        @agent.output_validator
+        def check(output: str) -> str:
+            if output == "bad":
+                raise ModelRetry(feedback)
+            return output
+
+        return agent
+
+    def model(messages, info):
+        return ModelResponse([TextPart("bad" if len(messages) == 1 else "good")])
+
+    path = tmp_path / "trace.jsonl"
+    with ModelTraceRecorder(recorder_runner := make_runner(agent_for(streaming(model), "Say good")), path):
+        await recorder_runner.run("Go")
+    cassette = Cassette.from_trace(path)
+    assert await play(cassette, agent_for(cassette, "Say good"), approval_policy=None).run("Go") == "good"
+    assert cassette.divergences == []
+
+    cassette = Cassette.from_trace(path)
+    await play(cassette, agent_for(cassette, "Something else"), approval_policy=None).run("Go")
+    assert [d.kind for d in cassette.divergences] == ["retry"]
