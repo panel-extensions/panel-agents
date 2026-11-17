@@ -387,3 +387,47 @@ async def test_changed_output_retry_is_a_divergence_without_streaming(tmp_path):
     changed = Cassette.from_trace(path)
     await agent_for(changed, "Something else").run("Go")
     assert [d.kind for d in changed.divergences] == ["retry"]
+
+
+async def test_non_streamed_playback_without_the_run_context_lookup(tmp_path, monkeypatch):
+    import importlib
+    import sys
+
+    from pydantic_ai import ModelRetry
+
+    from panel_agents.adapters import cassette as cassette_module
+
+    original = dict(vars(cassette_module))
+    monkeypatch.setitem(sys.modules, "pydantic_ai._run_context", None)
+    try:
+        importlib.reload(cassette_module)
+    finally:
+        monkeypatch.undo()
+    try:
+        assert cassette_module._current_run_context() is None
+
+        def agent_for(model):
+            agent = Agent(model)
+
+            @agent.output_validator
+            def check(output: str) -> str:
+                if output == "bad":
+                    raise ModelRetry("Say good")
+                return output
+
+            return agent
+
+        path = tmp_path / "trace.jsonl"
+        runner = make_runner(agent_for(streaming(lambda messages, info: ModelResponse([TextPart("bad" if len(messages) == 1 else "good")]))))
+        with ModelTraceRecorder(runner, path):
+            await runner.run("Go")
+        cassette = cassette_module.Cassette.from_trace(path)
+        assert (await agent_for(cassette).run("Go")).output == "good"
+        # Without the run's history, the retry is compared as the user prompt the model was shown.
+        assert {d.kind for d in cassette.divergences} == {"prompt", "retry"}
+        assert cassette.remaining == 0
+    finally:
+        # Put back the original module contents, so the classes other modules imported stay the ones it raises and returns.
+        vars(cassette_module).update(original)
+    assert cassette_module._current_run_context.__module__ == "pydantic_ai._run_context"
+    assert cassette_module.CassetteError is CassetteError

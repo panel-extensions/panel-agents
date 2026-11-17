@@ -21,7 +21,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import os
-from collections.abc import AsyncIterator, Iterable, Sequence
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -96,17 +96,17 @@ def _tool_parts(message: ModelMessage | None) -> dict[str, ToolReturnPart | Retr
     }
 
 
+def _request_parts(message: ModelMessage | None) -> Sequence[Any]:
+    return message.parts if isinstance(message, ModelRequest) else ()
+
+
 def _prompts(message: ModelMessage | None) -> list[Any]:
-    if not isinstance(message, ModelRequest):
-        return []
-    return [_normalize(part.content) for part in message.parts if isinstance(part, UserPromptPart)]
+    return [_normalize(part.content) for part in _request_parts(message) if isinstance(part, UserPromptPart)]
 
 
 def _retries(message: ModelMessage | None) -> list[Any]:
-    if not isinstance(message, ModelRequest):
-        return []
     return [
-        _normalize(part.content) for part in message.parts
+        _normalize(part.content) for part in _request_parts(message)
         if (isinstance(part, RetryPromptPart) and not part.tool_name)
         or (_RetryFeedbackPart is not None and isinstance(part, _RetryFeedbackPart))
     ]
@@ -156,18 +156,11 @@ class Cassette(FunctionModel):
         }
 
     @classmethod
-    def from_trace(cls, source: str | os.PathLike | Iterable[dict[str, Any]], **kwargs) -> Cassette:
-        """
-        Load the conversation of a model trace written by ``ModelTraceRecorder``,
-        from a file or, where the trace loaders accept them, from the records
-        a callable sink received.
-        """
-        if not isinstance(source, (str, os.PathLike)):
-            source = list(source)
-        if not _read(source).include_content:
-            name = source if isinstance(source, (str, os.PathLike)) else "The model trace"
-            raise ValueError(f"{name} was recorded with include_content=False and has nothing to play back.")
-        return cls(load_messages(source), **kwargs)
+    def from_trace(cls, path: str | os.PathLike, **kwargs) -> Cassette:
+        """Load the conversation of a model trace written by ``ModelTraceRecorder``."""
+        if not _read(path).include_content:
+            raise ValueError(f"{path} was recorded with include_content=False and has nothing to play back.")
+        return cls(load_messages(path), **kwargs)
 
     @property
     def responses(self) -> list[ModelResponse]:
