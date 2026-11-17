@@ -39,7 +39,8 @@ def test_edit_argument_then_approve(page):
     expect(page.locator(".pa-new")).to_have_text("50")
 
     page.get_by_role("button", name="Approve with edits").click()
-    wait_until(lambda: state.approvals["t1"].status == "approved", page)
+    # The server applies the decision on its own thread, the tool call last.
+    wait_until(lambda: state.tool_calls["t1"].status == "running", page)
     assert state.approvals["t1"].final_args == {"sql": "SELECT 1", "limit": 50}
     assert state.approvals["t1"].user == "alice"
     assert state.tool_calls["t1"].args["limit"] == 50
