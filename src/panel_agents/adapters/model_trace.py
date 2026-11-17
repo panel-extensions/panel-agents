@@ -254,9 +254,6 @@ class ModelRequestSummary:
     provider_response_id: str | None = None
 
 
-ModelCall = ModelRequestSummary
-
-
 def _summaries(response: ModelResponse) -> list[ModelRequestSummary]:
     summaries = []
     for attempt in getattr(response, "failed_attempts", None) or []:
@@ -294,7 +291,9 @@ def load_model_calls(source: _Source) -> list[ModelRequestSummary]:
     seen = set()
     for entry in _read(source).entries:
         if isinstance(entry, ModelResponse):
-            key = (entry.run_id, entry.timestamp, entry.model_name, entry.provider_response_id, len(entry.parts))
+            # A history processor may rewrite a response that was already recorded, so it is matched by request id.
+            stamp = (entry.metadata or {}).get(_METADATA_KEY, {})
+            key = stamp.get("request_id") or (entry.run_id, entry.timestamp, entry.model_name, entry.provider_response_id)
             if key not in seen:
                 seen.add(key)
                 summaries.extend(_summaries(entry))
@@ -319,8 +318,10 @@ class ModelTraceRecorder:
     Record the message history of an ``AgentRunner``.
 
     ``sink`` is a JSON Lines file to append to, a text stream, or a
-    callable receiving each record as the JSON-ready dict a line would
-    hold, with redaction already applied.
+    callable receiving a copy of each record as the JSON-ready dict a line
+    would hold, with redaction already applied. A callable runs
+    synchronously on the event loop, so one that stores records slowly
+    blocks the app and should hand them to a queue or thread.
 
     The history is synchronized with the file at the start of every model
     request, before the tools of a response run and when a run ends, so a
@@ -331,11 +332,18 @@ class ModelTraceRecorder:
     recorder writes a ``rewind`` record and the history from there on,
     so ``load_messages`` always returns what the runner holds.
 
-    Attaching writes the runner's current history: in full to a new file,
-    stream or callable, and to an existing file only where it differs
-    from the conversation the file ends with, so
+    Attaching writes the runner's current history: to an existing file
+    only where it differs from the conversation the file ends with, so
     ``runner.messages = load_messages(path)`` followed by a recorder on
-    the same file only appends.
+    the same file only appends. A stream or callable cannot be read back,
+    so the recorder starts it over with a ``rewind`` to 0 and the full
+    history.
+
+    A failing sink is logged with its traceback and the agent run goes
+    on. The recorder then forgets what it wrote and, at the next sync the
+    sink accepts, starts over with a ``rewind`` to 0 and the full history,
+    so the store heals itself. Pass ``on_error="raise"`` to let the error
+    propagate into the run instead.
 
     Pass ``include_content=False`` to drop prompts, instructions, text,
     thinking, tool arguments and results and error messages, keeping the
@@ -344,12 +352,13 @@ class ModelTraceRecorder:
     Usable as a context manager; ``close`` detaches it from the runner.
     """
 
-    def __init__(self, runner: Any, sink: _Sink, *, include_content: bool = True):
+    def __init__(self, runner: Any, sink: _Sink, *, include_content: bool = True, on_error: str = "log"):
         self.runner = runner
         self.include_content = include_content
         self._written: list[dict[str, Any]] = []
         self._objects: list[Any] = []
-        self._sink = _JsonLinesSink(sink)
+        self._restart = False
+        self._sink = _JsonLinesSink(sink, on_error=on_error)
         if self._sink.path is not None and not self._sink.new:
             trace = _read(self._sink.path)
             if trace.include_content != include_content:
@@ -359,16 +368,25 @@ class ModelTraceRecorder:
             self._objects = [None] * len(self._written)
         if self._sink.new:
             self._emit(_header(include_content))
-        if self._sink.path is None and runner.messages:
-            # A stream or callable may already hold this conversation; start it over rather than repeat it.
-            self._emit({_REWIND_KEY: 0})
+        # A stream or callable may hold an earlier conversation, or this one; either way it starts over.
+        self._restart = self._sink.path is None
         self._sync(list(runner.messages))
         runner._trace_listeners.append(self)
 
-    def _emit(self, record: dict[str, Any]):
-        self._sink.write(record)
+    def _emit(self, record: dict[str, Any]) -> bool:
+        if self._sink.write(record):
+            return True
+        # What the sink holds is unknown now, so the next sync writes the whole history again.
+        self._written.clear()
+        self._objects.clear()
+        self._restart = True
+        return False
 
     def _sync(self, messages: Sequence[ModelMessage]):
+        if self._restart:
+            if not self._emit({_REWIND_KEY: 0}):
+                return
+            self._restart = False
         written, objects = self._written, self._objects
         prefix, limit = 0, min(len(messages), len(written))
         mismatch = None
@@ -385,12 +403,14 @@ class ModelTraceRecorder:
             objects[prefix] = message
             prefix += 1
         if prefix < len(written):
-            self._emit({_REWIND_KEY: prefix})
+            if not self._emit({_REWIND_KEY: prefix}):
+                return
             del written[prefix:], objects[prefix:]
         for message in messages[prefix:]:
             data = mismatch if mismatch is not None else _message_data(message, self.include_content)
             mismatch = None
-            self._emit(data)
+            if not self._emit(data):
+                return
             written.append(data)
             objects.append(message)
 

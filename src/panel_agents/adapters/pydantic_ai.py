@@ -19,6 +19,7 @@ import json
 import logging
 import re
 import time
+import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -60,7 +61,6 @@ from ..recording import _dump_event
 from .cassette import Cassette, CassetteError, Divergence
 from .model_trace import (
     _METADATA_KEY,
-    ModelCall,  # noqa: F401
     ModelRequestSummary,
     ModelTraceRecorder,
     _response_cost,
@@ -294,7 +294,10 @@ class _RunCapability(AbstractCapability[Any]):
     async def after_model_request(self, ctx: RunContext[Any], *, request_context: Any, response: ModelResponse) -> ModelResponse:
         request, self.request = self.request, None
         duration = time.perf_counter() - request["started"] if request else None
-        stamp = {"duration": duration, "fingerprint": fingerprint(request_context.model_request_parameters, ctx.messages)}
+        stamp = {
+            "duration": duration, "fingerprint": fingerprint(request_context.model_request_parameters, ctx.messages),
+            "request_id": uuid.uuid4().hex,
+        }
         response = replace(response, metadata={**(response.metadata or {}), _METADATA_KEY: stamp})
         usage = response.usage
         await ctx.emit(_UsageEvent(
@@ -547,6 +550,11 @@ class AgentRunner(param.Parameterized):
         self._unsubscribe = self.state.subscribe(self._on_event)
         self.state._decision_check = self._refusal
 
+    @param.depends("run_kwargs", watch=True, on_init=True)
+    def _check_run_kwargs(self):
+        if "run_id" in self.run_kwargs:
+            raise ValueError("AgentRunner.run_kwargs cannot hold a run_id, since every run needs its own; pass run_id to run() instead.")
+
     def _validate_args(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
         """
         Validate ``args`` for ``tool_name`` the way the tool will, returning
@@ -630,8 +638,7 @@ class AgentRunner(param.Parameterized):
         """
         if self.running:
             raise RuntimeError("AgentRunner is already running; await the current run or cancel it first.")
-        if "run_id" in self.run_kwargs:
-            raise ValueError("AgentRunner.run_kwargs cannot hold a run_id, since every run needs its own; pass run_id to run() instead.")
+        self._check_run_kwargs()
         run_id = kwargs.pop("run_id", None) or _new_id("run-")
         with param.edit_constant(self):
             self.param.update(running=True, run_id=run_id, error=None, deferred=None)
@@ -705,14 +712,14 @@ class AgentRunner(param.Parameterized):
             capability.stamp_interrupted(self.messages)
         elif result is not None:
             self.messages = list(result.all_messages())
-        if stream.cancelled is not None or result is not None:
-            self._trace(self.messages)
-        elif stream.error is not None:
-            self._trace_failure(stream.run_id, capability, stream.error)
         with param.edit_constant(self):
             self.error = stream.error
             if result is not None and isinstance(result.output, DeferredToolRequests):
                 self.deferred = result.output
+        if stream.cancelled is not None or result is not None:
+            self._trace(self.messages)
+        elif stream.error is not None:
+            self._trace_failure(stream.run_id, capability, stream.error)
         if stream.error is not None:
             if not isinstance(stream.error, RunCancelled):
                 _log.error("Agent run %s failed", stream.run_id, exc_info=stream.error)

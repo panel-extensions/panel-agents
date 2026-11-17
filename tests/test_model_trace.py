@@ -1,5 +1,7 @@
 import asyncio
+import dataclasses
 import asyncio
+import dataclasses
 import io
 import json
 import os
@@ -289,7 +291,9 @@ async def test_trace_to_a_stream():
     await runner.run("What is k1?")
     recorder.close()
     await runner.run("And k2?")
-    assert len(buffer.getvalue().splitlines()) == 5
+    assert [json.loads(line).get("kind", "") for line in buffer.getvalue().splitlines()][1:] == [
+        "", "request", "response", "request", "response",
+    ]
     assert not runner._trace_listeners
 
 
@@ -592,9 +596,10 @@ async def test_run_id_passed_to_run_is_the_run_id():
     await runner.run("What is k1?", run_id="run-mine")
     assert runner.run_id == "run-mine" and "run-mine" in runner.state.runs
     assert {m.run_id for m in runner.messages} == {"run-mine"}
-    runner.run_kwargs = {"run_id": "run-fixed"}
     with pytest.raises(ValueError, match="run_kwargs cannot hold a run_id"):
-        await runner.run("again")
+        runner.run_kwargs = {"run_id": "run-fixed"}
+    with pytest.raises(ValueError, match="run_kwargs cannot hold a run_id"):
+        make_runner(make_agent(), run_kwargs={"run_id": "run-fixed"})
 
 
 async def test_second_recorder_on_a_stream_writes_no_second_header():
@@ -615,7 +620,7 @@ async def test_trace_to_a_callable_and_load_the_records(tmp_path):
         await runner.run("What is k1?")
         runner.clear()
         await runner.run("And k2?")
-    assert records == lines(path)
+    assert records[0] == lines(path)[0] and records[1] == {"rewind": 0} and records[2:] == lines(path)[1:]
     assert dumped(load_messages(records)) == dumped(load_messages(iter(records))) == dumped(runner.messages)
     assert load_model_calls(records) == load_model_calls(path)
 
@@ -638,3 +643,171 @@ async def test_callable_sink_attached_again_does_not_repeat_the_history():
         await runner.run("And k2?")
     assert dumped(load_messages(records)) == dumped(runner.messages)
     assert len(load_model_calls(records)) == 4
+
+
+def usage_total(calls):
+    return sum(c.input_tokens + c.output_tokens for c in calls)
+
+
+def runner_usage(*runners):
+    return sum(u.input_tokens + u.output_tokens for r in runners for run in r.state.runs.values() for u in run.usage)
+
+
+@pytest.mark.parametrize("kind", ["callable", "stream"])
+async def test_new_conversation_into_a_stream_or_callable_starts_over(kind):
+    records, buffer = [], io.StringIO()
+    sink = records.append if kind == "callable" else buffer
+    first = make_runner(acting_agent())
+    with ModelTraceRecorder(first, sink):
+        await first.run("one")
+    second = make_runner(acting_agent())
+    with ModelTraceRecorder(second, sink):
+        await second.run("two")
+    if kind == "stream":
+        records = [json.loads(line) for line in buffer.getvalue().splitlines()]
+    assert dumped(load_messages(records)) == dumped(second.messages)
+    assert len(load_model_calls(records)) == 4
+
+
+async def test_new_conversation_into_an_existing_file(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    first = make_runner(acting_agent())
+    with ModelTraceRecorder(first, path):
+        await first.run("one")
+    second = make_runner(acting_agent())
+    await second.run("other")
+    with ModelTraceRecorder(second, path):
+        await second.run("two")
+    assert dumped(load_messages(path)) == dumped(second.messages)
+
+
+async def test_callable_reattached_to_a_resumed_conversation_counts_each_request_once():
+    records = []
+    first = make_runner(acting_agent())
+    with ModelTraceRecorder(first, records.append):
+        await first.run("one")
+    resumed = make_runner(acting_agent())
+    resumed.messages = load_messages(records)
+    with ModelTraceRecorder(resumed, records.append):
+        await resumed.run("two")
+    assert dumped(load_messages(records)) == dumped(resumed.messages)
+    calls = load_model_calls(records)
+    assert len(calls) == 4 and usage_total(calls) == runner_usage(first, resumed)
+
+
+@pytest.mark.parametrize("include_content", [True, False])
+async def test_processor_rewriting_older_responses_counts_each_request_once(tmp_path, include_content):
+    from pydantic_ai.capabilities import ProcessHistory
+
+    def drop_old_thinking(messages):
+        last = max((i for i, m in enumerate(messages) if isinstance(m, ModelResponse)), default=-1)
+        return [
+            dataclasses.replace(m, parts=[p for p in m.parts if not isinstance(p, ThinkingPart)])
+            if isinstance(m, ModelResponse) and i != last else m
+            for i, m in enumerate(messages)
+        ]
+
+    def model(messages, info):
+        if any(isinstance(p, UserPromptPart) for p in messages[-1].parts):
+            step = len(prompts(messages))
+            return ModelResponse([ThinkingPart("think"), ToolCallPart("act", {"x": step}, tool_call_id=f"c{step}")])
+        return ModelResponse([TextPart("done")])
+
+    agent = Agent(streaming_all(model), capabilities=[ProcessHistory(drop_old_thinking)])
+
+    @agent.tool_plain
+    def act(x: int) -> str:
+        return f"acted {x}"
+
+    path = tmp_path / "trace.jsonl"
+    runner = make_runner(agent)
+    with ModelTraceRecorder(runner, path, include_content=include_content):
+        for prompt in ("one", "two", "three"):
+            await runner.run(prompt)
+    assert [r for r in lines(path) if "rewind" in r]
+    calls = load_model_calls(path)
+    assert len(calls) == sum(isinstance(m, ModelResponse) for m in runner.messages) == 6
+    assert usage_total(calls) == runner_usage(runner)
+    if include_content:
+        assert dumped(load_messages(path)) == dumped(runner.messages)
+
+
+async def test_incomplete_last_line_is_ignored_and_dropped(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    runner = make_runner(acting_agent())
+    with ModelTraceRecorder(runner, path):
+        await runner.run("one")
+    complete = load_messages(path)
+    path.write_text(path.read_text()[:-40])
+    assert dumped(load_messages(path)) == dumped(complete[:-1])
+    resumed = make_runner(acting_agent())
+    resumed.messages = load_messages(path)
+    with ModelTraceRecorder(resumed, path):
+        await resumed.run("two")
+    assert dumped(load_messages(path)) == dumped(resumed.messages)
+
+
+async def test_failing_sink_is_logged_and_the_store_heals(caplog):
+    records, failing = [], [False]
+
+    def store(record):
+        if failing[0]:
+            raise OSError("database down")
+        records.append(record)
+
+    runner = make_runner(acting_agent())
+    recorder = ModelTraceRecorder(runner, store)
+    failing[0] = True
+    assert await runner.run("one") == "done"
+    assert runner.error is None and runner.state.runs[runner.run_id].status == "finished"
+    assert "A recording sink failed" in caplog.text and "database down" in caplog.text
+    failing[0] = False
+    await runner.run("two")
+    recorder.close()
+    assert dumped(load_messages(records)) == dumped(runner.messages)
+
+
+async def test_failing_sink_can_raise():
+    def store(record):
+        if "kind" in record:
+            raise OSError("database down")
+
+    runner = make_runner(acting_agent(), raise_errors=True)
+    ModelTraceRecorder(runner, store, on_error="raise")
+    with pytest.raises(OSError, match="database down"):
+        await runner.run("one")
+
+
+async def test_failing_event_sink_does_not_end_the_run(caplog):
+    from panel_agents import Recorder
+
+    def store(record):
+        if record.get("type") == "TOOL_CALL_START":
+            raise OSError("database down")
+
+    runner = make_runner(acting_agent())
+    with Recorder(runner.state, store):
+        assert await runner.run("one") == "done"
+    assert runner.error is None and "database down" in caplog.text
+
+
+async def test_async_sink_is_rejected():
+    async def store(record):
+        pass
+
+    with pytest.raises(TypeError, match="plain callable"):
+        ModelTraceRecorder(make_runner(acting_agent()), store)
+
+
+async def test_sink_gets_a_copy_of_each_record():
+    rows = []
+
+    def store(record):
+        record["session"] = "s1"
+        rows.append(record)
+
+    runner = make_runner(acting_agent())
+    with ModelTraceRecorder(runner, store):
+        await runner.run("one")
+        await runner.run("two")
+    assert [r["rewind"] for r in rows if "rewind" in r] == [0]

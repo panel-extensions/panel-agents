@@ -93,3 +93,26 @@ def test_newer_records_from_a_store_are_rejected():
 def test_recorder_rejects_an_unknown_sink():
     with pytest.raises(TypeError, match="sink"):
         Recorder(RunState(), 42)
+
+
+def test_path_keyword_is_a_deprecated_alias(tmp_path):
+    path = tmp_path / "run.jsonl"
+    state = RunState(flush_interval=0)
+    with pytest.warns(DeprecationWarning), Recorder(state, path=path):
+        state.apply_many(run_events())
+    with pytest.warns(DeprecationWarning):
+        assert len(load_events(path=path)) == len(state.events)
+    with pytest.warns(DeprecationWarning):
+        assert load_state(path=path).runs["run-1"].cost_usd == 0.01
+
+
+def test_incomplete_last_event_is_ignored(tmp_path):
+    path = tmp_path / "run.jsonl"
+    state = RunState(flush_interval=0)
+    with Recorder(state, path):
+        state.apply_many(run_events())
+    path.write_text(path.read_text()[:-10])
+    assert len(load_events(path)) == len(state.events) - 1
+    with Recorder(state, path):
+        state.add_user_message("again")
+    assert len(load_events(path)) == len(state.events) - 1

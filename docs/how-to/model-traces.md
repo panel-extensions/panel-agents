@@ -15,7 +15,7 @@ recorder = ModelTraceRecorder(runner, "runs/model-trace.jsonl")
 
 The file starts with a format line, `{"panel_agents_model_trace": 1, "include_content": true}`, followed by the messages in the format of pydantic-ai's `ModelMessagesTypeAdapter`. The recorder brings the file up to date with the runner's history at the start of every model request, before the tools of a response run and when a run ends, so a response is on disk before the tools it called run. Further runs of the conversation append to the same file. `close()` detaches the recorder, and it also works as a context manager.
 
-The trace records the persistent message history, the one `AgentRunner.messages` holds. Changes a capability makes only to the request it sends, without changing the history, are not in it. When the history is rewritten rather than extended, for example by a history processor that drops old messages, by `runner.clear()` or because a run failed, the recorder writes a `{"rewind": n}` record that keeps the first `n` messages, followed by the history from there on. The file therefore stays append-only, and loading it always gives the history the runner holds.
+The trace records the persistent message history, the one `AgentRunner.messages` holds. Changes a capability makes only to the request it sends, without changing the history, are not in it. When the history is rewritten rather than extended, for example by a history processor that drops old messages, by `runner.clear()` or because a run failed, the recorder writes a `{"rewind": n}` record that keeps the first `n` messages, followed by the history from there on. The file therefore stays append-only, and loading it always gives the history the runner holds. The recorder notices a message that was replaced or removed, but not an older message object a capability changes in place; rewrite history by replacing messages, as history processors do.
 
 Every response carries two values that pydantic-ai does not record, under `metadata["panel_agents"]`: the wall-clock `duration` of the request in seconds and a `fingerprint` of the instructions and tools the model was offered. `AgentRunner` also passes its run id to pydantic-ai, so the `run_id` on each message is the one on the events of the conversation recording. The `Usage` event of each response has the same `duration`.
 
@@ -61,7 +61,7 @@ The chat shows only the new run unless you also replay the conversation recordin
 
 ## Store recordings in your own database
 
-Both recorders write to a sink. Besides a file path, a sink can be a text stream or a callable, which receives each record as the JSON-ready dict a line of the file would hold: the format record first, then one record per event or message, `rewind` and `failed_run` record. Redaction is applied before the callable sees anything. The loaders accept any iterable of those dicts in the order they were written, so a host can keep sessions next to its own data:
+Both recorders write to a sink. Besides a file path, a sink can be a text stream or a plain (not async) callable, which receives a copy of each record as the JSON-ready dict a line of the file would hold: the format record first, then one record per event or message, `rewind` and `failed_run` record. Redaction is applied before the callable sees anything. The loaders accept any iterable of those dicts in the order they were written, so a host can keep sessions next to its own data:
 
 ```python
 def store(record):
@@ -74,7 +74,13 @@ rows = db.execute("SELECT record FROM model_trace WHERE session = ? ORDER BY row
 runner.messages = load_messages(json.loads(row[0]) for row in rows)
 ```
 
-A callable cannot be asked what it already holds, so a recorder writing to one starts with a format record every time it is attached, and, if the runner already has a history, with a `{"rewind": 0}` record and that history. The loaders read repeated format records and apply the rewinds, so the result is the history the runner holds.
+A callable cannot be asked what it already holds, so a model trace recorder writing to one, or to a stream, starts with a format record and a `{"rewind": 0}` record every time it is attached, then writes the runner's full history. The loaders read repeated format records and apply the rewinds, so the result is the history the runner holds, whatever the store held before.
+
+The callable runs synchronously on the event loop, inside the agent run. A store that takes noticeable time should hand the records to a queue or a thread, or the app stops responding while it writes.
+
+A sink that raises does not end the agent run: the error is logged with its traceback on the `panel_agents.recording` logger and that record is lost. A model trace recorder then forgets what it wrote, and at the next sync the sink accepts it writes `{"rewind": 0}` and the full history again, so the store heals itself. Pass `on_error="raise"` to either recorder to let sink errors propagate into the run instead.
+
+A crash in the middle of writing a file can leave its last line incomplete. The loaders ignore such a line, and a recorder attached to the file drops it before appending.
 
 ## Leave out the content
 
