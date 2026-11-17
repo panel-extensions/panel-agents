@@ -51,3 +51,25 @@ PAYLOADS = {
     "blockquote_html": "> " + img("blockquote_html"),
     "list_fence": f"- item\n\n  ```\n  code\n  ```\n{img('list_fence')}",
 }
+
+# Payloads aimed at the tool-output code blocks: fences built around the text, and text detected as code.
+PAYLOADS.update({
+    "fence_breakout": f"```\n{img('fence_breakout')}\n```\n{img('fence_breakout_after')}",
+    "long_fence_breakout": f"{{\"a\": \"``````\"}}\n``````\n{img('long_fence_breakout')}",
+    "markup_as_code": f"<div>\n{img('markup_as_code')}\n</div>",
+    "yaml_html_value": f"name: x\nbody:\n  html: {img('yaml_html_value')}",
+    "python_html_string": f"def f():\n    return '{img('python_html_string')}'",
+    "traceback_html": f"Traceback (most recent call last):\n  File \"x.py\", line 1\nValueError: {img('traceback_html')}",
+})
+
+
+def tool_output_variants(payload):
+    """The payload as tool outputs taking each render path: text, JSON (dict, list, string), YAML and code."""
+    return {
+        "text": payload,
+        "dict": {"payload": payload, "nested": {"items": [payload]}},
+        "list": [payload, 1],
+        "json_string": '{"payload": ' + __import__("json").dumps(payload) + "}",
+        "yaml": "name: x\nvalues:\n  payload: |\n" + "".join(f"    {line}\n" for line in payload.splitlines()),
+        "python": "def f():\n    return " + repr(payload),
+    }

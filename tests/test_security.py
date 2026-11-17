@@ -6,7 +6,7 @@ import pytest
 from panel_agents import RunState
 from panel_agents import events as ev
 from panel_agents.components.chat import AgentChat
-from panel_agents.components.renderers import render
+from panel_agents.components.renderers import output_format, render, render_output
 from panel_agents.security import (
     _escape_markdown,
     set_trusted_image_origins,
@@ -14,7 +14,7 @@ from panel_agents.security import (
     untrusted_markdown,
 )
 
-from .sanitiser_payloads import PAYLOADS, img
+from .sanitiser_payloads import PAYLOADS, img, tool_output_variants
 
 
 @pytest.fixture(autouse=True)
@@ -143,3 +143,63 @@ def test_objects_without_a_renderer_do_not_render_their_html():
 
     pane = render(Rich())
     assert isinstance(pane, pn.pane.Str)
+
+
+def _panes(viewable):
+    import panel as pn
+
+    if isinstance(viewable, pn.layout.ListLike):
+        return [pane for obj in viewable for pane in _panes(obj)]
+    return [viewable]
+
+
+@pytest.mark.parametrize("name", list(PAYLOADS))
+def test_payload_tool_outputs_render_inert(name):
+    import panel as pn
+
+    for variant, value in tool_output_variants(PAYLOADS[name]).items():
+        for pane in _panes(render_output(value, max_lines=3)):
+            if isinstance(pane, pn.widgets.Widget):
+                continue
+            assert inert_pane(pane), (variant, pane)
+            assert_inert(html_of(pane))
+
+
+def test_tool_output_variants_take_each_render_path():
+    formats = {variant: output_format(value)[0] for variant, value in tool_output_variants("a\nb").items()}
+    assert formats == {"text": "text", "dict": "json", "list": "json", "json_string": "json", "yaml": "yaml", "python": "python"}
+
+
+def test_code_blocks_escape_html_even_if_highlighting_fails():
+    from markdown_it import MarkdownIt
+
+    from panel_agents.security import inert_markdown
+
+    assert_inert(rendered("```python\n" + img("hilite") + "\n```"))
+
+    def broken(code, lang, attrs):
+        raise RuntimeError
+
+    for highlight in (broken, lambda code, lang, attrs: code):
+        md = MarkdownIt("gfm-like").use(inert_markdown)
+        md.options["highlight"] = highlight
+        out = md.render("```python\n" + img("fence") + "\n```")
+        assert_inert(out)
+        assert "&lt;img" in out
+
+
+def test_error_and_args_of_a_tool_call_are_inert():
+    from panel_agents.components.tool_call import ToolCallCard
+
+    state = RunState(flush_interval=0)
+    state.apply_many([
+        ev.ToolCallStart(tool_call_id="c", tool_name="t"),
+        ev.ToolCallArgs(tool_call_id="c", delta='{"body": "' + img("arg").replace('"', '\\"') + '", "code": "x = 1\\n' + img("code_arg").replace('"', '\\"') + '"}'),
+        ev.ToolCallEnd(tool_call_id="c"),
+        ev.ToolCallResult(tool_call_id="c", content="Traceback:\n" + img("error"), is_error=True),
+    ])
+    card = ToolCallCard(state.tool_calls["c"])
+    assert inert_pane(card._args)
+    assert_inert(html_of(card._args))
+    assert_inert(html_of(card._error_text))
+    assert "&lt;img" in card._error_text.object

@@ -128,9 +128,25 @@ def _inert_children(children: list[Any], token_cls) -> list[Any]:
     return out
 
 
+def _escaping_highlight(highlight):
+    # markdown-it inserts what the highlighter returns as HTML, and Panel's returns the code unchanged when it fails.
+    def wrapper(code: str, lang: str, attrs: str) -> str:
+        try:
+            html = highlight(code, lang, attrs)
+        except Exception:
+            return ""
+        return html if isinstance(html, str) and html != code and html.lstrip().startswith("<") else ""
+
+    wrapper._panel_agents_escaping = True
+    return wrapper
+
+
 def _inert_rule(state) -> None:
     from markdown_it.token import Token
 
+    highlight = state.md.options.get("highlight")
+    if highlight is not None and not getattr(highlight, "_panel_agents_escaping", False):
+        state.md.options["highlight"] = _escaping_highlight(highlight)
     tokens = []
     for token in state.tokens:
         if token.type == "html_block":
@@ -150,6 +166,7 @@ def inert_markdown(md) -> None:
     as text, images not from a trusted origin become links labelled
     "image: ...", links other than http, https, mailto or relative ones
     are dropped, and every link shows its full URL after its text.
+    Code blocks are escaped even when the highlighter fails.
 
     Use it with math disabled, e.g. ``pn.pane.Markdown(text,
     plugins=[inert_markdown], disable_math=True)``, or through

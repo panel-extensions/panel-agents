@@ -14,8 +14,9 @@ This page lists the public API of panel-agents 1.x. Every name below is covered 
 | `ApprovalQueue(state, *, can_approve, require_reason, user, show_resolved, title, card_factory)` | The pending approvals of a state as cards. `approve_all()`, `deny_all()`, `cards`. |
 | `ArtifactPane(store=None, *, state, on_apply, show_list, list_width, empty_message, view_options)` | Lists a store's artifacts and shows the active one. `views`, `active_view`. |
 | `ArtifactView(artifact, *, mode, base, target, diff_layout, diff_options, show_header, on_apply, state, user)` | One artifact with versions, compare, metadata and apply/revert for documents. `base` and `target` are version numbers. `apply_version(version=None)`, `compute_diff()`. |
-| `ToolCallCard(call, *, state, approval_factory, max_chars, max_items, collapsed, label)` | Card for one tool call with arguments, status, result and published artifacts; `label` (a string or a callable of the arguments) replaces the tool name in the header. |
+| `ToolCallCard(call, *, state, approval_factory, max_chars, max_items, max_lines, collapsed, label)` | Card for one tool call with arguments, status, result and published artifacts; `label` (a string or a callable of the arguments) replaces the tool name in the header. Structured and code-like results are shown as highlighted code blocks, cut to `max_lines` until expanded. |
 | `register_renderer(func=None, *, kind=None, type=None, applies=None, priority=0)` | Register how values of an artifact kind, a type or a predicate are rendered; usable as a decorator. |
+| `render_output(value, max_lines=30, **options)`, `output_format(value)` | Render a tool result the way `ToolCallCard` does, and the classification behind it: `output_format` returns `(format, content)` with format `"json"`, `"yaml"`, `"python"`, `"pytb"`, `"sql"`, `"xml"`, `"text"`, `"table"` or `"object"`. Both live in `panel_agents.components.renderers`. |
 
 ### State and events
 
