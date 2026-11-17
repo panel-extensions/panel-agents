@@ -5,6 +5,7 @@ import pytest
 
 from panel_agents import RunState
 from panel_agents import events as ev
+from panel_agents.components.approval import ApprovalCard, approval_factory
 from panel_agents.components.renderers import _TABLE_CSS
 from panel_agents.components.tool_call import (
     ToolCallCard,
@@ -117,6 +118,19 @@ def test_approval_factory_and_resolution(state):
     assert not card._approval.visible
     assert card._step.status == "running"
     assert "Edited" in card._header.object
+
+
+def test_approval_card_replaces_the_argument_listing(state):
+    state.apply(ev.ToolCallStart(tool_call_id="t1", tool_name="drop_table"))
+    state.apply(ev.ToolCallArgs(tool_call_id="t1", delta='{"table": "sales"}'))
+    cards = []
+    card = ToolCallCard(state.tool_calls["t1"], state=state, approval_factory=lambda *a: cards.append(approval_factory(*a)) or cards[-1])
+    assert card._args_section.visible
+    state.apply(ev.ApprovalRequested(tool_call_id="t1", tool_name="drop_table", args={"table": "sales"}))
+    assert isinstance(cards[-1], ApprovalCard) and not cards[-1]._title.visible
+    assert not card._args_section.visible
+    state.resolve_approval("t1", approved=True)
+    assert card._args_section.visible
 
 
 def test_denied(state):

@@ -55,6 +55,13 @@ def test_approve_without_edits():
     assert state.tool_calls["t1"].status == "running"
 
 
+def test_edit_is_offered_only_with_arguments():
+    state = make_state()
+    state.apply(ev.ApprovalRequested(tool_call_id="t3", tool_name="delete_report", run_id="r"))
+    assert card_for(state, "t1")._edit_toggle.visible
+    assert not card_for(state, "t3")._edit_toggle.visible
+
+
 def test_deny():
     state = make_state()
     card = card_for(state, "t1")

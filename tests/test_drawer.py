@@ -27,19 +27,20 @@ def request(state, tool_call_id="t1", tool_name="save"):
     ])
 
 
-def tab_names(drawer):
-    return list(drawer._tabs._names)
+def shown(drawer):
+    return next(name for name, view in drawer._views.items() if drawer._body.objects == [view])
 
 
 def test_drawer_beside_main_content():
     main = pmui.Typography("app")
     drawer = AgentDrawer(Runner(), main=main, width=380)
-    wrapper, drawer_view = drawer.__panel__().objects
-    assert wrapper.objects == [main] and drawer_view is drawer._drawer
+    wrapper, drawer_view, resize = drawer.__panel__().objects
+    assert wrapper.objects == [main] and drawer_view is drawer._drawer and resize is drawer._resize
     assert (drawer._drawer.anchor, drawer._drawer.size, drawer._drawer.inline) == ("right", 380, True)
-    assert tab_names(drawer) == ["Chat", "Artifacts", "Approvals"]
+    assert shown(drawer) == "chat" and not drawer._back.visible
+    assert drawer._heading.object == "Assistant"
     drawer.main = None
-    assert drawer.__panel__().objects == [drawer._drawer]
+    assert drawer.__panel__().objects == [drawer._drawer, drawer._resize]
     drawer.variant = "temporary"
     assert drawer._drawer.variant == "temporary" and not drawer._drawer.inline
 
@@ -63,10 +64,14 @@ def test_pending_approval_opens_and_badges():
     request(runner.state)
     assert drawer.open
     assert drawer.toggle.count == 1
-    assert tab_names(drawer)[2] == "Approvals (1)"
+    assert drawer._pending_bar.visible and drawer._pending_text.object == "1 action waits for you"
     assert [c.request.tool_call_id for c in drawer.approvals.cards] == ["t1"]
+    drawer.tab = "approvals"
+    assert shown(drawer) == "approvals" and drawer._back.visible and not drawer._pending_bar.visible
+    assert drawer._heading.object == "Approvals"
+    drawer.tab = "chat"
     runner.state.resolve_approval("t1", approved=True)
-    assert drawer.toggle.count == 0 and tab_names(drawer)[2] == "Approvals"
+    assert drawer.toggle.count == 0 and not drawer._pending_bar.visible
 
 
 def test_open_on_approval_can_be_disabled():
@@ -76,26 +81,30 @@ def test_open_on_approval_can_be_disabled():
     assert not drawer.open and drawer.toggle.count == 1
 
 
-def test_tabs_follow_settings_and_tab_param():
-    drawer = AgentDrawer(Runner(), show_approvals=False)
-    assert tab_names(drawer) == ["Chat", "Artifacts"]
+def test_views_follow_settings_and_tab_param():
+    runner = Runner()
+    drawer = AgentDrawer(runner, show_approvals=False, open_on_approval=False)
+    request(runner.state)
+    assert not drawer._pending_bar.visible
     drawer.tab = "artifacts"
-    assert drawer._tabs.active == 1
-    drawer._tabs.active = 0
-    assert drawer.tab == "chat"
+    assert shown(drawer) == "artifacts" and drawer._heading.object == "Artifacts"
+    drawer._back.clicks += 1
+    assert drawer.tab == "chat" and shown(drawer) == "chat"
     drawer.tab = "artifacts"
     drawer.show_artifacts = False
-    assert tab_names(drawer) == ["Chat"] and drawer.tab == "chat"
+    assert drawer.tab == "chat" and shown(drawer) == "chat"
 
 
-def test_artifacts_tab_selects_artifacts():
+def test_artifacts_view_selects_artifacts():
     runner = Runner()
     applied = []
     drawer = AgentDrawer(runner, on_apply=lambda artifact, version: applied.append(version))
     state = runner.state
     state.apply(ev.ArtifactPublished(artifact_id="a", value="x", kind="text", title="First"))
     state.apply(ev.ArtifactPublished(artifact_id="b", value="y", kind="text"))
-    assert tab_names(drawer)[1] == "Artifacts (2)"
+    assert drawer._artifacts_badge.visible and drawer._artifacts_badge.content == 2
+    drawer._artifacts_button.clicks += 1
+    assert drawer.tab == "artifacts" and not drawer._artifacts_badge.visible
     assert drawer._artifact_select.options == {"First": "a", "b": "b"}
     assert drawer._artifact_select.value == "b"
     drawer._artifact_select.value = "a"
@@ -122,7 +131,7 @@ async def test_submit_and_new_conversation():
     assert runner.cleared == 1
     assert runner.state.items == [] and len(runner.state.artifacts) == 0
     assert drawer.artifacts.store is runner.state.artifacts
-    assert tab_names(drawer)[1] == "Artifacts"
+    assert not drawer._artifacts_badge.visible
     runner.state.apply(ev.ArtifactPublished(artifact_id="c", value="z", kind="text"))
     assert drawer._artifact_select.options == {"c": "c"}
 

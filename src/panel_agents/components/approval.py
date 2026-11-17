@@ -251,32 +251,30 @@ class ApprovalCard(Viewer):
         self._edit_toggle = pmui.Toggle(
             label="Edit", icon="edit", variant="text", size="small", color="primary", margin=(0, 0),
             description="Edit the arguments before approving",
+            visible=bool(self.request.args or (self.request.schema or {}).get("properties")),
         )
         self._edit_toggle.param.watch(lambda e: setattr(self, "editing", e.new), "value")
         self._reason = pmui.TextAreaInput(
-            label="Reason", placeholder="Why approve or deny?", rows=1, auto_grow=True, max_rows=6,
+            label="Reason", placeholder="Optional", rows=1, auto_grow=True, max_rows=6,
             sizing_mode="stretch_width", margin=(8, 4, 4, 4), size="small",
         )
         self._approve = pmui.Button(
-            label="Approve", icon="check", color="success", variant="contained",
+            label="Approve", color="primary", variant="contained", size="small",
             disable_elevation=True, margin=(4, 4), on_click=lambda e: self.approve(),
         )
         self._deny = pmui.Button(
-            label="Deny", icon="block", color="error", variant="outlined",
+            label="Deny", color="error", variant="text", size="small",
             margin=(4, 4), on_click=lambda e: self.deny(),
         )
         self._policy = pmui.Alert(object=self.policy_message, severity="info", variant="outlined", visible=False, sizing_mode="stretch_width", margin=(4, 4))
         self._error = pmui.Alert(object="", severity="error", visible=False, sizing_mode="stretch_width", margin=(4, 4))
+        self._title = _plain_typography(
+            self.request.tool_name, variant="subtitle1", margin=(0, 8, 0, 4),
+            sx={"fontWeight": 600, "fontFamily": "ui-monospace, SFMono-Regular, Menlo, monospace"},
+        )
         # Wraps the edit toggle below the title when the card is narrow, e.g. in a drawer.
         header = pmui.FlexBox(
-            pmui.Row(
-                _plain_typography(
-                    self.request.tool_name, variant="subtitle1", margin=(0, 8, 0, 4),
-                    sx={"fontWeight": 600, "fontFamily": "ui-monospace, SFMono-Regular, Menlo, monospace"},
-                ),
-                pmui.Chip(label="Awaiting approval", color="warning", size="small", variant="outlined", icon="pending", margin=(0, 4)),
-                margin=0, align="center", styles={"align-items": "center"},
-            ),
+            self._title,
             self._edit_toggle,
             flex_wrap="wrap", justify_content="space-between", align_items="center", gap="4px",
             sizing_mode="stretch_width", margin=0,
@@ -372,7 +370,7 @@ class ApprovalCard(Viewer):
         self._policy.param.update(object=self.policy_message, visible=not permitted)
         self._error.param.update(object=_escape_markdown(self.error), visible=bool(self.error))
         hint = {
-            "never": "Optional",
+            "never": "",
             "deny": "Required to deny",
             "edit": "Required to approve with edits" if not edited else "Required for edited approvals",
             "always": "Required",

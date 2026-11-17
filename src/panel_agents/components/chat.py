@@ -97,7 +97,7 @@ class AgentChat(Viewer):
         else:
             self._feed = pmui.ChatInterface(
                 on_submit=self._on_submit, show_rerun=False, show_undo=False, show_clear=False,
-                input_params={"placeholder": self.placeholder}, **feed_params,
+                input_params={"placeholder": self.placeholder, "enable_upload": False}, **feed_params,
             )
         self._rendered: list[Any] = []
         self._views: dict[int, Any] = {}
