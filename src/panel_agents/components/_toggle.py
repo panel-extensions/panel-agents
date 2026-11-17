@@ -50,13 +50,17 @@ export function render({ model, el }) {
 
 _CSS = """
 .pa-toggle {
-  display: inline-flex; align-items: center; gap: 6px; position: relative;
-  padding: 4px 10px; border: 0; border-radius: var(--mui-shape-borderRadius, 4px);
-  background: transparent; color: inherit; cursor: pointer;
-  font: var(--mui-font-button, 500 0.8125rem/1.75 Roboto, sans-serif); text-transform: uppercase;
+  display: inline-flex; align-items: center; gap: 8px; position: relative;
+  padding: 6px 8px 6px 6px; border: 0; border-radius: var(--mui-shape-borderRadius, 4px);
+  background: transparent; color: inherit; cursor: pointer; outline: 0;
+  font: var(--mui-font-button, 500 0.875rem/1.75 Roboto, sans-serif);
+  font-size: 0.8125rem; letter-spacing: 0.02857em; text-transform: none;
+  transition: background-color 250ms cubic-bezier(0.4, 0, 0.2, 1);
 }
-.pa-toggle:hover { background: rgba(127, 127, 127, 0.16); }
-.pa-toggle:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.pa-toggle svg { width: 18px; height: 18px; }
+.pa-toggle:hover { background: var(--mui-palette-action-hover, rgba(0, 0, 0, 0.04)); }
+.pa-toggle[aria-expanded="true"] { background: var(--mui-palette-action-selected, rgba(0, 0, 0, 0.08)); }
+.pa-toggle:focus-visible { background: var(--mui-palette-action-focus, rgba(0, 0, 0, 0.12)); }
 .pa-badge {
   position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 5px;
   box-sizing: border-box; border-radius: 9px; font-size: 0.7rem; line-height: 18px; text-align: center;
