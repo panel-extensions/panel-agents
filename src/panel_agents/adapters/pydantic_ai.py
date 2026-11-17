@@ -23,7 +23,7 @@ from typing import Any
 import param
 from pydantic_ai import CancellationToken, CapabilityEvent, CustomEvent, RunContext
 from pydantic_ai.capabilities import AbstractCapability
-from pydantic_ai.exceptions import RunCancelled
+from pydantic_ai.exceptions import ApprovalRequired, CallDeferred, ModelRetry, RunCancelled, ToolFailed
 from pydantic_ai.messages import (
     DeferredToolRequestsEvent,
     FunctionToolResultEvent,
@@ -45,16 +45,18 @@ from pydantic_ai.tools import (
     ToolDefinition,
     ToolDenied,
 )
-from pydantic_ai.toolsets import AbstractToolset, ApprovalRequiredToolset
+from pydantic_ai.toolsets import AbstractToolset, ApprovalRequiredToolset, ToolsetTool
 from pydantic_ai.ui import UIEventStream
 from pydantic_core import to_jsonable_python
 
 from .. import events as ev
+from ..actions import Action, ActionRegistry
 from ..policy import ApprovalPolicy
 from ..recording import dump_event
 from ..state import ApprovalRequest, RunState, new_id
 
 __all__ = [
+    "ActionToolset",
     "AgentRunner",
     "ArtifactEvent",
     "PanelEventStream",
@@ -153,6 +155,61 @@ def _with_defaults(args: dict[str, Any], schema: dict[str, Any] | None) -> dict[
     # Edited arguments are checked as the tool will see them, with omitted defaults filled in.
     properties = (schema or {}).get("properties", {})
     return {**{k: p["default"] for k, p in properties.items() if isinstance(p, dict) and "default" in p}, **args}
+
+
+@dataclass
+class _ActionArgsValidator:
+
+    action: Action
+
+    def validate_json(self, input: str | bytes | bytearray, *, allow_partial: Any = False, **kwargs: Any) -> dict[str, Any]:
+        return self.action.validate_json(input)
+
+    def validate_python(self, input: Any, *, allow_partial: Any = False, **kwargs: Any) -> dict[str, Any]:
+        return self.action.validate(input)
+
+
+class ActionToolset(AbstractToolset[Any]):
+    """
+    Exposes the actions of an ``ActionRegistry`` as pydantic-ai tools.
+
+    Each tool has the action's name, description and JSON schema, and
+    runs the action in the registry's Panel session. Actions registered
+    or removed during a session are picked up on the next model request.
+    An exception raised by an action is reported to the model as a
+    failed tool call instead of ending the run.
+    """
+
+    def __init__(self, registry: ActionRegistry, *, id: str | None = None, max_retries: int = 1):
+        self.registry = registry
+        self.max_retries = max_retries
+        self._id = id
+
+    @property
+    def id(self) -> str | None:
+        return self._id
+
+    async def get_tools(self, ctx: RunContext[Any]) -> dict[str, ToolsetTool[Any]]:
+        return {
+            action.name: ToolsetTool(
+                toolset=self,
+                tool_def=ToolDefinition(name=action.name, description=action.description, parameters_json_schema=action.parameters),
+                max_retries=self.max_retries,
+                args_validator=_ActionArgsValidator(action),
+            )
+            for action in self.registry
+        }
+
+    async def call_tool(self, name: str, tool_args: dict[str, Any], ctx: RunContext[Any], tool: ToolsetTool[Any]) -> Any:
+        action = self.registry.actions.get(name)
+        if action is None:
+            raise ToolFailed(f"The action {name!r} is no longer available.")
+        try:
+            return await self.registry._invoke_validated(action, tool_args)
+        except (ApprovalRequired, CallDeferred, ModelRetry, ToolFailed):
+            raise
+        except Exception as e:
+            raise ToolFailed(f"{type(e).__name__}: {e}") from e
 
 
 def _response_cost(response: ModelResponse) -> float | None:
