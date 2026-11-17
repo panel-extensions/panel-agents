@@ -106,7 +106,10 @@ class AnalystDeps:
     state: RunState
 
 
-agent = Agent(MODEL, deps_type=AnalystDeps, instructions=INSTRUCTIONS, name="Analyst")
+agent = Agent(MODEL, deps_type=AnalystDeps, instructions=INSTRUCTIONS, name="Analyst",
+    # Without a limit the provider reserves the model's maximum reply against the account's credit.
+    model_settings={"max_tokens": 4096},
+)
 
 
 def cursor(ctx: RunContext[AnalystDeps]) -> duckdb.DuckDBPyConnection:

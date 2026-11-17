@@ -109,3 +109,30 @@ async def test_cancelled_run_is_not_logged_as_an_error(caplog):
     assert [e.code for e in runner.state.events if isinstance(e, ev.RunError)] == ["cancelled"]
     assert _errors(runner.state) == []
     assert caplog.records == []
+
+
+async def test_a_providers_refusal_shows_its_own_message():
+    from pydantic_ai.exceptions import ModelHTTPError
+
+    async def stream(messages, info):
+        raise ModelHTTPError(402, "some/model", {
+            "message": "You requested up to 65536 tokens, but can only afford 5385. "
+            "To increase, visit https://openrouter.ai/settings/credits?session=abc and upgrade",
+            "code": 402,
+        })
+        yield ""
+
+    runner = AgentRunner(Agent(FunctionModel(stream_function=stream)), RunState(flush_interval=0))
+    await runner.run("Hi")
+    assert _errors(runner.state) == [(
+        "The model provider refused the request (402): You requested up to 65536 tokens, but can only "
+        "afford 5385. To increase, visit https://openrouter.ai/settings/credits and upgrade",
+        runner.run_id,
+    )]
+
+
+def test_long_error_messages_are_cut():
+    from panel_agents.adapters.pydantic_ai import _error_message
+
+    message = _error_message(RuntimeError("x" * 1000))
+    assert len(message) == 300 and message.endswith("…")

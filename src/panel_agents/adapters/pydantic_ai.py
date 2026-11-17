@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -24,7 +25,7 @@ from typing import Any
 import param
 from pydantic_ai import CancellationToken, CapabilityEvent, CustomEvent, RunContext
 from pydantic_ai.capabilities import AbstractCapability
-from pydantic_ai.exceptions import ApprovalRequired, CallDeferred, ModelRetry, RunCancelled, ToolFailed
+from pydantic_ai.exceptions import ApprovalRequired, CallDeferred, ModelAPIError, ModelRetry, RunCancelled, ToolFailed
 from pydantic_ai.messages import (
     DeferredToolRequestsEvent,
     FunctionToolResultEvent,
@@ -146,6 +147,25 @@ class _RecordingApprovalToolset(ApprovalRequiredToolset[Any]):
     async def call_tool(self, name: str, tool_args: dict[str, Any], ctx: RunContext[Any], tool: Any) -> Any:
         self.runner._validators[name] = tool.args_validator
         return await super().call_tool(name, tool_args, ctx, tool)
+
+
+_URL_TAIL = re.compile(r"(https?://[^\s?#]+)[?#]\S*")
+
+
+def _error_message(error: BaseException, limit: int = 300) -> str:
+    """A short message for a failed run: a provider's refusal is reduced to its own message and status."""
+    text = str(error) or type(error).__name__
+    if isinstance(error, ModelAPIError):
+        body = error.body
+        if isinstance(body, dict) and isinstance(body.get("error"), dict):
+            body = body["error"]
+        message = body.get("message") if isinstance(body, dict) else None
+        status = getattr(error, "status_code", None)
+        text = "The model provider refused the request" + (f" ({status})" if status else "")
+        if isinstance(message, str) and message.strip():
+            text += f": {message.strip()}"
+    text = _URL_TAIL.sub(r"\1", " ".join(text.split()))
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def _shorten(text: str, limit: int = 80) -> str:
@@ -314,7 +334,7 @@ class _PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
     async def on_error(self, error: Exception) -> AsyncIterator[ev.Event]:
         self.error = error
         code = "cancelled" if isinstance(error, RunCancelled) else type(error).__name__
-        yield ev.RunError(run_id=self.run_id, message=str(error) or type(error).__name__, code=code)
+        yield ev.RunError(run_id=self.run_id, message=_error_message(error), code=code)
 
     async def before_response(self) -> AsyncIterator[ev.Event]:
         self._response_text_id = None
@@ -586,7 +606,7 @@ class AgentRunner(param.Parameterized):
         except Exception as e:
             # Errors raised outside the event stream, e.g. invalid run arguments.
             stream.error = e
-            self._close(stream, ev.RunError(run_id=run_id, message=str(e) or type(e).__name__, code=type(e).__name__))
+            self._close(stream, ev.RunError(run_id=run_id, message=_error_message(e), code=type(e).__name__))
         finally:
             self._token = None
             self._early.clear()
