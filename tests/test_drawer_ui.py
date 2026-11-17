@@ -75,3 +75,16 @@ def test_opening_the_drawer_tells_the_page_to_relayout(page):
     page.evaluate("window._resizes = 0; window.addEventListener('resize', () => window._resizes++)")
     page.get_by_role("button", name="Assistant", exact=True).click()
     wait_until(lambda: page.evaluate("window._resizes") > 0, page)
+
+
+def test_a_narrow_window_overlays_the_drawer(page):
+    page.set_viewport_size({"width": 900, "height": 600})
+    main = pmui.Paper(pmui.Typography("main"), sizing_mode="stretch_both")
+    drawer = AgentDrawer(state=RunState(), main=main, overlay_below=1200, width=360)
+    serve_component(page, pmui.Column(pmui.Row(drawer.toggle), drawer, height=500, sizing_mode="stretch_width"))
+    wait_until(lambda: drawer._drawer.variant == "temporary", page)
+    page.get_by_role("button", name="Assistant", exact=True).click()
+    wait_until(lambda: drawer.open, page)
+    # Overlaid, the app keeps its whole width.
+    paper = page.locator(".MuiPaper-root").first
+    wait_until(lambda: paper.bounding_box()["width"] > 850, page)

@@ -8,13 +8,13 @@ This page lists the public API of panel-agents 1.x. Every name below is covered 
 
 | Name | Purpose |
 | --- | --- |
-| `AgentChat(state=None, *, runner, callback, readonly, add_user_message, approval_factory, can_approve, user, assistant, placeholder, feed_params)` | Chat feed of a `RunState` with streaming messages, thinking steps and tool-call cards. `submit(text)` sends text as the user would. |
-| `AgentDrawer(runner=None, *, state, main, open, width, title, variant, tab, show_artifacts, show_approvals, open_on_approval, can_approve, on_apply, chat_params)` | A right-hand drawer with the chat, artifacts and approvals, docked beside `main`. `toggle` (with `aria-expanded` and the pending count in its accessible name), `content`, `chat`, `artifacts`, `approvals`, `new_conversation()`. |
+| `AgentChat(state=None, *, runner, callback, readonly, add_user_message, approval_factory, can_approve, user, assistant, placeholder, tool_labels, group_tool_calls, feed_params)` | Chat feed of a `RunState` with streaming messages, thinking steps and tool-call cards; `tool_labels` names calls in the user's words and `group_tool_calls` folds runs of finished calls into one row. `submit(text)` sends text as the user would. |
+| `AgentDrawer(runner=None, *, state, main, open, width, title, variant, overlay_below, tab, show_artifacts, show_approvals, open_on_approval, can_approve, on_apply, chat_params)` | A right-hand drawer with the chat, artifacts and approvals, docked beside `main`. `toggle` (with `aria-expanded` and the pending count in its accessible name), `content`, `chat`, `artifacts`, `approvals`, `new_conversation()`. |
 | `ApprovalCard(request=None, state=None, *, can_approve, policy_message, require_reason, user, editing)` | Review card for one tool call: edit arguments, approve or deny. `approve()`, `deny()`, `form`, `permitted`, `is_edited`. |
 | `ApprovalQueue(state, *, can_approve, require_reason, user, show_resolved, title, card_factory)` | The pending approvals of a state as cards. `approve_all()`, `deny_all()`, `cards`. |
 | `ArtifactPane(store=None, *, state, on_apply, show_list, list_width, empty_message, view_options)` | Lists a store's artifacts and shows the active one. `views`, `active_view`. |
 | `ArtifactView(artifact, *, mode, base, target, diff_layout, diff_options, show_header, on_apply, state, user)` | One artifact with versions, compare, metadata and apply/revert for documents. `base` and `target` are version numbers. `apply_version(version=None)`, `compute_diff()`. |
-| `ToolCallCard(call, *, state, approval_factory, max_chars, max_items, collapsed)` | Card for one tool call with arguments, status, result and published artifacts. |
+| `ToolCallCard(call, *, state, approval_factory, max_chars, max_items, collapsed, label)` | Card for one tool call with arguments, status, result and published artifacts; `label` (a string or a callable of the arguments) replaces the tool name in the header. |
 | `register_renderer(func=None, *, kind=None, type=None, applies=None, priority=0)` | Register how values of an artifact kind, a type or a predicate are rendered; usable as a decorator. |
 
 ### State and events

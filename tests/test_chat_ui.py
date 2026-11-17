@@ -108,3 +108,24 @@ def test_chat_submit_invokes_callback(page):
     expect(page.locator(".markdown", has_text="You said: hello agent")).to_be_visible()
     expect(page.locator(".markdown", has_text="hello agent").first).to_be_visible()
     assert [item.content for item in state.items] == ["hello agent", "You said: hello agent"]
+
+
+def test_finished_steps_fold_into_a_row_that_expands(page):
+    state = RunState(flush_interval=0)
+    state.apply(ev.RunStarted(run_id="r1"))
+    for call_id, name in (("a", "read_report"), ("b", "list_regions")):
+        state.apply_many([
+            ev.ToolCallStart(tool_call_id=call_id, tool_name=name, run_id="r1", timestamp=100.0),
+            ev.ToolCallEnd(tool_call_id=call_id, run_id="r1"),
+            ev.ToolCallResult(tool_call_id=call_id, content="ok", run_id="r1", timestamp=100.5),
+        ])
+    chat = AgentChat(state, tool_labels={"read_report": "Read the report"})
+    serve_component(page, chat)
+
+    row = page.get_by_role("button", name="2 steps, 1.0s, expand")
+    expect(row).to_be_visible()
+    expect(page.get_by_text("Read the report")).to_be_hidden()
+    row.click()
+    expect(page.get_by_text("Read the report")).to_be_visible()
+    expect(page.get_by_text("list_regions")).to_be_visible()
+    expect(page.get_by_role("button", name="2 steps, 1.0s, collapse")).to_be_visible()
