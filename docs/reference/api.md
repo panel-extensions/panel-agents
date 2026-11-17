@@ -67,6 +67,12 @@ Requires the `pydantic-ai` extra.
 | `publish_artifact(ctx, artifact_id, value, *, title, kind, metadata, applied=False)` | Publish an artifact version from an async tool. |
 | `artifact_return(return_value, artifact_id, value, *, title, kind, metadata, applied=False)` | Return a value to the model and publish an artifact, from any tool. |
 | `ActionToolset(registry, *, id=None, max_retries=1)` | An `ActionRegistry` as a pydantic-ai toolset. |
+| `ModelTraceRecorder(runner, path, *, include_content=True)` | Appends a runner's pydantic-ai message history to a JSON Lines model trace while it runs, with a `failed_run` line for runs that fail. `close()`. |
+| `load_messages(path, *, include_failed=False)` | The messages of a model trace as pydantic-ai `ModelMessage`s; assign them to `AgentRunner.messages` to continue the conversation. |
+| `load_model_calls(path)` | One `ModelCall(run_id, model, timestamp, duration, tool_calls, input_tokens, output_tokens, cached_tokens, cost_usd, error, provider_response_id)` per model request, including failed ones. |
+| `fingerprint(model_request_parameters, messages=())` | A short hash of the instructions, system prompts and function tools offered to the model, stored on every recorded response. |
+
+`AgentRunner` passes its `run_id` to pydantic-ai and stores the request's `duration` and `fingerprint` on each `ModelResponse` under `metadata["panel_agents"]`. These names also live in `panel_agents.adapters.model_trace`, together with its `FORMAT_VERSION`.
 
 ## `panel_agents.mcp`
 
