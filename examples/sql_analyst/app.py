@@ -26,6 +26,7 @@ import panel_material_ui as pmui
 from pydantic_ai import Agent, RunContext
 
 from panel_agents import (
+    ActionRegistry,
     AgentChat,
     ApprovalPolicy,
     ArtifactPane,
@@ -34,7 +35,12 @@ from panel_agents import (
     RunState,
     register_renderer,
 )
-from panel_agents.adapters.pydantic_ai import AgentRunner, artifact_return, publish_artifact
+from panel_agents.adapters.pydantic_ai import (
+    ActionToolset,
+    AgentRunner,
+    artifact_return,
+    publish_artifact,
+)
 
 MODEL = os.environ.get("PANEL_AGENTS_MODEL", "anthropic:claude-sonnet-5-5")
 RUNS = Path(__file__).parent / "runs"
@@ -51,7 +57,8 @@ modify the database (CREATE VIEW, INSERT, UPDATE, ...) must go through
 execute_statement. Never ask for permission in the chat: call
 execute_statement directly and the user approves, edits or rejects the
 call in the interface before it runs. Keep answers concise and
-refer to artifacts by name instead of repeating their contents.
+refer to artifacts by name instead of repeating their contents. Use
+show_artifact to bring an artifact you are talking about into view.
 """
 
 
@@ -208,9 +215,36 @@ async def _ask(chat: AgentChat, question: str, event=None):
     await chat.submit(question)
 
 
+def ui_actions(artifacts: ArtifactPane) -> ActionRegistry:
+    """Things the user can do in the page, offered to the agent as tools."""
+    actions = ActionRegistry()
+
+    @actions.action
+    def show_artifact(name: str, compare: bool = False) -> str:
+        """
+        Show an artifact in the artifact pane.
+
+        Args:
+            name: Name of the artifact, as published.
+            compare: Open the comparison of its last two versions instead of the preview.
+        """
+        store = artifacts.store
+        if name not in store:
+            raise ValueError(f"No artifact named {name!r}; available: {', '.join(a.artifact_id for a in store)}")
+        store.active = name
+        artifacts.active_view.mode = "compare" if compare else "preview"
+        return f"Showing {name}."
+
+    return actions
+
+
 def create_app():
     state = RunState()
-    runner = AgentRunner(agent, state, deps=AnalystDeps(create_database(), state), approval_policy=POLICY)
+    artifacts = ArtifactPane(state.artifacts)
+    runner = AgentRunner(
+        agent, state, deps=AnalystDeps(create_database(), state), approval_policy=POLICY,
+        run_kwargs={"toolsets": [ActionToolset(ui_actions(artifacts))]},
+    )
     RUNS.mkdir(exist_ok=True)
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     recorder = Recorder(state, RUNS / f"session-{stamp}.jsonl")
@@ -223,7 +257,6 @@ def create_app():
     pn.state.on_session_destroyed(cleanup)
 
     chat = AgentChat(runner=runner, assistant="Analyst", placeholder="Ask about customers, orders or products…")
-    artifacts = ArtifactPane(state.artifacts)
     usage = pmui.Typography(usage_text(state), variant="body2", sx={"opacity": 0.8})
     state.param.watch(lambda *_: setattr(usage, "object", usage_text(state)), ["runs", "items"])
 

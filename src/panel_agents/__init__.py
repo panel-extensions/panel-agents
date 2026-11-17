@@ -1,5 +1,6 @@
 from . import events
 from .__version import __version__  # noqa
+from .actions import Action, ActionRegistry
 from .artifacts import Artifact, ArtifactStore, ArtifactVersion
 from .audit import AuditLog
 from .components import (
@@ -22,6 +23,8 @@ from .state import (
 )
 
 __all__ = [
+    "Action",
+    "ActionRegistry",
     "AgentChat",
     "ApprovalCard",
     "ApprovalQueue",
