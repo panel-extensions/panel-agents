@@ -90,6 +90,14 @@ The docstrings of the public modules, generated from the source. The [API overvi
       show_source: false
       heading_level: 3
 
+## Cassettes
+
+::: panel_agents.adapters.cassette
+    options:
+      show_root_heading: false
+      show_source: false
+      heading_level: 3
+
 ## MCP
 
 ::: panel_agents.mcp

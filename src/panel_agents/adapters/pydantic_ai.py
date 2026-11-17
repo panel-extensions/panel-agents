@@ -57,6 +57,7 @@ from .. import events as ev
 from ..actions import Action, ActionRegistry
 from ..policy import ApprovalPolicy
 from ..recording import _dump_event
+from .cassette import Cassette, CassetteError, Divergence
 from .model_trace import (
     _METADATA_KEY,
     ModelCall,
@@ -73,6 +74,9 @@ from ..state import ApprovalRequest, RunState, _new_id
 __all__ = [
     "ActionToolset",
     "AgentRunner",
+    "Cassette",
+    "CassetteError",
+    "Divergence",
     "ModelCall",
     "ModelTraceRecorder",
     "artifact_return",
