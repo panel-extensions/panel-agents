@@ -23,10 +23,11 @@ import numpy as np
 import pandas as pd
 import panel as pn
 import panel_material_ui as pmui
-from pydantic_ai import Agent, ApprovalRequired, RunContext
+from pydantic_ai import Agent, RunContext
 
 from panel_agents import (
     AgentChat,
+    ApprovalPolicy,
     ArtifactPane,
     AuditLog,
     Recorder,
@@ -179,10 +180,11 @@ def execute_statement(ctx: RunContext[AnalystDeps], sql: str, reason: str) -> st
         sql: The statement to execute.
         reason: Why the statement is needed, shown to the user.
     """
-    if not ctx.tool_call_approved:
-        raise ApprovalRequired
     cursor(ctx).execute(sql)
     return "Statement executed."
+
+
+POLICY = ApprovalPolicy(["execute_statement"])
 
 
 @register_renderer(kind="chart")
@@ -208,7 +210,7 @@ async def _ask(chat: AgentChat, question: str, event=None):
 
 def create_app():
     state = RunState()
-    runner = AgentRunner(agent, state, deps=AnalystDeps(create_database(), state))
+    runner = AgentRunner(agent, state, deps=AnalystDeps(create_database(), state), approval_policy=POLICY)
     RUNS.mkdir(exist_ok=True)
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     recorder = Recorder(state, RUNS / f"session-{stamp}.jsonl")

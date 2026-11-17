@@ -45,11 +45,14 @@ from pydantic_ai.tools import (
     ToolDefinition,
     ToolDenied,
 )
+from pydantic_ai.toolsets import AbstractToolset, ApprovalRequiredToolset
 from pydantic_ai.ui import UIEventStream
+from pydantic_core import to_jsonable_python
 
 from .. import events as ev
+from ..policy import ApprovalPolicy
 from ..recording import dump_event
-from ..state import RunState, new_id
+from ..state import ApprovalRequest, RunState, new_id
 
 __all__ = [
     "AgentRunner",
@@ -121,6 +124,23 @@ def artifact_return(
     return ToolReturn(return_value=return_value, metadata={_ARTIFACTS_KEY: [artifact]})
 
 
+@dataclass
+class _RecordingApprovalToolset(ApprovalRequiredToolset[Any]):
+    """Applies the approval policy and keeps each tool's validator, to check edited arguments with it."""
+
+    runner: Any = None
+
+    async def call_tool(self, name: str, tool_args: dict[str, Any], ctx: RunContext[Any], tool: Any) -> Any:
+        self.runner._validators[name] = tool.args_validator
+        return await super().call_tool(name, tool_args, ctx, tool)
+
+
+def _with_defaults(args: dict[str, Any], schema: dict[str, Any] | None) -> dict[str, Any]:
+    # Edited arguments are checked as the tool will see them, with omitted defaults filled in.
+    properties = (schema or {}).get("properties", {})
+    return {**{k: p["default"] for k, p in properties.items() if isinstance(p, dict) and "default" in p}, **args}
+
+
 def _response_cost(response: ModelResponse) -> float | None:
     # Recent pydantic-ai versions price the usage already; older ones only offer the genai-prices lookup.
     if (cost := getattr(response.usage, "cost", None)) is not None:
@@ -141,6 +161,19 @@ class _RunCapability(AbstractCapability[Any]):
         self.runner._tool_defs.update({td.name: td for td in tool_defs})
         return tool_defs
 
+    def get_wrapper_toolset(self, toolset: AbstractToolset[Any]) -> AbstractToolset[Any] | None:
+        runner = self.runner
+
+        def needs_approval(ctx: RunContext[Any], tool_def: ToolDefinition, args: dict[str, Any]) -> bool:
+            # The validated arguments, defaults included, are what approvals are shown and checked against.
+            validated = to_jsonable_python(args, fallback=str)
+            if ctx.tool_call_id:
+                runner._validated[ctx.tool_call_id] = validated
+            policy = runner.approval_policy
+            return policy is not None and policy.requires_approval(tool_def.name, validated)
+
+        return _RecordingApprovalToolset(toolset, needs_approval, runner=runner)
+
     async def after_model_request(self, ctx: RunContext[Any], *, request_context: Any, response: ModelResponse) -> ModelResponse:
         usage = response.usage
         await ctx.emit(UsageEvent(
@@ -153,14 +186,22 @@ class _RunCapability(AbstractCapability[Any]):
         # External calls (CallDeferred) are left unresolved so the run ends with them as its output.
         if not requests.approvals:
             return None
-        decisions = await asyncio.gather(*(self.runner._wait_for_decision(call.tool_call_id) for call in requests.approvals))
+        runner = self.runner
+        decisions = await asyncio.gather(*(runner._wait_for_decision(call.tool_call_id) for call in requests.approvals))
         approvals: dict[str, ToolApproved | ToolDenied] = {}
         for call, decision in zip(requests.approvals, decisions, strict=True):
-            if decision.approved:
-                edited = decision.args is not None and decision.args != call.args_as_dict()
-                approvals[call.tool_call_id] = ToolApproved(override_args=decision.args if edited else None)
-            else:
+            if not decision.approved:
                 approvals[call.tool_call_id] = ToolDenied(decision.reason or DENIED_MESSAGE)
+                continue
+            proposed = runner._validated.get(call.tool_call_id, call.args_as_dict())
+            # The state only accepts permitted decisions; this guards against a policy changed in between.
+            request = runner.state.approvals.get(call.tool_call_id)
+            if request is not None and (message := runner._refusal(request, decision.user, decision.args, True)):
+                runner.state.apply(ev.ToolCallResult(tool_call_id=call.tool_call_id, content=message, is_error=True, run_id=runner.run_id))
+                approvals[call.tool_call_id] = ToolDenied(message)
+                continue
+            edited = decision.args is not None and decision.args != proposed
+            approvals[call.tool_call_id] = ToolApproved(override_args=decision.args if edited else None)
         return DeferredToolResults(approvals=approvals)
 
 
@@ -173,6 +214,7 @@ class PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
     agent_name: str | None = None
     input: Any = None
     tool_defs: dict[str, ToolDefinition] = field(default_factory=dict)
+    validated_args: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     error: Exception | None = None
     _text_id: str | None = None
@@ -259,7 +301,8 @@ class PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
         for call in event.requests.approvals:
             tool_def = self.tool_defs.get(call.tool_name)
             yield ev.ApprovalRequested(
-                tool_call_id=call.tool_call_id, tool_name=call.tool_name, args=call.args_as_dict(),
+                tool_call_id=call.tool_call_id, tool_name=call.tool_name,
+                args=self.validated_args.get(call.tool_call_id, call.args_as_dict()),
                 schema=tool_def.parameters_json_schema if tool_def else None,
                 description=tool_def.description if tool_def else None,
             )
@@ -334,6 +377,10 @@ class AgentRunner(param.Parameterized):
 
     run_kwargs = param.Dict(default={}, doc="Extra keyword arguments passed to ``Agent.run_stream_events``.")
 
+    approval_policy = param.ClassSelector(class_=ApprovalPolicy, default=None, allow_None=True, doc="""
+        Rules deciding which tool calls need approval and who may give
+        it. Applies to every tool the agent can call during a run.""")
+
     running = param.Boolean(default=False, constant=True)
 
     run_id = param.String(default=None, allow_None=True, constant=True, doc="Id of the current or last run.")
@@ -349,19 +396,52 @@ class AgentRunner(param.Parameterized):
         params["deps"] = deps
         super().__init__(**params)
         self._tool_defs: dict[str, ToolDefinition] = {}
+        self._validated: dict[str, dict[str, Any]] = {}
+        self._validators: dict[str, Any] = {}
         self._waiters: dict[str, asyncio.Future[ev.ApprovalResolved]] = {}
         self._early: dict[str, ev.ApprovalResolved] = {}
         self._token: CancellationToken | None = None
         self._unsubscribe = self.state.subscribe(self._on_event)
+        self.state._decision_check = self._refusal
+
+    def _validate_args(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
+        """
+        Validate ``args`` for ``tool_name`` the way the tool will, returning
+        them as JSON-compatible values with every default filled in.
+        """
+        validator = self._validators.get(tool_name)
+        if validator is None:
+            tool_def = self._tool_defs.get(tool_name)
+            return _with_defaults(args, tool_def.parameters_json_schema if tool_def else None)
+        return to_jsonable_python(validator.validate_python(dict(args)), fallback=str)
+
+    def _refusal(self, request: ApprovalRequest, user: str | None, args: dict[str, Any] | None, approved: bool) -> str | None:
+        policy = self.approval_policy
+        if policy is None:
+            return None
+        who = user or "This user"
+        if not approved:
+            return None if policy.can_approve(request, user) else f"{who} may not decide this {request.tool_name} call."
+        final = None
+        if args is not None:
+            try:
+                final = self._validate_args(request.tool_name, args)
+            except Exception as e:
+                return f"Invalid arguments for {request.tool_name}: {e}"
+        return None if policy.can_decide(request, user, final) else f"{who} may not approve this {request.tool_name} call."
 
     def _on_event(self, event: ev.Event):
         if not isinstance(event, ev.ApprovalResolved):
+            return
+        # Only the decision the state accepted counts.
+        request = self.state.approvals.get(event.tool_call_id)
+        if request is None or getattr(request, "_decision", None) is not event:
             return
         future = self._waiters.get(event.tool_call_id)
         if future is None:
             # The run may not have reached its approval handler yet.
             if self.running and event.run_id == self.run_id:
-                self._early[event.tool_call_id] = event
+                self._early.setdefault(event.tool_call_id, event)
         elif not future.done():
             future.set_result(event)
 
@@ -392,7 +472,7 @@ class AgentRunner(param.Parameterized):
         self._token = CancellationToken()
         stream = PanelEventStream(
             run_id=run_id, thread_id=self.thread_id, agent_name=self.agent.name,
-            input=prompt, tool_defs=self._tool_defs,
+            input=prompt, tool_defs=self._tool_defs, validated_args=self._validated,
         )
         run_kwargs = {**self.run_kwargs, **kwargs}
         capabilities = [*run_kwargs.pop("capabilities", []), _RunCapability(runner=self)]

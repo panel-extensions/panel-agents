@@ -11,6 +11,7 @@ from .components import (
     ToolCallCard,
     register_renderer,
 )
+from .policy import ApprovalPolicy, ApprovalRule
 from .recording import Recorder, dump_events, load_events, load_state
 from .state import (
     ApprovalRequest,
@@ -29,7 +30,9 @@ __all__ = [
     "AuditLog",
     "ToolCallCard",
     "register_renderer",
+    "ApprovalPolicy",
     "ApprovalRequest",
+    "ApprovalRule",
     "Artifact",
     "ArtifactStore",
     "ArtifactVersion",

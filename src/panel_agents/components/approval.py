@@ -308,7 +308,25 @@ class ApprovalCard(Viewer):
 
     @property
     def permitted(self) -> bool:
-        return self.can_approve is None or bool(self.can_approve(self.request, self.current_user))
+        return self._allows(self.request.args)
+
+    def _allows(self, args: dict[str, Any]) -> bool:
+        request = self.request
+        check = getattr(self.state, "_decision_check", None)
+        if args is not request.args and check is not None and check(request, self.current_user, args, True):
+            # The runner validates edits with the tool's own validator before the policy sees them.
+            return False
+        if self.can_approve is None:
+            return True
+        if args is not request.args:
+            request = ApprovalRequest(
+                tool_call_id=request.tool_call_id, tool_name=request.tool_name, args=dict(args),
+                schema=request.schema, description=request.description, run_id=request.run_id,
+            )
+        try:
+            return bool(self.can_approve(request, self.current_user))
+        except Exception:
+            return False
 
     @property
     def is_edited(self) -> bool:
@@ -377,6 +395,8 @@ class ApprovalCard(Viewer):
         self._reason.error_state = False
         if approved and self.editing and self._form is not None and self._form.validate():
             return "Fix the highlighted arguments before approving."
+        if approved and self.is_edited and not self._allows(self.edited_args):
+            return "You are not permitted to approve the call with these arguments."
         return None
 
     def approve(self) -> bool:
@@ -395,10 +415,14 @@ class ApprovalCard(Viewer):
         args = None
         if approved:
             args = copy.deepcopy(self.edited_args if self.is_edited else self.request.args)
-        self.state.resolve_approval(
-            self.request.tool_call_id, approved, args=args,
-            reason=self._reason_text() or None, user=self.current_user,
-        )
+        try:
+            self.state.resolve_approval(
+                self.request.tool_call_id, approved, args=args,
+                reason=self._reason_text() or None, user=self.current_user,
+            )
+        except (PermissionError, ValueError) as e:
+            self.error = str(e)
+            return False
         return True
 
     def _on_status(self, *events):
