@@ -16,11 +16,12 @@ import param
 from panel.viewable import Viewer
 
 from ..artifacts.model import infer_kind
+from ..security import _escape_markdown
 from ..state import ApprovalRequest, RunState, ToolCallState
 from .renderers import render
 
 # ChatStep only knows four statuses; the extra ones are conveyed by a badge.
-STEP_STATUS = {
+_STEP_STATUS = {
     "pending": "pending",
     "awaiting_approval": "pending",
     "running": "running",
@@ -29,15 +30,15 @@ STEP_STATUS = {
     "denied": "failed",
 }
 
-STATUS_BADGES = {
+_STATUS_BADGES = {
     "awaiting_approval": ("Needs approval", "warning"),
     "failed": ("Failed", "error"),
     "denied": ("Denied", "error"),
 }
 
-EXPAND_ON = ("failed", "awaiting_approval")
+_EXPAND_ON = ("failed", "awaiting_approval")
 
-ARTIFACT_ICONS = {
+_ARTIFACT_ICONS = {
     "table": "table_chart",
     "sql": "code",
     "code": "code",
@@ -47,7 +48,7 @@ ARTIFACT_ICONS = {
     "plot": "insert_chart",
 }
 
-HEADER_CSS = """
+_HEADER_CSS = """
 :host { width: 100%; min-width: 0; }
 .tc-head {
   display: flex; align-items: center; gap: 0.6em; min-width: 0;
@@ -81,7 +82,7 @@ HEADER_CSS = """
 }
 """
 
-CODE_CSS = """
+_CODE_CSS = """
 :host { width: 100%; }
 .tc-arg { margin-bottom: 0.5em; }
 .tc-key {
@@ -95,7 +96,7 @@ pre {
 }
 """
 
-LABEL_CSS = """
+_LABEL_CSS = """
 :host { width: 100%; }
 .tc-label {
   font-size: 0.68rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
@@ -105,7 +106,7 @@ LABEL_CSS = """
 """
 
 
-def format_duration(seconds: float | None) -> str:
+def _format_duration(seconds: float | None) -> str:
     if seconds is None:
         return ""
     if seconds < 1:
@@ -125,13 +126,13 @@ def _preview_value(value: Any) -> str:
         return repr(value)
 
 
-def args_preview(args: dict[str, Any], max_length: int = 120) -> str:
+def _args_preview(args: dict[str, Any], max_length: int = 120) -> str:
     """One-line ``key=value`` summary of tool call arguments."""
     text = ", ".join(f"{key}={_preview_value(value)}" for key, value in args.items())
     return text if len(text) <= max_length else text[: max_length - 1] + "…"
 
 
-def format_args(args: dict[str, Any], args_text: str = "") -> str:
+def _format_args(args: dict[str, Any], args_text: str = "") -> str:
     """HTML listing each argument, with strings shown verbatim so code stays readable."""
     if not args:
         return f"<pre>{escape(args_text)}</pre>" if args_text else ""
@@ -142,7 +143,7 @@ def format_args(args: dict[str, Any], args_text: str = "") -> str:
     return "".join(blocks)
 
 
-def truncate(value: Any, max_chars: int = 20_000, max_items: int = 1_000) -> tuple[Any, str | None]:
+def _truncate(value: Any, max_chars: int = 20_000, max_items: int = 1_000) -> tuple[Any, str | None]:
     """Shorten large values, returning the value to display and a hint describing what was cut."""
     if isinstance(value, str):
         if len(value) > max_chars:
@@ -200,10 +201,10 @@ class ToolCallCard(Viewer):
         if call is not None:
             params["call"] = call
         super().__init__(**params)
-        self._header = pn.pane.HTML(sizing_mode="stretch_width", margin=0, stylesheets=[HEADER_CSS])
-        self._args = pn.pane.HTML(margin=(2, 0), sizing_mode="stretch_width", stylesheets=[CODE_CSS], css_classes=["tc-args"])
+        self._header = pn.pane.HTML(sizing_mode="stretch_width", margin=0, stylesheets=[_HEADER_CSS])
+        self._args = pn.pane.HTML(margin=(2, 0), sizing_mode="stretch_width", stylesheets=[_CODE_CSS], css_classes=["tc-args"])
         self._result = pn.Column(sizing_mode="stretch_width", margin=0)
-        self._hint = pn.pane.HTML(margin=0, stylesheets=[LABEL_CSS])
+        self._hint = pn.pane.HTML(margin=0, stylesheets=[_LABEL_CSS])
         # Visibility is toggled on layouts only: Panel's HTML view errors if hidden before it renders.
         self._args_section = pn.Column(
             self._label("Arguments"), self._args, sizing_mode="stretch_width", margin=0, visible=False,
@@ -216,7 +217,7 @@ class ToolCallCard(Viewer):
         self._artifacts = pmui.Row(sizing_mode="stretch_width", margin=(5, 0), visible=False)
         self._step = pmui.ChatStep(
             self._approval, self._args_section, self._result_section, self._error, self._artifacts,
-            status=STEP_STATUS[self.call.status], collapsed=self.collapsed, collapsed_on_success=False,
+            status=_STEP_STATUS[self.call.status], collapsed=self.collapsed, collapsed_on_success=False,
             sizing_mode="stretch_width", margin=(4, 0), css_classes=["tool-call-card"],
         )
         self._step.header.objects = [self._header]
@@ -239,7 +240,7 @@ class ToolCallCard(Viewer):
         self._update_args()
         self._update_result()
         self._watch_approval()
-        if self.call.status in EXPAND_ON:
+        if self.call.status in _EXPAND_ON:
             self.collapsed = False
 
     def __panel__(self):
@@ -247,7 +248,7 @@ class ToolCallCard(Viewer):
 
     @staticmethod
     def _label(text: str) -> pn.pane.HTML:
-        return pn.pane.HTML(f'<div class="tc-label">{text}</div>', margin=0, stylesheets=[LABEL_CSS])
+        return pn.pane.HTML(f'<div class="tc-label">{text}</div>', margin=0, stylesheets=[_LABEL_CSS])
 
     @param.depends("collapsed", watch=True)
     def _sync_collapsed(self):
@@ -260,29 +261,29 @@ class ToolCallCard(Viewer):
     def _update_header(self, *_):
         call = self.call
         parts = [f'<span class="tc-name">{escape(call.tool_name)}</span>']
-        preview = args_preview(call.args)
+        preview = _args_preview(call.args)
         parts.append(f'<span class="tc-preview" title="{escape(preview)}">{escape(preview)}</span>')
         meta = []
-        if badge := STATUS_BADGES.get(call.status):
+        if badge := _STATUS_BADGES.get(call.status):
             label, kind = badge
             meta.append(f'<span class="tc-badge {kind}">{label}</span>')
         elif call.approval is not None and call.approval.status == "approved" and call.approval.edited:
             meta.append('<span class="tc-badge warning">Edited</span>')
         if call.duration is not None:
-            meta.append(f'<span class="tc-duration">{format_duration(call.duration)}</span>')
+            meta.append(f'<span class="tc-duration">{_format_duration(call.duration)}</span>')
         parts.append(f'<span class="tc-meta">{"".join(meta)}</span>')
         self._header.object = f'<div class="tc-head">{"".join(parts)}</div>'
 
     def _update_args(self, *_):
-        html = format_args(self.call.args, self.call.args_text)
+        html = _format_args(self.call.args, self.call.args_text)
         if html:
             self._args.object = html
         self._args_section.visible = bool(html)
 
     def _update_status(self, *_):
         status = self.call.status
-        self._step.status = STEP_STATUS[status]
-        if status in EXPAND_ON:
+        self._step.status = _STEP_STATUS[status]
+        if status in _EXPAND_ON:
             self.collapsed = False
 
     def _update_result(self, *_):
@@ -291,7 +292,7 @@ class ToolCallCard(Viewer):
             denied = call.status == "denied"
             message = call.error or ("The call was denied." if denied else "The call failed.")
             self._error.param.update(
-                object=message, visible=True, severity="warning" if denied else "error",
+                object=_escape_markdown(message), visible=True, severity="warning" if denied else "error",
                 title="Denied" if denied else "Error",
             )
             self._show_result(None)
@@ -307,7 +308,7 @@ class ToolCallCard(Viewer):
             self._result.objects = []
             self._result_section.visible = False
             return
-        value, hint = truncate(result, self.max_chars, self.max_items)
+        value, hint = _truncate(result, self.max_chars, self.max_items)
         self._result.objects = [render(value, kind="dataframe" if infer_kind(value) == "table" else None)]
         self._hint.object = f'<div class="tc-hint">{escape(hint)}</div>' if hint else ""
         self._result_section.visible = True
@@ -333,7 +334,7 @@ class ToolCallCard(Viewer):
             widget = self.approval_factory(request, self.state)
         else:
             widget = pmui.Alert(
-                object=request.description or "Waiting for a decision before this tool runs.",
+                object=_escape_markdown(request.description or "Waiting for a decision before this tool runs."),
                 title="Approval required", severity="warning", variant="outlined",
                 sizing_mode="stretch_width", margin=(5, 0),
             )
@@ -368,7 +369,7 @@ class ToolCallCard(Viewer):
             chip = self._chips.get(artifact.artifact_id)
             if chip is None:
                 chip = pmui.Chip(
-                    label=label, icon=ARTIFACT_ICONS.get(artifact.kind, "description"),
+                    label=label, icon=_ARTIFACT_ICONS.get(artifact.kind, "description"),
                     size="small", variant="outlined", color="primary", margin=(0, 5, 0, 0),
                 )
                 chip.on_click(lambda _, aid=artifact.artifact_id: self._activate(aid))
@@ -382,6 +383,6 @@ class ToolCallCard(Viewer):
         self.state.artifacts.active = artifact_id
 
 
-ApprovalFactory = Callable[[ApprovalRequest, RunState], Any]
+_ApprovalFactory = Callable[[ApprovalRequest, RunState], Any]
 
-__all__ = ["ApprovalFactory", "ToolCallCard", "args_preview", "format_duration", "truncate"]
+__all__ = ["ToolCallCard"]

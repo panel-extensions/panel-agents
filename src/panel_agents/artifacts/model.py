@@ -161,3 +161,11 @@ class ArtifactStore(param.Parameterized):
         with param.edit_constant(artifact):
             artifact.applied = version
         self.param.trigger("artifacts")
+
+
+__all__ = [
+    "Artifact",
+    "ArtifactStore",
+    "ArtifactVersion",
+    "infer_kind",
+]

@@ -1,7 +1,7 @@
 """
 Drive a pydantic-ai agent and translate its run into panel-agents events.
 
-``AgentRunner`` streams a run through ``PanelEventStream``, a
+``AgentRunner`` streams a run through ``_PanelEventStream``, a
 ``pydantic_ai.ui.UIEventStream`` subclass, and applies every resulting
 event to a ``RunState``. A run-scoped capability reports per-response
 usage and resolves tool approvals inline, so a run that pauses for a
@@ -52,25 +52,23 @@ from pydantic_core import to_jsonable_python
 from .. import events as ev
 from ..actions import Action, ActionRegistry
 from ..policy import ApprovalPolicy
-from ..recording import dump_event
-from ..state import ApprovalRequest, RunState, new_id
+from ..recording import _dump_event
+from ..state import ApprovalRequest, RunState, _new_id
 
 __all__ = [
     "ActionToolset",
     "AgentRunner",
-    "ArtifactEvent",
-    "PanelEventStream",
     "artifact_return",
     "publish_artifact",
 ]
 
 _ARTIFACTS_KEY = "panel_agents.artifacts"
 
-DENIED_MESSAGE = "The user denied this tool call."
+_DENIED_MESSAGE = "The user denied this tool call."
 
 
 @dataclass(kw_only=True)
-class ArtifactEvent(CustomEvent, name="panel_agents.artifact"):
+class _ArtifactEvent(CustomEvent, name="panel_agents.artifact"):
     """Publishes a version of an artifact; emitted from tools via ``publish_artifact``."""
 
     artifact_id: str
@@ -82,7 +80,7 @@ class ArtifactEvent(CustomEvent, name="panel_agents.artifact"):
 
 
 @dataclass(kw_only=True)
-class UsageEvent(CapabilityEvent, namespace="panel_agents"):
+class _UsageEvent(CapabilityEvent, namespace="panel_agents"):
     model: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
@@ -108,7 +106,7 @@ async def publish_artifact(
     ``applied=True`` when the tool edited a host document in place and
     ``value`` is what the document now holds.
     """
-    await ctx.emit(ArtifactEvent(
+    await ctx.emit(_ArtifactEvent(
         artifact_id=artifact_id, value=value, title=title, kind=kind, metadata=metadata or {}, applied=applied,
     ))
 
@@ -130,7 +128,7 @@ def artifact_return(
     return's metadata, which pydantic-ai never sends to the model. See
     ``publish_artifact`` for ``applied``.
     """
-    artifact = ArtifactEvent(
+    artifact = _ArtifactEvent(
         artifact_id=artifact_id, value=value, title=title, kind=kind, metadata=metadata or {}, applied=applied,
     )
     return ToolReturn(return_value=return_value, metadata={_ARTIFACTS_KEY: [artifact]})
@@ -247,7 +245,7 @@ class _RunCapability(AbstractCapability[Any]):
 
     async def after_model_request(self, ctx: RunContext[Any], *, request_context: Any, response: ModelResponse) -> ModelResponse:
         usage = response.usage
-        await ctx.emit(UsageEvent(
+        await ctx.emit(_UsageEvent(
             model=response.model_name, input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
             cached_tokens=usage.cache_read_tokens, cost_usd=_response_cost(response),
         ))
@@ -262,7 +260,7 @@ class _RunCapability(AbstractCapability[Any]):
         approvals: dict[str, ToolApproved | ToolDenied] = {}
         for call, decision in zip(requests.approvals, decisions, strict=True):
             if not decision.approved:
-                approvals[call.tool_call_id] = ToolDenied(decision.reason or DENIED_MESSAGE)
+                approvals[call.tool_call_id] = ToolDenied(decision.reason or _DENIED_MESSAGE)
                 continue
             proposed = runner._validated.get(call.tool_call_id, call.args_as_dict())
             # The state only accepts permitted decisions; this guards against a policy changed in between.
@@ -277,10 +275,10 @@ class _RunCapability(AbstractCapability[Any]):
 
 
 @dataclass
-class PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
+class _PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
     """Translates pydantic-ai stream events into panel-agents events."""
 
-    run_id: str = field(default_factory=lambda: new_id("run-"))
+    run_id: str = field(default_factory=lambda: _new_id("run-"))
     thread_id: str | None = None
     agent_name: str | None = None
     input: Any = None
@@ -293,7 +291,7 @@ class PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
     _response_text_id: str | None = None
 
     def encode_event(self, event: ev.Event) -> str:
-        return f"data: {dump_event(event)}\n\n"
+        return f"data: {_dump_event(event)}\n\n"
 
     def _stamp(self, event: ev.Event) -> ev.Event:
         event.run_id = self.run_id
@@ -322,7 +320,7 @@ class PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
 
     async def handle_text_start(self, part: TextPart, follows_text: bool = False) -> AsyncIterator[ev.Event]:
         if not follows_text or self._text_id is None:
-            self._text_id = self._response_text_id = new_id("msg-")
+            self._text_id = self._response_text_id = _new_id("msg-")
             yield ev.TextMessageStart(message_id=self._text_id)
         if part.content:
             yield ev.TextMessageContent(message_id=self._text_id, delta=part.content)
@@ -338,7 +336,7 @@ class PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
 
     async def handle_thinking_start(self, part: ThinkingPart, follows_thinking: bool = False) -> AsyncIterator[ev.Event]:
         if not follows_thinking or self._thinking_id is None:
-            self._thinking_id = new_id("think-")
+            self._thinking_id = _new_id("think-")
             yield ev.ThinkingStart(message_id=self._thinking_id)
         if part.content:
             yield ev.ThinkingContent(message_id=self._thinking_id, delta=part.content)
@@ -393,7 +391,7 @@ class PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
             return ev.ToolCallResult(tool_call_id=part.tool_call_id, content=part.model_response_str(wrap_if_error=False), is_error=True)
         return ev.ToolCallResult(tool_call_id=part.tool_call_id, content=part.content)
 
-    def _artifact(self, artifact: ArtifactEvent, tool_call_id: str | None) -> ev.ArtifactPublished:
+    def _artifact(self, artifact: _ArtifactEvent, tool_call_id: str | None) -> ev.ArtifactPublished:
         return ev.ArtifactPublished(
             artifact_id=artifact.artifact_id, value=artifact.value, kind=artifact.kind, title=artifact.title,
             tool_call_id=artifact.tool_call_id or tool_call_id, metadata=dict(artifact.metadata),
@@ -401,13 +399,13 @@ class PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
         )
 
     async def handle_custom_event(self, event: CustomEvent) -> AsyncIterator[ev.Event]:
-        if isinstance(event, ArtifactEvent):
+        if isinstance(event, _ArtifactEvent):
             yield self._artifact(event, event.tool_call_id)
         else:
             yield ev.Custom(name=event.name, value=event.to_payload())
 
     async def handle_capability_event(self, event: CapabilityEvent) -> AsyncIterator[ev.Event]:
-        if isinstance(event, UsageEvent):
+        if isinstance(event, _UsageEvent):
             yield ev.Usage(
                 model=event.model, input_tokens=event.input_tokens, output_tokens=event.output_tokens,
                 cached_tokens=event.cached_tokens, cost_usd=event.cost_usd,
@@ -554,13 +552,13 @@ class AgentRunner(param.Parameterized):
         """Run the agent on ``prompt`` and return its output."""
         if self.running:
             raise RuntimeError("AgentRunner is already running; await the current run or cancel it first.")
-        run_id = new_id("run-")
+        run_id = _new_id("run-")
         with param.edit_constant(self):
             self.param.update(running=True, run_id=run_id, error=None, deferred=None)
         if isinstance(prompt, str) and prompt:
             self.state.add_user_message(prompt, run_id=run_id)
         self._token = CancellationToken()
-        stream = PanelEventStream(
+        stream = _PanelEventStream(
             run_id=run_id, thread_id=self.thread_id, agent_name=self.agent.name,
             input=prompt, tool_defs=self._tool_defs, validated_args=self._validated,
         )
@@ -591,13 +589,13 @@ class AgentRunner(param.Parameterized):
                 self.running = False
         return self._finish(stream)
 
-    def _apply(self, stream: PanelEventStream, event: ev.Event):
+    def _apply(self, stream: _PanelEventStream, event: ev.Event):
         if isinstance(event, ev.RunError):
             self._close(stream, event)
         else:
             self.state.apply(event)
 
-    def _close(self, stream: PanelEventStream, error: ev.RunError):
+    def _close(self, stream: _PanelEventStream, error: ev.RunError):
         # Approvals of a dead run can no longer be acted on, so close them before the error.
         for request in list(self.state.pending_approvals):
             if request.run_id == stream.run_id:
@@ -606,7 +604,7 @@ class AgentRunner(param.Parameterized):
                 ))
         self.state.apply(error)
 
-    def _finish(self, stream: PanelEventStream) -> Any:
+    def _finish(self, stream: _PanelEventStream) -> Any:
         result: AgentRunResult | None = stream._result
         if stream.cancelled is not None:
             self.messages = list(stream.cancelled.all_messages())

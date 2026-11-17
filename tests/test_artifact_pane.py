@@ -9,9 +9,9 @@ from panel_agents.components._diff import DiffViewer
 from panel_agents.components.artifacts import (
     ArtifactPane,
     ArtifactView,
-    table_styles,
-    version_bytes,
-    version_label,
+    _table_styles,
+    _version_bytes,
+    _version_label,
 )
 
 
@@ -121,7 +121,7 @@ def test_pane_renders(store, document, comm):
 def test_view_version_selector(store):
     publish_sql(store)
     view = ArtifactView(store["query"])
-    assert list(view._version.options) == [version_label(v) for v in store["query"].versions]
+    assert list(view._version.options) == [_version_label(v) for v in store["query"].versions]
     assert view._version.value == 3
     view._version.value = 1
     assert store["query"].current == 1
@@ -133,7 +133,7 @@ def test_view_version_selector(store):
 def test_version_label():
     store = ArtifactStore()
     store.publish("q", "x", tool_call_id="call_9", created_at=0)
-    label = version_label(store["q"].latest)
+    label = _version_label(store["q"].latest)
     assert label.startswith("v1 · ")
     assert label.endswith(" · call_9")
 
@@ -174,10 +174,10 @@ def test_view_download_table(store):
 
 
 def test_version_bytes():
-    assert version_bytes({"a": 1}, "json") == (b'{\n  "a": 1\n}', "json")
-    assert version_bytes(None, "text") == (b"", "txt")
-    assert version_bytes("x", "python")[1] == "py"
-    data, ext = version_bytes(pd.DataFrame({"a": [1]}, index=["r"]), "table")
+    assert _version_bytes({"a": 1}, "json") == (b'{\n  "a": 1\n}', "json")
+    assert _version_bytes(None, "text") == (b"", "txt")
+    assert _version_bytes("x", "python")[1] == "py"
+    data, ext = _version_bytes(pd.DataFrame({"a": [1]}, index=["r"]), "table")
     assert ext == "csv"
     assert data.decode().splitlines() == [",a", "r,1"]
 
@@ -277,8 +277,8 @@ def test_table_styles():
     store.publish("df", new)
     view = ArtifactView(store["df"])
     result = view.compute_diff()
-    old_styles = table_styles(old, result, "old")
-    new_styles = table_styles(new, result, "new")
+    old_styles = _table_styles(old, result, "old")
+    new_styles = _table_styles(new, result, "new")
     assert "211, 47, 47" in old_styles.iloc[0, 0]
     assert old_styles.iloc[1, 1].startswith("background-color: rgba(237")
     assert old_styles.iloc[1, 0] == ""
@@ -291,7 +291,7 @@ def test_table_styles_added_column():
     store.publish("df", pd.DataFrame({"a": [1]}))
     store.publish("df", pd.DataFrame({"a": [1], "b": [2]}))
     result = ArtifactView(store["df"]).compute_diff()
-    styles = table_styles(store["df"].latest.value, result, "new")
+    styles = _table_styles(store["df"].latest.value, result, "new")
     assert styles.iloc[0, 0] == ""
     assert "46, 125, 50" in styles.iloc[0, 1]
 

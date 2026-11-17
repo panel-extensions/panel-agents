@@ -28,7 +28,7 @@ _SECTION = re.compile(r"^(\w[\w ]*):\s*$")
 _ARG = re.compile(r"^\*{0,2}(\w+)\s*(\([^)]*\))?\s*:\s*(.*)$")
 
 
-def parse_docstring(doc: str | None) -> tuple[str, dict[str, str]]:
+def _parse_docstring(doc: str | None) -> tuple[str, dict[str, str]]:
     """
     Split a Google style docstring into its description and the
     descriptions of the arguments listed under ``Args:``.
@@ -70,7 +70,7 @@ class Action:
     _model: type[BaseModel] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self):
-        _, arg_docs = parse_docstring(self.function.__doc__)
+        _, arg_docs = _parse_docstring(self.function.__doc__)
         signature = inspect.signature(self.function)
         hints = _type_hints(self.function)
         fields: dict[str, Any] = {}
@@ -91,7 +91,7 @@ class Action:
     @classmethod
     def from_function(cls, function: Callable[..., Any], name: str | None = None, description: str | None = None) -> Action:
         """An action named after ``function`` and described by its docstring unless given."""
-        doc_description, _ = parse_docstring(function.__doc__)
+        doc_description, _ = _parse_docstring(function.__doc__)
         return cls(
             name=name or function.__name__,
             description=description if description is not None else doc_description,

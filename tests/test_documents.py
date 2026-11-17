@@ -11,7 +11,7 @@ from panel_agents.artifacts.diff import (
     diff_structured,
     register_diff,
 )
-from panel_agents.components.artifacts import ArtifactPane, ArtifactView, changes_html
+from panel_agents.components.artifacts import ArtifactPane, ArtifactView, _changes_html
 from panel_agents.recording import dump_events
 
 
@@ -79,7 +79,7 @@ def test_paths_keep_keys_with_dots_apart():
 
 
 def test_changes_html_prefers_labels_and_escapes():
-    text = changes_html([
+    text = _changes_html([
         Change("add", ("nodes", "c"), new={}, label="Node <c> added"),
         Change("change", ("nodes", "a", "x"), old=1, new=2),
     ])
@@ -98,8 +98,8 @@ def config_diff():
         result.new_text = json.dumps(new, indent=1)
         return result
     yield strategy
-    from panel_agents.artifacts.diff import DIFF_STRATEGIES
-    DIFF_STRATEGIES.pop("config-test")
+    from panel_agents.artifacts.diff import _DIFF_STRATEGIES
+    _DIFF_STRATEGIES.pop("config-test")
 
 
 def test_view_renders_registered_structured_diff(config_diff):

@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass, field, fields
 from typing import Any, ClassVar, Literal
 
-EVENT_TYPES: dict[str, type[Event]] = {}
+_EVENT_TYPES: dict[str, type[Event]] = {}
 
 
 @dataclass(kw_only=True)
@@ -29,7 +29,7 @@ class Event:
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         if cls.__dict__.get("type"):
-            EVENT_TYPES[cls.type] = cls
+            _EVENT_TYPES[cls.type] = cls
 
     def to_dict(self) -> dict[str, Any]:
         data = {f.name: getattr(self, f.name) for f in fields(self)}
@@ -39,7 +39,7 @@ class Event:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Event:
         data = dict(data)
-        event_type = EVENT_TYPES[data.pop("type")]
+        event_type = _EVENT_TYPES[data.pop("type")]
         names = {f.name for f in fields(event_type)}
         return event_type(**{k: v for k, v in data.items() if k in names})
 
@@ -279,9 +279,6 @@ class GuardrailFired(Event):
     message_id: str | None = None
 
 
-KIT_EVENTS = (ArtifactPublished, ArtifactApplied, ApprovalRequested, ApprovalResolved, Usage, GuardrailFired)
+_KIT_EVENTS = (ArtifactPublished, ArtifactApplied, ApprovalRequested, ApprovalResolved, Usage, GuardrailFired)
 
-__all__ = [name for name, obj in list(globals().items()) if isinstance(obj, type) and issubclass(obj, Event)] + [
-    "EVENT_TYPES",
-    "KIT_EVENTS",
-]
+__all__ = [name for name, obj in list(globals().items()) if isinstance(obj, type) and issubclass(obj, Event)]

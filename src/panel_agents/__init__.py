@@ -1,7 +1,7 @@
 from . import events
 from .__version import __version__  # noqa
 from .actions import Action, ActionRegistry
-from .artifacts import Artifact, ArtifactStore, ArtifactVersion
+from .artifacts import Artifact, ArtifactStore, ArtifactVersion, register_diff
 from .audit import AuditLog
 from .components import (
     AgentChat,
@@ -29,25 +29,26 @@ __all__ = [
     "AgentChat",
     "AgentDrawer",
     "ApprovalCard",
-    "ApprovalQueue",
-    "ArtifactPane",
-    "ArtifactView",
-    "AuditLog",
-    "ToolCallCard",
-    "register_renderer",
     "ApprovalPolicy",
+    "ApprovalQueue",
     "ApprovalRequest",
     "ApprovalRule",
     "Artifact",
+    "ArtifactPane",
     "ArtifactStore",
     "ArtifactVersion",
+    "ArtifactView",
+    "AuditLog",
     "MessageState",
     "Recorder",
     "RunInfo",
     "RunState",
+    "ToolCallCard",
     "ToolCallState",
     "dump_events",
     "events",
     "load_events",
     "load_state",
+    "register_diff",
+    "register_renderer",
 ]

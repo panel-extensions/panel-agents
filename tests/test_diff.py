@@ -3,14 +3,14 @@ import pandas as pd
 import pytest
 
 from panel_agents.artifacts.diff import (
-    DIFF_STRATEGIES,
+    _DIFF_STRATEGIES,
     TableDiff,
     TextDiff,
     ValueDiff,
+    _get_diff_strategy,
     diff,
     diff_table,
     diff_text,
-    get_diff_strategy,
     register_diff,
 )
 
@@ -64,10 +64,10 @@ def test_register_custom_strategy():
         return ValueDiff(identical=True, old_repr="x", new_repr="y")
 
     try:
-        assert get_diff_strategy("custom-kind") is custom
+        assert _get_diff_strategy("custom-kind") is custom
         assert diff(1, 2, kind="custom-kind").old_repr == "x"
     finally:
-        DIFF_STRATEGIES.pop("custom-kind")
+        _DIFF_STRATEGIES.pop("custom-kind")
 
 
 def test_to_dict_is_plain_data():

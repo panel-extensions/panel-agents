@@ -20,6 +20,7 @@ import panel_material_ui as pmui
 import param
 from panel.viewable import Viewer
 
+from ..security import _escape_markdown, _plain_typography, inert_markdown
 from ..state import ApprovalRequest, RunState
 from ._schema_form import SchemaForm, infer_schema, resolve_schema
 
@@ -27,7 +28,7 @@ _MISSING = object()
 
 _EMPTY_VALUES = (None, "", [], {}, False)
 
-STYLESHEET = """
+_STYLESHEET = """
 :host { width: 100%; }
 .pa-grid {
   display: grid;
@@ -113,7 +114,7 @@ def _value_html(value: Any) -> str:
     return f"<pre>{html.escape(text)}</pre>"
 
 
-def args_html(args: dict[str, Any]) -> str:
+def _args_html(args: dict[str, Any]) -> str:
     if not args:
         return '<div class="pa-empty">No arguments</div>'
     rows = "".join(
@@ -132,7 +133,7 @@ def _flatten(value: Any, prefix: str = "") -> dict[str, Any]:
     return {prefix: value}
 
 
-def diff_args(original: dict[str, Any], edited: dict[str, Any]) -> list[tuple[str, Any, Any]]:
+def _diff_args(original: dict[str, Any], edited: dict[str, Any]) -> list[tuple[str, Any, Any]]:
     """Return ``(path, old, new)`` for each changed leaf; absent values are ``None``-like sentinels."""
     old, new = _flatten(original or {}), _flatten(edited or {})
     changes = []
@@ -143,7 +144,7 @@ def diff_args(original: dict[str, Any], edited: dict[str, Any]) -> list[tuple[st
     return changes
 
 
-def diff_html(changes: list[tuple[str, Any, Any]]) -> str:
+def _diff_html(changes: list[tuple[str, Any, Any]]) -> str:
     rows = []
     for path, old, new in changes:
         parts = [f'<span class="pa-diff-key">{html.escape(path)}</span>']
@@ -159,7 +160,7 @@ def diff_html(changes: list[tuple[str, Any, Any]]) -> str:
     return f'<div class="pa-diff">{"".join(rows)}</div>'
 
 
-def prune_args(original: dict[str, Any], edited: dict[str, Any], schema: dict[str, Any] | None, root: dict[str, Any] | None = None) -> dict[str, Any]:
+def _prune_args(original: dict[str, Any], edited: dict[str, Any], schema: dict[str, Any] | None, root: dict[str, Any] | None = None) -> dict[str, Any]:
     """
     Drop keys the form filled in that the agent never set and whose value
     is the schema default or empty, so they do not count as edits.
@@ -175,11 +176,11 @@ def prune_args(original: dict[str, Any], edited: dict[str, Any], schema: dict[st
             if value in _EMPTY_VALUES or ("default" in sub_resolved and sub_resolved["default"] == value):
                 continue
             if isinstance(value, dict):
-                value = prune_args({}, value, sub, root)
+                value = _prune_args({}, value, sub, root)
                 if not value:
                     continue
         elif isinstance(value, dict) and isinstance(original[key], dict):
-            value = prune_args(original[key], value, sub, root)
+            value = _prune_args(original[key], value, sub, root)
         pruned[key] = value
     return pruned
 
@@ -240,8 +241,8 @@ class ApprovalCard(Viewer):
             params["state"] = state
         super().__init__(**params)
         self._form: SchemaForm | None = None
-        self._args_pane = pn.pane.HTML(args_html(self.request.args), stylesheets=[STYLESHEET], sizing_mode="stretch_width", margin=(0, 4))
-        self._diff_pane = pn.pane.HTML("", stylesheets=[STYLESHEET], sizing_mode="stretch_width", margin=(0, 4))
+        self._args_pane = pn.pane.HTML(_args_html(self.request.args), stylesheets=[_STYLESHEET], sizing_mode="stretch_width", margin=(0, 4))
+        self._diff_pane = pn.pane.HTML("", stylesheets=[_STYLESHEET], sizing_mode="stretch_width", margin=(0, 4))
         self._diff_section = pmui.Column(
             pmui.Typography("Changes", variant="overline", color="text.secondary", margin=(4, 4, 0, 4)),
             self._diff_pane, visible=False, sizing_mode="stretch_width", margin=0,
@@ -269,7 +270,7 @@ class ApprovalCard(Viewer):
         # Wraps the edit toggle below the title when the card is narrow, e.g. in a drawer.
         header = pmui.FlexBox(
             pmui.Row(
-                pmui.Typography(
+                _plain_typography(
                     self.request.tool_name, variant="subtitle1", margin=(0, 8, 0, 4),
                     sx={"fontWeight": 600, "fontFamily": "ui-monospace, SFMono-Regular, Menlo, monospace"},
                 ),
@@ -282,7 +283,7 @@ class ApprovalCard(Viewer):
         )
         body = [header]
         if self.request.description:
-            body.append(pmui.Typography(self.request.description, variant="body2", color="text.secondary", margin=(0, 4, 8, 4)))
+            body.append(_plain_typography(self.request.description, variant="body2", color="text.secondary", margin=(0, 4, 8, 4)))
         body += [
             self._args_pane, self._form_holder, self._diff_section, self._reason,
             self._policy, self._error,
@@ -334,7 +335,7 @@ class ApprovalCard(Viewer):
 
     @property
     def is_edited(self) -> bool:
-        return self.editing and self.edited_args is not None and bool(diff_args(self.request.args, self.edited_args))
+        return self.editing and self.edited_args is not None and bool(_diff_args(self.request.args, self.edited_args))
 
     @param.depends("editing", watch=True)
     def _on_editing(self):
@@ -352,11 +353,11 @@ class ApprovalCard(Viewer):
 
     def _sync_edits(self):
         if self.editing and self._form is not None:
-            self.edited_args = prune_args(self.request.args, self._form.value, self._form.schema)
+            self.edited_args = _prune_args(self.request.args, self._form.value, self._form.schema)
         else:
             self.edited_args = None
-        changes = diff_args(self.request.args, self.edited_args) if self.edited_args is not None else []
-        self._diff_pane.object = diff_html(changes) if changes else ""
+        changes = _diff_args(self.request.args, self.edited_args) if self.edited_args is not None else []
+        self._diff_pane.object = _diff_html(changes) if changes else ""
         self._diff_section.visible = bool(changes)
         self._update_controls()
 
@@ -369,7 +370,7 @@ class ApprovalCard(Viewer):
         self._edit_toggle.disabled = not permitted
         self._reason.disabled = not permitted
         self._policy.param.update(object=self.policy_message, visible=not permitted)
-        self._error.param.update(object=self.error, visible=bool(self.error))
+        self._error.param.update(object=_escape_markdown(self.error), visible=bool(self.error))
         hint = {
             "never": "Optional",
             "deny": "Required to deny",
@@ -434,9 +435,9 @@ class ApprovalCard(Viewer):
         if request.status == "pending":
             return
         approved = request.status == "approved"
-        edits = diff_args(request.args, request.final_args) if approved and request.final_args is not None else []
+        edits = _diff_args(request.args, request.final_args) if approved and request.final_args is not None else []
         verdict = ("Approved with edits" if edits else "Approved") if approved else "Denied"
-        who = f" by **{request.user}**" if request.user else ""
+        who = f" by **{_escape_markdown(request.user)}**" if request.user else ""
         when = f" at {_format_time(request.resolved_at)}" if request.resolved_at else ""
         items = [
             pmui.Row(
@@ -444,14 +445,14 @@ class ApprovalCard(Viewer):
                     label=verdict, color="success" if approved else "error", size="small",
                     icon="check_circle" if approved else "cancel", margin=(0, 8, 0, 0),
                 ),
-                pmui.Typography(f"**{request.tool_name}**{who}{when}", variant="body2", margin=0),
+                pmui.Typography(f"**{_escape_markdown(request.tool_name)}**{who}{when}", variant="body2", margin=0, plugins=[inert_markdown], disable_math=True),
                 sizing_mode="stretch_width", margin=0, align="center",
             )
         ]
         if request.reason:
-            items.append(pmui.Typography(f"“{request.reason}”", variant="body2", color="text.secondary", margin=(6, 0, 0, 2), sx={"fontStyle": "italic"}))
+            items.append(_plain_typography(f"“{request.reason}”", variant="body2", color="text.secondary", margin=(6, 0, 0, 2), sx={"fontStyle": "italic"}))
         if edits:
-            items.append(pn.pane.HTML(diff_html(edits), stylesheets=[STYLESHEET], sizing_mode="stretch_width", margin=(6, 0, 0, 2)))
+            items.append(pn.pane.HTML(_diff_html(edits), stylesheets=[_STYLESHEET], sizing_mode="stretch_width", margin=(6, 0, 0, 2)))
         self._layout.objects = [pmui.Column(*items, sizing_mode="stretch_width", margin=0)]
         self._layout.sx = {
             "padding": "8px 12px", "borderLeft": "4px solid", "borderRadius": "8px",
@@ -553,7 +554,7 @@ class ApprovalQueue(Viewer):
 
     @param.depends("message", watch=True)
     def _show_message(self):
-        self._message.param.update(object=self.message, visible=bool(self.message), closed=False)
+        self._message.param.update(object=_escape_markdown(self.message), visible=bool(self.message), closed=False)
 
     def _batch(self, approved: bool) -> int:
         pending = [self._cards[r.tool_call_id] for r in list(self.state.pending_approvals) if r.tool_call_id in self._cards]
@@ -572,4 +573,4 @@ class ApprovalQueue(Viewer):
         return self._batch(False)
 
 
-__all__ = ["ApprovalCard", "ApprovalQueue", "approval_factory", "args_html", "diff_args", "prune_args"]
+__all__ = ["ApprovalCard", "ApprovalQueue", "approval_factory"]

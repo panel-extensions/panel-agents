@@ -2,7 +2,7 @@ import pytest
 
 from panel_agents import RunState
 from panel_agents import events as ev
-from panel_agents.state import apply_json_patch
+from panel_agents.state import _apply_json_patch
 
 
 def run_events(run_id="run-1"):
@@ -132,7 +132,7 @@ def test_state_snapshot_and_delta():
 
 
 def test_json_patch_move_and_remove():
-    doc = apply_json_patch({"a": 1, "b": {"c": 2}}, [
+    doc = _apply_json_patch({"a": 1, "b": {"c": 2}}, [
         {"op": "move", "from": "/a", "path": "/b/a"},
         {"op": "remove", "path": "/b/c"},
     ])

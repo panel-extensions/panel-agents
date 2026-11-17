@@ -19,7 +19,7 @@ from typing import Any
 from . import events as ev
 from .state import RunState
 
-Sink = str | os.PathLike | Callable[[dict[str, Any]], Any]
+_Sink = str | os.PathLike | Callable[[dict[str, Any]], Any]
 
 
 class AuditLog:
@@ -34,7 +34,7 @@ class AuditLog:
     >>> log = AuditLog(state, "approvals.jsonl")
     """
 
-    def __init__(self, state: RunState | None = None, sink: Sink | None = None, include_existing: bool = False):
+    def __init__(self, state: RunState | None = None, sink: _Sink | None = None, include_existing: bool = False):
         self.sink = sink
         self.records: list[dict[str, Any]] = []
         self._unsubscribers: dict[int, Callable[[], None]] = {}

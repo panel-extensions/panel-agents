@@ -1,30 +1,52 @@
 # panel-agents
 
-Panel components for building user interfaces for AI agents: tool-call cards, versioned artifacts, human-in-the-loop approvals, traces and session replay.
+Panel components for building user interfaces for AI agents: a chat with tool-call cards, versioned artifacts and documents, human-in-the-loop approvals, actions on the page the user is looking at, traces and session replay.
 
-Agent frameworks are connected through adapters that translate their output into a small set of normalized events, modelled on the [AG-UI protocol](https://docs.ag-ui.com). The components bind to a reactive `RunState` built from those events, so the same UI works live, against a recorded session, or with any framework that has an adapter.
+Agent frameworks are connected through adapters that translate their output into a small set of normalized events, modelled on the [AG-UI protocol](https://docs.ag-ui.com). The components bind to a reactive `RunState` built from those events, so the same UI works live, against a recorded session, or with any framework that has an adapter. The pydantic-ai adapter ships with the package.
+
+```bash
+pip install "panel-agents[pydantic-ai]"
+```
+
+A chat for a pydantic-ai agent, docked beside an existing app, with inline approvals and a versioned artifact pane:
 
 ```python
-from panel_agents import RunState, Recorder, load_state
+import panel_material_ui as pmui
+from panel_agents import AgentDrawer, ApprovalPolicy
+from panel_agents.adapters.pydantic_ai import AgentRunner
 
-state = RunState()
-with Recorder(state, "runs/session.jsonl"):
-    ...  # run an agent through an adapter, which applies events to `state`
+runner = AgentRunner(agent, deps=deps, approval_policy=ApprovalPolicy(["save_*", "delete_*"]))
+drawer = AgentDrawer(runner, main=my_app)
+pmui.Page(title="My app", header=[drawer.toggle], main=[drawer]).servable()
+```
+
+Every session can be recorded and replayed with the same components:
+
+```python
+from panel_agents import Recorder, load_state
+
+with Recorder(runner.state, "runs/session.jsonl"):
+    await runner.run("Summarize last month's sales")
 
 replayed = load_state("runs/session.jsonl")
 ```
 
-A complete chat UI for a pydantic-ai agent, with tool-call cards, inline approvals and a versioned artifact pane:
+## Guides
 
-```python
-import panel_material_ui as pmui
-from panel_agents import AgentChat, ArtifactPane
-from panel_agents.adapters.pydantic_ai import AgentRunner
+- [Dock an agent beside an existing app](docs/how-to/agent-drawer.md) with `AgentDrawer`.
+- [Require approval for tool calls](docs/how-to/approvals.md) with `ApprovalPolicy`.
+- [Edit documents with versions you can apply and revert](docs/how-to/document-artifacts.md), with semantic diffs.
+- [Let the agent act on the page](docs/how-to/ui-actions.md) with an `ActionRegistry`.
+- [Serve an agent's tools over MCP](docs/how-to/mcp.md) with the `mcp` extra.
+- [Security](docs/how-to/security.md): what panel-agents does about prompt injection in rendered output and approvals.
+- [API reference](docs/reference/api.md): everything public, by module.
 
-runner = AgentRunner(agent, deps=deps)
-pmui.Page(main=[pmui.Row(AgentChat(runner=runner), ArtifactPane(runner.state.artifacts))]).servable()
-```
+## Examples
 
-See `examples/sql_analyst/` for a reference data-analysis agent over DuckDB and a replay viewer for its recordings.
+- `examples/drawer_app.py`: an agent docked beside a sales report, editing it as a document, filtering it through a front-end action and asking before it exports.
+- `examples/sql_analyst/`: a data-analysis agent over DuckDB, a replay viewer for its recordings and an MCP server for its tools.
+- `examples/approval_demo.py`, `examples/artifacts_demo.py` and `examples/chat_replay.py`: the approval, artifact and chat components on synthetic events, without a model.
 
-This project is in early development and its API will change.
+## Compatibility
+
+panel-agents 1.x follows semantic versioning for the names listed in the API reference. Names starting with an underscore and modules starting with an underscore are private and may change in any release. Recordings written by 1.x can be read by later 1.x releases.

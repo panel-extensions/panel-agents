@@ -13,12 +13,13 @@ import panel_material_ui as pmui
 import param
 from panel.viewable import Viewer
 
+from ..security import untrusted_markdown
 from ..state import MessageState, RunState, ToolCallState
 from .approval import ApprovalCard
 from .approval import approval_factory as default_approval_factory
 from .tool_call import ToolCallCard
 
-THINKING_CSS = """
+_THINKING_CSS = """
 :host { width: 100%; }
 .markdown { font-size: 0.85rem; opacity: 0.75; }
 """
@@ -200,7 +201,8 @@ class AgentChat(Viewer):
         if item.kind == "thinking":
             return self._build_thinking(item)
         user = self.user if item.role == "user" else self._agent_name(item.run_id)
-        pane = pn.pane.Markdown(item.content)
+        # Message text may carry injected content, so it is rendered inert: no images or HTML that load by themselves.
+        pane = untrusted_markdown(item.content)
         message = pmui.ChatMessage(pane, visible=bool(item.content), **self._message_params(user, item.created_at))
         self._views[id(item)] = message
 
@@ -213,7 +215,9 @@ class AgentChat(Viewer):
         return message
 
     def _build_thinking(self, item: MessageState) -> pmui.ChatMessage:
-        pane = pn.pane.Markdown(item.content, sizing_mode="stretch_width", margin=0, stylesheets=[THINKING_CSS], css_classes=["thinking"])
+        pane = untrusted_markdown(
+            item.content, sizing_mode="stretch_width", margin=0, stylesheets=[_THINKING_CSS], css_classes=["thinking"],
+        )
         step = pmui.ChatStep(
             pane, running_title="Thinking…", success_title="Thought process",
             status="success" if item.finished else "running",

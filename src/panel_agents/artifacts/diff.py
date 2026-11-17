@@ -15,7 +15,7 @@ from typing import Any
 
 from .model import infer_kind
 
-TEXT_KINDS = ("text", "markdown", "sql", "code", "python", "javascript", "yaml", "json")
+_TEXT_KINDS = ("text", "markdown", "sql", "code", "python", "javascript", "yaml", "json")
 
 
 @dataclass
@@ -149,32 +149,32 @@ class StructuredDiff(Diff):
         return ", ".join(f"{n} {labels[op]}" for op, n in counts.items() if n) or "values differ"
 
 
-DIFF_STRATEGIES: dict[str, Callable[..., Diff]] = {}
+_DIFF_STRATEGIES: dict[str, Callable[..., Diff]] = {}
 
 
 def register_diff(*kinds: str):
     """Register a diff strategy ``func(old, new, **options) -> Diff`` for the given kinds."""
     def decorator(func):
         for kind in kinds:
-            DIFF_STRATEGIES[kind] = func
+            _DIFF_STRATEGIES[kind] = func
         return func
     return decorator
 
 
-def get_diff_strategy(kind: str | None, old: Any = None, new: Any = None) -> Callable[..., Diff]:
-    if kind in DIFF_STRATEGIES:
-        return DIFF_STRATEGIES[kind]
+def _get_diff_strategy(kind: str | None, old: Any = None, new: Any = None) -> Callable[..., Diff]:
+    if kind in _DIFF_STRATEGIES:
+        return _DIFF_STRATEGIES[kind]
     for value in (new, old):
         if value is not None:
             inferred = infer_kind(value)
-            if inferred in DIFF_STRATEGIES:
-                return DIFF_STRATEGIES[inferred]
+            if inferred in _DIFF_STRATEGIES:
+                return _DIFF_STRATEGIES[inferred]
     return diff_values
 
 
 def diff(old: Any, new: Any, kind: str | None = None, **options) -> Diff:
     """Diff two artifact values using the strategy registered for ``kind``."""
-    return get_diff_strategy(kind, old, new)(old, new, **options)
+    return _get_diff_strategy(kind, old, new)(old, new, **options)
 
 
 def diff_values(old: Any, new: Any, **options) -> ValueDiff:
@@ -273,7 +273,7 @@ def diff_text(old: Any, new: Any, kind: str = "text", context: int = 3, **option
     )
 
 
-for _kind in TEXT_KINDS:
+for _kind in _TEXT_KINDS:
     register_diff(_kind)(lambda old, new, _k=_kind, **options: diff_text(old, new, kind=_k, **options))
 
 
@@ -368,3 +368,19 @@ def diff_table(old: Any, new: Any, key: str | list[str] | None = None, **options
         or result.alignment is None
     )
     return result
+
+
+__all__ = [
+    "Change",
+    "Diff",
+    "StructuredDiff",
+    "TableDiff",
+    "TextDiff",
+    "ValueDiff",
+    "diff",
+    "diff_structured",
+    "diff_table",
+    "diff_text",
+    "diff_values",
+    "register_diff",
+]
