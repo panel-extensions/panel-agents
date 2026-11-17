@@ -9,11 +9,11 @@ pre-commit-install = "pre-commit install"
 pre-commit-run = "pre-commit run -a"
 
 [dependencies]
-python = ">=3.10"
-panel = ">=1.8.0"
+python = ">=3.11"
+panel = ">=1.9.0"
 panel-material-ui = ">=0.16.0"
-pydantic = ">=2"
-pydantic-ai-slim = ">=1.0"
+pydantic = ">=2.12"
+pydantic-ai-slim = ">=2.60"
 pandas = "*"
 duckdb = "*"
 pip = "*"
@@ -21,8 +21,6 @@ hatchling = "*"
 hatch-vcs = "*"
 setuptools-scm = "*"
 
-[feature.py310.dependencies]
-python = "3.10.*"
 [feature.py311.dependencies]
 python = "3.11.*"
 [feature.py312.dependencies]
@@ -30,11 +28,22 @@ python = "3.12.*"
 [feature.py313.dependencies]
 python = "3.13.*"
 
+# The lowest supported versions of the direct dependencies, tested on Linux in CI.
+[feature.floor]
+platforms = ["linux-64", "osx-arm64"]
+
+[feature.floor.dependencies]
+python = "3.11.*"
+panel = "1.9.0.*"
+panel-material-ui = "0.16.0.*"
+pydantic = "2.12.*"
+pydantic-ai-slim = "2.60.*"
+
 [environments]
-test-310 = ["py310", "test-core", "test-unit-task"]
 test-311 = ["py311", "test-core", "test-unit-task"]
 test-312 = ["py312", "test-core", "test-unit-task"]
 test-313 = ["py313", "test-core", "test-unit-task"]
+test-floor = ["floor", "test-core", "test-unit-task"]
 test-ui = ["py312", "test-core", "test-ui"]
 build = ["py312", "build"]
 lint = { features = ["lint"], no-default-feature = true }
@@ -45,6 +54,7 @@ pytest-asyncio = "*"
 pytest-cov = "*"
 pytest-rerunfailures = "<16"
 pytest-xdist = "*"
+pyarrow = "*"
 
 [feature.test-unit-task.tasks]
 _install = "pip install --no-deps --disable-pip-version-check -e ."

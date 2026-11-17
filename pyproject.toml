@@ -18,7 +18,7 @@ dynamic = ["version"]
 description = 'Panel components for building agent user interfaces.'
 readme = "README.md"
 license = { text = "BSD" }
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [{ name = "Philipp Rudiger", email = "philipp@holoviz.org" }]
 maintainers = [
     { name = "Philipp Rudiger", email = "philipp@holoviz.org" },
@@ -27,7 +27,6 @@ classifiers = [
     "License :: OSI Approved :: BSD License",
     "Development Status :: 3 - Alpha",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -40,9 +39,9 @@ classifiers = [
 ]
 
 dependencies = [
-    "panel >=1.8.0",
+    "panel >=1.9.0",
     "panel-material-ui >=0.16.0",
-    "pydantic >=2",
+    "pydantic >=2.12",
 ]
 
 [project.urls]
@@ -51,12 +50,12 @@ Source = "https://github.com/panel-extensions/panel-agents"
 
 [project.optional-dependencies]
 pydantic-ai = [
-    "pydantic-ai-slim >=1.0",
+    "pydantic-ai-slim >=2.60",
 ]
 examples = [
     "duckdb",
     "pandas",
-    "pydantic-ai-slim[openai,anthropic] >=1.0",
+    "pydantic-ai-slim[openai,anthropic] >=2.60",
 ]
 dev = [
     "mkdocs-material",
@@ -151,11 +150,13 @@ filterwarnings = [
     "error",
     "ignore::DeprecationWarning",
     "ignore::UserWarning",
+    # panel-material-ui's buttons on Panel 1.9, which Python 3.11 resolves to
+    "ignore:Both '.*' and '.*' were provided:PendingDeprecationWarning",
 ]
 testpaths = ["tests"]
 
 [tool.mypy]
-python_version = '3.10'
+python_version = '3.11'
 no_implicit_optional = true
 check_untyped_defs = true
 
