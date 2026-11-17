@@ -46,6 +46,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/panel-extensions/panel-agents"
+Documentation = "https://panel-extensions.github.io/panel-agents"
 Source = "https://github.com/panel-extensions/panel-agents"
 
 [project.optional-dependencies]
