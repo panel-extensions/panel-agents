@@ -128,10 +128,7 @@ class Deps:
     app: SalesReport
 
 
-agent = Agent(MODEL, deps_type=Deps, instructions=INSTRUCTIONS, name="Assistant",
-    # Without a limit the provider reserves the model's maximum reply against the account's credit.
-    model_settings={"max_tokens": 4096},
-)
+agent = Agent(MODEL, deps_type=Deps, instructions=INSTRUCTIONS, name="Assistant")
 
 
 @agent.tool
