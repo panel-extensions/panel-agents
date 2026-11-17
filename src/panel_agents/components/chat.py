@@ -114,6 +114,8 @@ class AgentChat(Viewer):
                 on_submit=self._on_submit, show_rerun=False, show_undo=False, show_clear=False,
                 input_params={"placeholder": self.placeholder, "enable_upload": False}, **feed_params,
             )
+        if not self.readonly:
+            self._feed._widget.on_action("stop", self._on_stop)
         self._rendered: list[Any] = []
         self._views: dict[int, Any] = {}
         self._messages: dict[int, pmui.ChatMessage] = {}
@@ -163,9 +165,17 @@ class AgentChat(Viewer):
 
         pn.state.execute(run)
 
+    def _on_stop(self, *_):
+        cancel = getattr(self.runner, "cancel", None)
+        if callable(cancel):
+            cancel()
+
     def _update_running(self, *_):
-        if not self.readonly:
-            self._feed.disabled = self.state.running
+        if self.readonly:
+            return
+        # Only sending waits for the run: a disabled input would lose its focus
+        # and its text, and the user could not type the next message meanwhile.
+        self._feed._widget.disabled_enter = self.state.running
 
     def _update_items(self, *_):
         items = self.state.items

@@ -1,4 +1,7 @@
+import asyncio
+
 import pandas as pd
+import panel_material_ui as pmui
 import pytest
 
 pytest.importorskip("playwright")
@@ -129,3 +132,93 @@ def test_finished_steps_fold_into_a_row_that_expands(page):
     expect(page.get_by_text("Read the report")).to_be_visible()
     expect(page.get_by_text("list_regions")).to_be_visible()
     expect(page.get_by_role("button", name="2 steps, 1.0s, collapse")).to_be_visible()
+
+
+_INPUT_INSETS = """
+(textarea) => {
+  const root = textarea.closest(".MuiInputBase-root")
+  const outline = root.querySelector("fieldset").getBoundingClientRect()
+  const text = textarea.getBoundingClientRect().left + parseFloat(getComputedStyle(textarea).paddingLeft)
+  const send = root.querySelector("button[aria-label='Send message'] svg").getBoundingClientRect()
+  return {text: text - outline.left, send: outline.right - send.right}
+}
+"""
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_input_text_is_inset_like_the_send_button(page, theme):
+    page.emulate_media(color_scheme=theme)
+    chat = AgentChat(RunState(flush_interval=0), callback=lambda text: None)
+    serve_component(page, chat)
+
+    textarea = page.locator("textarea:visible").first
+    expect(textarea).to_have_attribute("placeholder", "Ask the agent…")
+    insets = textarea.evaluate(_INPUT_INSETS)
+    # As far in as an outlined input's text (14px), and as the send icon is from the right.
+    assert insets["text"] >= 14
+    assert abs(insets["text"] - insets["send"]) <= 1
+
+
+def _held_runs(state, received):
+    """A callback whose runs last until ``finish`` is set, recording the texts sent."""
+    finish = []
+
+    async def callback(text):
+        received.append(text)
+        state.apply(ev.RunStarted(run_id=f"r{len(received)}"))
+        while not finish:
+            await asyncio.sleep(0.02)
+        finish.clear()
+        state.apply(ev.RunFinished(run_id=f"r{len(received)}"))
+
+    return callback, finish
+
+
+def test_input_keeps_focus_and_text_through_a_run(page):
+    state = RunState(flush_interval=0)
+    received = []
+    callback, finish = _held_runs(state, received)
+    serve_component(page, AgentChat(state, callback=callback))
+
+    textarea = page.locator("textarea:visible").first
+    textarea.click()
+    textarea.press_sequentially("first")
+    textarea.press("Enter")
+    wait_until(lambda: received == ["first"] and state.running, page)
+
+    # Typed during the run, without clicking back into the input; Enter waits for the run.
+    expect(textarea).to_be_focused()
+    page.keyboard.type("second")
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(200)
+    expect(textarea).to_have_value("second")
+    expect(textarea).to_be_focused()
+    assert received == ["first"]
+    finish.append(True)
+    wait_until(lambda: not state.running, page)
+
+    expect(textarea).to_be_focused()
+    page.keyboard.press("Enter")
+    wait_until(lambda: received == ["first", "second"], page)
+    finish.append(True)
+
+
+def test_input_does_not_take_focus_back_after_a_run(page):
+    state = RunState(flush_interval=0)
+    received = []
+    callback, finish = _held_runs(state, received)
+    elsewhere = pmui.Button(label="Approve")
+    serve_component(page, pmui.Column(AgentChat(state, callback=callback), elsewhere))
+
+    textarea = page.locator("textarea:visible").first
+    textarea.click()
+    textarea.press_sequentially("first")
+    textarea.press("Enter")
+    wait_until(lambda: state.running, page)
+
+    approve = page.get_by_role("button", name="Approve")
+    approve.click()
+    finish.append(True)
+    wait_until(lambda: not state.running, page)
+    page.wait_for_timeout(300)
+    expect(approve).to_be_focused()
