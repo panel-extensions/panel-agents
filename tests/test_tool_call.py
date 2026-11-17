@@ -1,3 +1,5 @@
+import json
+
 import pandas as pd
 import panel as pn
 import panel_material_ui as pmui
@@ -61,7 +63,7 @@ def test_success_renders_result_and_duration(state):
     assert card._step.status == "success"
     assert card.collapsed
     assert card._result_section.visible
-    assert isinstance(card._result[0], pn.pane.JSON)
+    assert card._result[0].object == '```json\n{"rows": 3}\n```'
     assert "1.5s" in card._header.object
     rendered = card._result[0]
     call.param.trigger("status")
@@ -77,7 +79,7 @@ def test_failure_expands_and_shows_error(state):
     assert not card._step.collapsed
     assert card._error.visible
     assert card._error.severity == "error"
-    assert "Binder Error" in card._error.object
+    assert card._error_text.object == "<pre>Binder Error: no column qtr</pre>"
     assert not card._result_section.visible
     assert "Failed" in card._header.object
 
@@ -181,7 +183,27 @@ def test_records_result_renders_styled_table(state):
 def test_nested_list_result_renders_json(state):
     card = ToolCallCard(start(state), state=state)
     finish(state, [{"a": [1, 2]}])
-    assert isinstance(card._result[0], pn.pane.JSON)
+    assert card._result[0].object == '```json\n[{"a": [1, 2]}]\n```'
+
+
+def test_long_result_collapses(state):
+    card = ToolCallCard(start(state), state=state, max_lines=5)
+    finish(state, list(range(100)))
+    pane, button = card._result[0].objects
+    assert "Show all 102 lines" in button.label
+
+
+def test_error_is_shown_verbatim(state):
+    card = ToolCallCard(start(state), state=state)
+    finish(state, "Traceback (most recent call last):\n  File <x>\nValueError: **bad**", is_error=True)
+    assert card._error.object == ""
+    assert card._error_text.object == "<pre>Traceback (most recent call last):\n  File &lt;x&gt;\nValueError: **bad**</pre>"
+
+
+def test_args_are_compact_json_with_code_blocks(state):
+    card = ToolCallCard(start(state), state=state)
+    state.apply(ev.ToolCallArgs(tool_call_id="t1", delta=json.dumps({"sql": "SELECT a\nFROM t", "limit": 5, "note": "x"})))
+    assert card._args.object == '```json\n{"limit": 5, "note": "x"}\n```\n\nsql\n\n```sql\nSELECT a\nFROM t\n```'
 
 
 def test_markdown_table_result_is_styled(state):

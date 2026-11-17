@@ -15,11 +15,10 @@ import panel_material_ui as pmui
 import param
 from panel.viewable import Viewer
 
-from ..artifacts.model import infer_kind
 from ..security import _escape_markdown
 from ..state import ApprovalRequest, RunState, ToolCallState
 from .approval import ApprovalCard
-from .renderers import render
+from .renderers import _code_fence, _dump_json, _output_markdown, output_format, render_output
 
 # ChatStep only knows four statuses; the extra ones are conveyed by a badge.
 _STEP_STATUS = {
@@ -87,17 +86,21 @@ _HEADER_CSS = """
 }
 """
 
-_CODE_CSS = """
-:host { width: 100%; }
-.tc-arg { margin-bottom: 0.5em; }
-.tc-key {
+_ARGS_CSS = """
+:host p {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.75rem;
-  color: var(--mui-palette-text-secondary, rgba(127, 127, 127, 0.9)); margin-bottom: 2px;
+  color: var(--mui-palette-text-secondary, rgba(127, 127, 127, 0.9)); margin: 0.5em 0 2px;
 }
+:host pre:has(> code > .codehilite) { margin-top: 0; }
+:host .codehilite pre { max-height: 320px; overflow: auto; }
+"""
+
+_ERROR_CSS = """
+:host { width: 100%; min-width: 0; }
+div { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; }
 pre {
-  margin: 0; padding: 0.6em 0.8em; border-radius: 6px; max-height: 320px; overflow: auto;
-  font-size: 0.8rem; line-height: 1.45; white-space: pre-wrap; word-break: break-word;
-  background: rgba(127, 127, 127, 0.08);
+  margin: 0; max-height: 320px; overflow: auto; white-space: pre;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; line-height: 1.45;
 }
 """
 
@@ -139,14 +142,20 @@ def _args_preview(args: dict[str, Any], max_length: int = 120) -> str:
 
 
 def _format_args(args: dict[str, Any], args_text: str = "") -> str:
-    """HTML listing each argument, with strings shown verbatim so code stays readable."""
+    """
+    Markdown listing the arguments: one JSON block for the short ones and a
+    labelled block per multi-line string, so code passed as an argument stays readable.
+    """
     if not args:
-        return f"<pre>{escape(args_text)}</pre>" if args_text else ""
+        return _code_fence(args_text, "json") if args_text else ""
+    multiline = {key for key, value in args.items() if isinstance(value, str) and "\n" in value.strip()}
     blocks = []
-    for key, value in args.items():
-        text = value if isinstance(value, str) else json.dumps(value, indent=2, default=repr, ensure_ascii=False)
-        blocks.append(f'<div class="tc-arg"><div class="tc-key">{escape(str(key))}</div><pre>{escape(text)}</pre></div>')
-    return "".join(blocks)
+    if inline := {key: value for key, value in args.items() if key not in multiline}:
+        blocks.append(_code_fence(_dump_json(inline), "json"))
+    for key in (key for key in args if key in multiline):
+        fmt, text = output_format(args[key])
+        blocks += [_escape_markdown(key), _code_fence(text, "" if fmt == "text" else fmt)]
+    return "\n\n".join(blocks)
 
 
 def _truncate(value: Any, max_chars: int = 20_000, max_items: int = 1_000) -> tuple[Any, str | None]:
@@ -201,6 +210,10 @@ class ToolCallCard(Viewer):
     max_items = param.Integer(default=1_000, bounds=(1, None), doc="""
         Maximum number of items or rows of a result to display.""")
 
+    max_lines = param.Integer(default=30, bounds=(1, None), doc="""
+        Number of lines of a code or JSON result shown before a
+        "Show all" button expands it.""")
+
     collapsed = param.Boolean(default=True, doc="Whether the card body is collapsed.")
 
     label = param.Parameter(default=None, doc="""
@@ -215,7 +228,7 @@ class ToolCallCard(Viewer):
             params["call"] = call
         super().__init__(**params)
         self._header = pn.pane.HTML(sizing_mode="stretch_width", margin=0, stylesheets=[_HEADER_CSS])
-        self._args = pn.pane.HTML(margin=(2, 0), sizing_mode="stretch_width", stylesheets=[_CODE_CSS], css_classes=["tc-args"])
+        self._args = _output_markdown(margin=(2, 0), stylesheets=[_ARGS_CSS], css_classes=["tc-args"])
         self._result = pn.Column(sizing_mode="stretch_width", margin=0)
         self._hint = pn.pane.HTML(margin=0, stylesheets=[_LABEL_CSS])
         # Visibility is toggled on layouts only: Panel's HTML view errors if hidden before it renders.
@@ -227,7 +240,10 @@ class ToolCallCard(Viewer):
         self._result_section = pn.Column(
             self._label("Result"), self._result, self._hint, sizing_mode="stretch_width", margin=0, visible=False,
         )
-        self._error = pmui.Alert(severity="error", variant="outlined", sizing_mode="stretch_width", visible=False, margin=(5, 0))
+        self._error_text = pn.pane.HTML(margin=0, sizing_mode="stretch_width", stylesheets=[_ERROR_CSS])
+        self._error = pmui.Alert(
+            self._error_text, severity="error", variant="outlined", sizing_mode="stretch_width", visible=False, margin=(5, 0),
+        )
         self._approval = pn.Column(sizing_mode="stretch_width", margin=0, visible=False)
         self._artifacts = pmui.Row(sizing_mode="stretch_width", margin=(5, 0), visible=False)
         self._step = pmui.ChatStep(
@@ -309,11 +325,11 @@ class ToolCallCard(Viewer):
         self._header.object = f'<div class="tc-head">{"".join(parts)}</div>'
 
     def _update_args(self, *_):
-        html = _format_args(self.call.args, self.call.args_text)
-        if html:
-            self._args.object = html
+        text = _format_args(self.call.args, self.call.args_text)
+        if text:
+            self._args.object = text
         # A pending approval card already lists the arguments, editable.
-        self._args_section.visible = bool(html) and not self._awaiting_approval()
+        self._args_section.visible = bool(text) and not self._awaiting_approval()
 
     def _awaiting_approval(self) -> bool:
         request = self.call.approval
@@ -330,9 +346,11 @@ class ToolCallCard(Viewer):
         if call.status in ("failed", "denied"):
             denied = call.status == "denied"
             message = call.error or ("The call was denied." if denied else "The call failed.")
+            # Denial reasons are prose; errors are often tracebacks or driver messages, kept verbatim.
+            self._error_text.object = "" if denied else f"<pre>{escape(message)}</pre>"
             self._error.param.update(
-                object=_escape_markdown(message), visible=True, severity="warning" if denied else "error",
-                title="Denied" if denied else "Error",
+                object=_escape_markdown(message) if denied else "", visible=True,
+                severity="warning" if denied else "error", title="Denied" if denied else "Error",
             )
             self._show_result(None)
             return
@@ -348,7 +366,7 @@ class ToolCallCard(Viewer):
             self._result_section.visible = False
             return
         value, hint = _truncate(result, self.max_chars, self.max_items)
-        self._result.objects = [render(value, kind="dataframe" if infer_kind(value) == "table" else None)]
+        self._result.objects = [render_output(value, max_lines=self.max_lines)]
         self._hint.object = f'<div class="tc-hint">{escape(hint)}</div>' if hint else ""
         self._result_section.visible = True
 

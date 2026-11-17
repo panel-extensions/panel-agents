@@ -44,7 +44,7 @@ def test_card_expands_on_failure(page):
 
     expect(page.locator(".tc-badge")).to_have_text("Failed")
     expect(page.locator(".MuiAlert-root")).to_contain_text("Binder Error: column qtr not found")
-    expect(page.locator(".tc-args pre")).to_contain_text("SELECT qtr FROM sales")
+    expect(page.locator(".tc-args .codehilite pre")).to_contain_text("SELECT qtr FROM sales")
     expect(page.locator("[aria-label='show more']")).to_have_attribute("aria-expanded", "true")
 
 

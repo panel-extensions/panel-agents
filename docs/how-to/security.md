@@ -12,6 +12,7 @@ panel-agents therefore renders every piece of untrusted text through the `panel_
 - Markdown images become links labelled "image: ...", which only fetch when someone opens them. Inline raster `data:image/...` images are kept, since they load nothing.
 - Links are limited to http, https, mailto and relative URLs, and every link shows its full URL next to its text, so a link cannot pretend to go elsewhere.
 - `$$...$$` is shown as text, never typeset.
+- Code blocks are always escaped, even if syntax highlighting fails. Tool results that are JSON, YAML, code or tracebacks are shown in such code blocks.
 
 Short strings that come from the model, a tool or another user are shown as plain text, never as Markdown or HTML: artifact titles, tool names and descriptions (which a third-party MCP server controls), argument field titles and help, approval reasons, user names and error messages. Values a renderer does not know, such as an object with a `_repr_html_`, are shown with `str()` instead of their HTML.
 
