@@ -13,7 +13,7 @@ import panel_material_ui as pmui
 import param
 from panel.viewable import Viewer
 
-from ..security import untrusted_markdown
+from ..security import _escape_markdown, untrusted_markdown
 from ..state import MessageState, RunState, ToolCallState
 from .approval import ApprovalCard
 from .approval import approval_factory as default_approval_factory
@@ -30,8 +30,9 @@ class AgentChat(Viewer):
     Renders the ``items`` of a ``RunState`` as a chat feed.
 
     User and assistant messages become chat messages whose content
-    streams in place, thinking becomes a collapsed step and tool calls
-    become ``ToolCallCard``s, all in timeline order. Submitted text is
+    streams in place, thinking becomes a collapsed step, tool calls
+    become ``ToolCallCard``s and a failed run an error alert, all in
+    timeline order. Submitted text is
     passed to ``runner.run`` (e.g. an ``AgentRunner``, which records the
     user message itself) or to a plain ``callback``. With ``readonly=True`` no input is shown, e.g. to replay a recording.
     """
@@ -225,6 +226,14 @@ class AgentChat(Viewer):
             return None
         if item.kind == "thinking":
             return self._build_thinking(item)
+        if item.kind == "error":
+            # Error messages may quote provider responses or tool output, so they are shown as plain text.
+            alert = pmui.Alert(
+                object=_escape_markdown(item.content), severity="error", variant="outlined",
+                sizing_mode="stretch_width", margin=0, css_classes=["run-error"],
+            )
+            self._views[id(item)] = alert
+            return pmui.ChatMessage(alert, **self._message_params(self._agent_name(item.run_id), item.created_at))
         user = self.user if item.role == "user" else self._agent_name(item.run_id)
         # Message text may carry injected content, so it is rendered inert: no images or HTML that load by themselves.
         pane = untrusted_markdown(item.content)

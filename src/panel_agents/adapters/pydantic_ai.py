@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -53,6 +54,8 @@ from .. import events as ev
 from ..actions import Action, ActionRegistry
 from ..policy import ApprovalPolicy
 from ..recording import _dump_event
+
+_log = logging.getLogger(__name__)
 from ..state import ApprovalRequest, RunState, _new_id
 
 __all__ = [
@@ -443,7 +446,9 @@ class AgentRunner(param.Parameterized):
     raise_errors = param.Boolean(default=False, doc="""
         Whether exceptions raised by a run propagate out of ``run`` after
         the RunError event is applied. When False, ``run`` returns None
-        and the exception is available as ``error``.""")
+        and the exception is available as ``error``. Either way a failed
+        run is logged with its traceback and shows as an error message in
+        the timeline.""")
 
     run_kwargs = param.Dict(default={}, doc="Extra keyword arguments passed to ``Agent.run_stream_events``.")
 
@@ -615,6 +620,8 @@ class AgentRunner(param.Parameterized):
             if result is not None and isinstance(result.output, DeferredToolRequests):
                 self.deferred = result.output
         if stream.error is not None:
+            if not isinstance(stream.error, RunCancelled):
+                _log.error("Agent run %s failed", stream.run_id, exc_info=stream.error)
             if self.raise_errors:
                 raise stream.error
             return None

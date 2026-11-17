@@ -8,7 +8,7 @@ This page lists the public API of panel-agents 1.x. Every name below is covered 
 
 | Name | Purpose |
 | --- | --- |
-| `AgentChat(state=None, *, runner, callback, readonly, add_user_message, approval_factory, can_approve, user, assistant, placeholder, tool_labels, group_tool_calls, feed_params)` | Chat feed of a `RunState` with streaming messages, thinking steps and tool-call cards; `tool_labels` names calls in the user's words and `group_tool_calls` folds runs of finished calls into one row. `submit(text)` sends text as the user would. |
+| `AgentChat(state=None, *, runner, callback, readonly, add_user_message, approval_factory, can_approve, user, assistant, placeholder, tool_labels, group_tool_calls, feed_params)` | Chat feed of a `RunState` with streaming messages, thinking steps, tool-call cards and an error alert for a failed run; `tool_labels` names calls in the user's words and `group_tool_calls` folds runs of finished calls into one row. `submit(text)` sends text as the user would. |
 | `AgentDrawer(runner=None, *, state, main, open, width, title, variant, overlay_below, tab, show_artifacts, show_approvals, open_on_approval, can_approve, on_apply, chat_params)` | A right-hand drawer with the chat, artifacts and approvals, docked beside `main`. `toggle` (with `aria-expanded` and the pending count in its accessible name), `content`, `chat`, `artifacts`, `approvals`, `new_conversation()`. |
 | `ApprovalCard(request=None, state=None, *, can_approve, policy_message, require_reason, user, editing)` | Review card for one tool call: edit arguments, approve or deny. `approve()`, `deny()`, `form`, `permitted`, `is_edited`. |
 | `ApprovalQueue(state, *, can_approve, require_reason, user, show_resolved, title, card_factory)` | The pending approvals of a state as cards. `approve_all()`, `deny_all()`, `cards`. |
@@ -62,7 +62,7 @@ Requires the `pydantic-ai` extra.
 
 | Name | Purpose |
 | --- | --- |
-| `AgentRunner(agent=None, state=None, deps=None, *, approval_policy, thread_id, run_kwargs, raise_errors)` | Runs a pydantic-ai agent into a `RunState`, keeping the conversation. `await run(prompt, *, deferred_tool_results=None, **kwargs)`, `cancel()`, `clear()`, `close()`; `running`, `run_id`, `error`, `deferred`, `messages`. |
+| `AgentRunner(agent=None, state=None, deps=None, *, approval_policy, thread_id, run_kwargs, raise_errors)` | Runs a pydantic-ai agent into a `RunState`, keeping the conversation. `await run(prompt, *, deferred_tool_results=None, **kwargs)`, `cancel()`, `clear()`, `close()`; `running`, `run_id`, `error`, `deferred`, `messages`. A failed run, unless cancelled, is logged with its traceback on the `panel_agents` logger and adds an `error` message to the timeline. |
 | `publish_artifact(ctx, artifact_id, value, *, title, kind, metadata, applied=False)` | Publish an artifact version from an async tool. |
 | `artifact_return(return_value, artifact_id, value, *, title, kind, metadata, applied=False)` | Return a value to the model and publish an artifact, from any tool. |
 | `ActionToolset(registry, *, id=None, max_retries=1)` | An `ActionRegistry` as a pydantic-ai toolset. |

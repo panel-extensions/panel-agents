@@ -42,7 +42,8 @@ class MessageState(param.Parameterized):
 
     role = param.Selector(default="assistant", objects=["assistant", "user", "system", "developer"])
 
-    kind = param.Selector(default="text", objects=["text", "thinking"])
+    kind = param.Selector(default="text", objects=["text", "thinking", "error"], doc="""
+        ``error`` messages report a failed run; their content is the error message.""")
 
     content = param.String(default="")
 
@@ -373,8 +374,17 @@ class RunState(param.Parameterized):
         self._update_running()
 
     def _on_run_error(self, event: ev.RunError):
-        if run := self.runs.get(event.run_id):
+        run = self.runs.get(event.run_id)
+        if run is not None:
             run.param.update(status="error", error=event.message, ended_at=event.timestamp)
+        # A sub-run's error reaches its parent, which may recover; a cancellation is the user's own doing.
+        if event.code != "cancelled" and (run is None or run.parent_run_id is None):
+            message = MessageState(
+                message_id=_new_id("msg-"), kind="error", content=event.message, finished=True,
+                run_id=event.run_id, created_at=event.timestamp,
+            )
+            self.messages = {**self.messages, message.message_id: message}
+            self._add_item(message)
         for call in self.tool_calls.values():
             if call.run_id == event.run_id and call.status in ("pending", "running"):
                 call.param.update(status="failed", error=call.error or event.message, ended_at=event.timestamp)
