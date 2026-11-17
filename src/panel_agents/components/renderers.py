@@ -247,7 +247,9 @@ _OUTPUT_TEXT_CSS = """
 # Panel's Markdown styles shrink code blocks to their content and wrap
 # their lines; here they fill the card and long lines scroll instead,
 # with the copy button pinned to the corner rather than scrolling along.
+# Older Panel releases let the pane's inner container grow to its content.
 _CODE_BLOCK_CSS = """
+:host div:not(.codehilite) { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; }
 :host pre:has(> code > .codehilite) { margin: 0.4em 0; white-space: normal; }
 :host pre:has(> code > .codehilite) > code { display: block; padding: 0; background: none; white-space: normal; }
 :host pre:has(> code > .codehilite):first-child { margin-top: 0; }

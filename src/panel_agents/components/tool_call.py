@@ -97,6 +97,7 @@ _ARGS_CSS = """
 
 _ERROR_CSS = """
 :host { width: 100%; min-width: 0; }
+div { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; }
 pre {
   margin: 0; max-height: 320px; overflow: auto; white-space: pre;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; line-height: 1.45;
