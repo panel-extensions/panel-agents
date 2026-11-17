@@ -86,10 +86,13 @@ class DrawerResizeNotifier(JSComponent):
     Tells the page its layout changed once the drawer has opened or closed.
 
     Plots and maps beside an inline drawer only measure themselves on window
-    resizes, so without this they keep the width they had before.
+    resizes, so without this they keep the width they had before. It also
+    reports the window's width, for ``AgentDrawer.overlay_below``.
     """
 
     open = param.Boolean(default=False)
+
+    window_width = param.Integer(default=None, allow_None=True)
 
     _esm = """
     export function render({ model }) {
@@ -97,5 +100,15 @@ class DrawerResizeNotifier(JSComponent):
         // After MUI's drawer transition (225ms).
         setTimeout(() => window.dispatchEvent(new Event("resize")), 260)
       })
+      let timer = null
+      const report = () => {
+        clearTimeout(timer)
+        timer = setTimeout(() => {
+          if (model.window_width !== window.innerWidth) { model.window_width = window.innerWidth }
+        }, 150)
+      }
+      window.addEventListener("resize", report)
+      model.on("remove", () => window.removeEventListener("resize", report))
+      model.window_width = window.innerWidth
     }
     """

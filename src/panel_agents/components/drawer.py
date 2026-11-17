@@ -56,6 +56,13 @@ class AgentDrawer(Viewer):
         persistent: the drawer sits beside the content and narrows it.
         temporary: the drawer overlays the content and closes on outside clicks.""")
 
+    overlay_below = param.Integer(default=None, allow_None=True, bounds=(0, None), doc="""
+        Window width in pixels below which a persistent drawer overlays the
+        content like a temporary one instead of narrowing it, e.g. 1200 so
+        a narrow window keeps its full width for the app. As in the
+        temporary variant, a new approval then only updates the toggle's
+        badge.""")
+
     tab = param.Selector(default="chat", objects=list(_TABS), doc="""
         The view shown in the drawer: the chat, the artifacts (opened from
         the header) or the pending approvals (opened from the bar above the
@@ -181,6 +188,7 @@ class AgentDrawer(Viewer):
 
         self._layout = pmui.Row(sizing_mode="stretch_both", margin=0)
         self._resize = DrawerResizeNotifier(open=self.open, width=0, height=0, margin=0)
+        self._resize.param.watch(lambda e: self._sync_variant(), "window_width")
 
         self.state.param.watch(self._on_pending, "pending_approvals")
         self._watch_store()
@@ -296,9 +304,22 @@ class AgentDrawer(Viewer):
     def _sync_title(self):
         self._toggle.label = self.title
 
-    @param.depends("variant", "main", watch=True)
+    @property
+    def _variant(self) -> str:
+        """The variant in effect: a persistent drawer overlays the app in a narrow window."""
+        width = self._resize.window_width
+        if self.variant == "persistent" and self.overlay_below is not None and width is not None and width < self.overlay_below:
+            return "temporary"
+        return self.variant
+
+    @param.depends("variant", "overlay_below", watch=True)
+    def _sync_variant(self):
+        variant = self._variant
+        self._drawer.param.update(variant=variant, inline=variant == "persistent")
+
+    @param.depends("main", watch=True)
     def _sync_layout(self):
-        self._drawer.param.update(variant=self.variant, inline=self.variant == "persistent")
+        self._sync_variant()
         if self.main is None:
             self._layout.objects = [self._drawer, self._resize]
         else:
@@ -314,7 +335,7 @@ class AgentDrawer(Viewer):
     def _on_pending(self, *events):
         pending = len(self.state.pending_approvals)
         self._toggle.count = pending
-        if pending > self._pending_seen and self.open_on_approval and self.variant == "persistent":
+        if pending > self._pending_seen and self.open_on_approval and self._variant == "persistent":
             self.open = True
         self._pending_seen = pending
         self._update_labels()

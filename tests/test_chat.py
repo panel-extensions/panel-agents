@@ -201,3 +201,81 @@ def test_empty_thinking_is_hidden_once_finished():
     assert message.visible
     state.apply(ev.ThinkingEnd(message_id="t"))
     assert not message.visible
+
+
+def calls(state, *specs, run_id="r1"):
+    for call_id, name, outcome in specs:
+        state.apply_many([
+            ev.ToolCallStart(tool_call_id=call_id, tool_name=name, run_id=run_id, timestamp=100.0),
+            ev.ToolCallArgs(tool_call_id=call_id, delta='{"name": "kpi"}', run_id=run_id),
+            ev.ToolCallEnd(tool_call_id=call_id, run_id=run_id),
+        ])
+        if outcome is not None:
+            state.apply(ev.ToolCallResult(
+                tool_call_id=call_id, content=outcome, is_error=outcome == "boom", run_id=run_id, timestamp=101.0,
+            ))
+
+
+def group_rows(chat):
+    return [g for g in chat._groups.values() if g.message in chat.feed.objects]
+
+
+def test_finished_calls_fold_into_one_row_that_expands():
+    state = RunState(flush_interval=0)
+    state.apply(ev.RunStarted(run_id="r1"))
+    chat = AgentChat(state)
+    calls(state, ("a", "read", "ok"), ("b", "list", "ok"), ("c", "check", "ok"))
+    (group,) = group_rows(chat)
+    assert group.button.label == "3 steps · 3.0s"
+    assert group.button.description == "3 steps, 3.0s, expand"
+    assert chat.feed.objects.index(group.message) < chat.feed.objects.index(chat._messages[id(state.tool_calls["a"])])
+    assert not any(chat._messages[id(state.tool_calls[c])].visible for c in "abc")
+    group.toggle()
+    assert all(chat._messages[id(state.tool_calls[c])].visible for c in "abc")
+    assert group.button.description.endswith("collapse")
+
+
+def test_failed_running_and_artifact_calls_are_never_folded():
+    state = RunState(flush_interval=0)
+    state.apply(ev.RunStarted(run_id="r1"))
+    chat = AgentChat(state)
+    calls(state, ("a", "read", "ok"), ("b", "write", "boom"), ("c", "read", "ok"), ("d", "list", None))
+    assert group_rows(chat) == []
+    state.apply(ev.ArtifactPublished(artifact_id="doc", value="x", tool_call_id="e", run_id="r1"))
+    calls(state, ("e", "publish", "ok"), ("f", "read", "ok"))
+    assert group_rows(chat) == []
+    state.apply(ev.ToolCallResult(tool_call_id="d", content="ok", run_id="r1"))
+    (group,) = group_rows(chat)
+    assert group.calls == [state.tool_calls["c"], state.tool_calls["d"]]
+
+
+def test_a_visible_message_splits_groups_and_grouping_can_be_off():
+    state = RunState(flush_interval=0)
+    state.apply(ev.RunStarted(run_id="r1"))
+    chat = AgentChat(state)
+    calls(state, ("a", "read", "ok"), ("b", "read", "ok"))
+    state.apply_many([
+        ev.TextMessageStart(message_id="m", run_id="r1"),
+        ev.TextMessageContent(message_id="m", delta="Halfway.", run_id="r1"),
+    ])
+    calls(state, ("c", "read", "ok"), ("d", "read", "ok"))
+    assert len(group_rows(chat)) == 2
+    chat.group_tool_calls = False
+    assert group_rows(chat) == []
+    assert all(chat._messages[id(state.tool_calls[c])].visible for c in "abcd")
+
+
+def test_tool_labels_name_calls_in_the_users_words():
+    state = RunState(flush_interval=0)
+    state.apply(ev.RunStarted(run_id="r1"))
+    chat = AgentChat(state, tool_labels={
+        "read": "Read the dashboard", "set": lambda args: f"Changed {args['name']}", "bad": lambda args: 1 / 0,
+    })
+    calls(state, ("a", "read", None), ("b", "set", None), ("c", "bad", None), ("d", "other", None))
+    header = lambda c: chat.view_for(state.tool_calls[c])._header.object
+    assert "Read the dashboard" in header("a") and "(read)" in header("a") and "tc-preview" not in header("a")
+    assert "Changed kpi" in header("b")
+    assert "tc-name" in header("c") and "tc-name" in header("d")
+    assert chat.view_for(state.tool_calls["a"])._tool_section.visible
+    chat.tool_labels = {}
+    assert "tc-name" in header("a")

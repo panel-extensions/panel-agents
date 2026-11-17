@@ -22,6 +22,8 @@ pmui.Page(title="My app", header=[drawer.toggle], main=[drawer]).servable()
 
 - The runner's `state` is shown and its `approval_policy.can_approve` decides who may approve, in the chat and in the approvals view. Pass `can_approve` to override it.
 - `on_apply` is the callback for document artifacts. The artifacts view offers to apply or revert their versions, see [document artifacts](document-artifacts.md).
+- `overlay_below=1200` makes a persistent drawer overlay the app, like the temporary variant, while the window is narrower than 1200 px, so a small screen keeps its full width for the app. In that mode a new approval only updates the toggle's badge.
+- Finished tool calls of a run fold into one "3 steps · 2.1s" row that expands; calls that failed, were denied, wait for approval or published an artifact always show. Turn it off with `chat_params={"group_tool_calls": False}`. `chat_params={"tool_labels": {...}}` names calls in the user's words, by tool name, with a string or a callable of the call's arguments, e.g. `{"get_report": "Read the report", "update_report": lambda args: "Change " + ", ".join(args)}`; imperative labels read right whether the call is running, done, failed or waiting for approval. The tool name stays in the card's body and its accessible name.
 - `chat_params` are passed to the `AgentChat`, for example `{"placeholder": "Ask about this dashboard"}`.
 - The New conversation button starts a new conversation. It clears the runner's history and the session's runs, artifacts and approvals, and is disabled while a run is in progress. When there are document artifacts, it asks first, because their versions could no longer be compared or reverted.
 

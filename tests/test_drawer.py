@@ -181,3 +181,19 @@ def test_new_conversation_asks_before_dropping_documents():
     assert drawer._confirm.open and runner.cleared == 0
     drawer._confirm_new_conversation()
     assert not drawer._confirm.open and runner.cleared == 1 and len(runner.state.artifacts) == 0
+
+
+def test_a_narrow_window_overlays_a_persistent_drawer():
+    runner = Runner()
+    drawer = AgentDrawer(runner, main=pmui.Typography("app"), overlay_below=1200)
+    assert drawer._drawer.variant == "persistent" and drawer._drawer.inline
+    drawer._resize.window_width = 1024
+    assert drawer._drawer.variant == "temporary" and not drawer._drawer.inline
+    assert drawer.variant == "persistent"
+    request(runner.state)
+    assert not drawer.open and drawer.toggle.count == 1
+    drawer._resize.window_width = 1440
+    assert drawer._drawer.variant == "persistent" and drawer._drawer.inline
+    drawer.overlay_below = None
+    drawer._resize.window_width = 800
+    assert drawer._drawer.variant == "persistent"

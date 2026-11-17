@@ -64,6 +64,10 @@ _HEADER_CSS = """
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem;
   color: var(--mui-palette-text-secondary, rgba(127, 127, 127, 0.9));
 }
+.tc-label-text {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tc-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .tc-meta { display: flex; align-items: center; gap: 0.5em; flex: none; }
 .tc-badge {
   padding: 0 0.55em; border-radius: 999px; font-size: 0.7rem; font-weight: 600;
@@ -103,6 +107,7 @@ _LABEL_CSS = """
   font-size: 0.68rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
   color: var(--mui-palette-text-secondary, rgba(127, 127, 127, 0.9)); margin-top: 0.4em;
 }
+.tc-tool { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; }
 .tc-hint { font-size: 0.75rem; font-style: italic; color: var(--mui-palette-text-secondary, gray); }
 """
 
@@ -198,6 +203,13 @@ class ToolCallCard(Viewer):
 
     collapsed = param.Boolean(default=True, doc="Whether the card body is collapsed.")
 
+    label = param.Parameter(default=None, doc="""
+        What the call does in the user's words, e.g. "Read the dashboard",
+        shown in the header instead of the tool name and arguments, which
+        move into the body. A callable is called with the call's arguments;
+        if it raises or returns anything but a non-empty string the header
+        shows the tool name and arguments as without a label.""")
+
     def __init__(self, call: ToolCallState | None = None, **params):
         if call is not None:
             params["call"] = call
@@ -207,6 +219,8 @@ class ToolCallCard(Viewer):
         self._result = pn.Column(sizing_mode="stretch_width", margin=0)
         self._hint = pn.pane.HTML(margin=0, stylesheets=[_LABEL_CSS])
         # Visibility is toggled on layouts only: Panel's HTML view errors if hidden before it renders.
+        self._tool = pn.pane.HTML(margin=0, stylesheets=[_LABEL_CSS])
+        self._tool_section = pn.Column(self._tool, sizing_mode="stretch_width", margin=0, visible=False)
         self._args_section = pn.Column(
             self._label("Arguments"), self._args, sizing_mode="stretch_width", margin=0, visible=False,
         )
@@ -217,7 +231,7 @@ class ToolCallCard(Viewer):
         self._approval = pn.Column(sizing_mode="stretch_width", margin=0, visible=False)
         self._artifacts = pmui.Row(sizing_mode="stretch_width", margin=(5, 0), visible=False)
         self._step = pmui.ChatStep(
-            self._approval, self._args_section, self._result_section, self._error, self._artifacts,
+            self._tool_section, self._approval, self._args_section, self._result_section, self._error, self._artifacts,
             status=_STEP_STATUS[self.call.status], collapsed=self.collapsed, collapsed_on_success=False,
             sizing_mode="stretch_width", margin=(4, 0), css_classes=["tool-call-card"],
         )
@@ -259,11 +273,30 @@ class ToolCallCard(Viewer):
     def _refresh_approval(self):
         self._update_approval()
 
+    def resolved_label(self) -> str | None:
+        """The label of the call, or None when there is none or it could not be made."""
+        label = self.label
+        if callable(label):
+            try:
+                label = label(dict(self.call.args))
+            except Exception:
+                return None
+        return label if isinstance(label, str) and label.strip() else None
+
+    @param.depends("label", watch=True)
     def _update_header(self, *_):
         call = self.call
-        parts = [f'<span class="tc-name">{escape(call.tool_name)}</span>']
-        preview = _args_preview(call.args)
-        parts.append(f'<span class="tc-preview" title="{escape(preview)}">{escape(preview)}</span>')
+        label = self.resolved_label()
+        name = escape(call.tool_name)
+        if label is not None:
+            # The tool stays in the accessible name and in the body, so a label cannot hide what ran.
+            parts = [f'<span class="tc-label-text">{escape(label)}<span class="tc-sr"> ({name})</span></span>']
+            self._tool.object = f'<div class="tc-label">Tool</div><div class="tc-tool">{name}</div>'
+        else:
+            parts = [f'<span class="tc-name">{name}</span>']
+            preview = _args_preview(call.args)
+            parts.append(f'<span class="tc-preview" title="{escape(preview)}">{escape(preview)}</span>')
+        self._tool_section.visible = label is not None
         meta = []
         if badge := _STATUS_BADGES.get(call.status):
             label, kind = badge
