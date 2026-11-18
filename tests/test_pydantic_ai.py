@@ -461,6 +461,52 @@ async def test_edits_from_other_callbacks_during_a_run_are_the_users():
     await runner.run("Delete")
     version = state.artifacts["doc"].latest
     assert (version.run_id, version.tool_call_id, version.actor, version.user) == (None, None, "user", "ann")
+    # The model hears about the person's edit with its next prompt, even though it was made during the run.
+    assert runner._notes == ["The app published version 1 of the artifact 'doc' and now holds it."]
+
+
+async def test_the_agents_own_versions_are_not_reported_back_to_it():
+    from panel_agents import current_run_id
+
+    state = RunState(flush_interval=0)
+    agent = Agent(streaming(calls_then_text(("edit", {}))))
+    seen = {}
+
+    @agent.tool_plain
+    async def edit() -> str:
+        state.publish_artifact("doc", {"a": 1}, applied=True)
+        with state.user_run("Applied the agent's edit") as child:
+            state.publish_artifact("doc", {"a": 2}, applied=True)
+        seen["child"] = child
+        seen["parent"] = current_run_id()
+        return "edited"
+
+    runner = AgentRunner(agent, state)
+    await runner.run("Edit")
+    assert runner._notes == []
+    child = state.runs[seen["child"]]
+    assert (child.parent_run_id, child.input, child.status) == (runner.run_id, "Applied the agent's edit", "finished")
+    version = state.artifacts["doc"].latest
+    assert (version.run_id, version.tool_call_id, version.actor, version.user) == (seen["child"], "call-0", "agent", None)
+    assert seen["parent"] == runner.run_id and not state.running
+
+
+async def test_an_explicit_actor_does_not_inherit_the_tool_call():
+    state = RunState(flush_interval=0)
+    agent = Agent(streaming(calls_then_text(("edit", {}))))
+
+    @agent.tool_plain
+    async def edit() -> str:
+        state.publish_artifact("doc", 1, actor="user", user="ann")
+        state.publish_artifact("doc", 2, actor="import")
+        state.publish_artifact("doc", 3, actor="agent")
+        return "edited"
+
+    runner = AgentRunner(agent, state)
+    await runner.run("Edit")
+    assert [(v.run_id, v.tool_call_id, v.actor, v.user) for v in state.artifacts["doc"].versions] == [
+        (runner.run_id, None, "user", "ann"), (runner.run_id, None, "import", None), (runner.run_id, "call-0", "agent", None),
+    ]
 
 
 # A fake SQL analyst used for the record/replay test and the shared fixture.

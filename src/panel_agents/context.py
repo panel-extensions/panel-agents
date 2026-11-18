@@ -7,9 +7,11 @@ person's edits, so host code called from a tool, such as a document
 mutator, can tell which run and tool call it belongs to without being
 handed a pydantic-ai ``RunContext``. The values live in a context
 variable, so they follow the code into awaited coroutines, tasks it
-starts and worker threads pydantic-ai runs sync tools in, but not into
-unrelated callbacks: a widget callback that fires while an agent runs
-sees no run, and its edits count as the person's.
+starts (also after the run ends) and the worker threads pydantic-ai
+runs sync tools in, but not into independently scheduled callbacks: a
+widget callback that fires while an agent runs sees no run, and its
+edits count as the person's. Callbacks reacting to the run's own
+events run inside the run.
 """
 
 from __future__ import annotations
