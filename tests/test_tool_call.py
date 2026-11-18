@@ -240,6 +240,35 @@ def test_artifact_chips_follow_reset_store(state):
     assert len(card._artifacts.objects) == 1
 
 
+def test_store_looks_up_artifacts_by_tool_call(state):
+    store = state.artifacts
+    store.publish("a", 1, tool_call_id="t1")
+    store.publish("b", 2, tool_call_id="t2")
+    store.publish("b", 3, tool_call_id="t1")
+    store.publish("a", 4, tool_call_id="t1")
+    store.publish("a", 5)
+    assert [(a.artifact_id, v.version) for a, v in store.published_by("t1")] == [("a", 2), ("b", 2)]
+    assert [(a.artifact_id, v.value) for a, v in store.published_by("t2")] == [("b", 2)]
+    assert store.published_by("t9") == []
+
+
+def test_publish_only_updates_cards_of_affected_artifacts(state, monkeypatch):
+    updates = []
+    update = ToolCallCard._update_artifacts
+    monkeypatch.setattr(ToolCallCard, "_update_artifacts", lambda self, *a: (updates.append(self.call.tool_call_id), update(self)))
+    cards = [ToolCallCard(start(state, call_id), state=state) for call_id in ("t1", "t2", "t3")]
+    state.apply(ev.ArtifactPublished(artifact_id="q", value=1, title="Query", tool_call_id="t1"))
+    updates.clear()
+    for n in range(20):
+        state.publish_artifact("doc", n)
+    assert updates == []
+    state.apply(ev.ArtifactPublished(artifact_id="q", value=2, tool_call_id="t2"))
+    assert sorted(updates) == ["t1", "t2"]
+    assert cards[0]._artifacts.objects[0].label == "Query · v1"
+    assert cards[1]._artifacts.objects[0].label == "Query · v2"
+    assert not cards[2]._artifacts.visible
+
+
 def test_collapsed_syncs_both_ways(state):
     card = ToolCallCard(start(state), state=state)
     card._step.collapsed = False
@@ -263,3 +292,40 @@ def test_helpers():
     assert _format_duration(125) == "2m 5s"
     assert _truncate([1, 2, 3], max_items=2) == ([1, 2], "Showing the first 2 of 3 items.")
     assert _truncate({"a": 1}) == ({"a": 1}, None)
+
+
+def test_store_indexes_artifacts_it_starts_with_and_follows_replacement(state):
+    store = state.artifacts
+    store.publish("a", 1, tool_call_id="t1")
+    copy = type(store)(artifacts=dict(store.artifacts))
+    assert [a.artifact_id for a, _ in copy.published_by("t1")] == ["a"]
+    store.artifacts = {}
+    assert store.published_by("t1") == []
+    store.publish("a", 2, tool_call_id="t1")
+    assert [v.value for _, v in store.published_by("t1")] == [2]
+
+
+def test_store_skips_artifacts_removed_in_place(state):
+    store = state.artifacts
+    store.publish("a", 1, tool_call_id="t1")
+    del store.artifacts["a"]
+    store.param.trigger("artifacts")
+    assert store.published_by("t1") == []
+
+
+def test_chips_follow_title_changes(state):
+    card = ToolCallCard(start(state), state=state)
+    state.apply(ev.ArtifactPublished(artifact_id="q", value=1, title="Query", tool_call_id="t1"))
+    state.artifacts["q"].title = "Renamed"
+    assert card._artifacts.objects[0].label == "Renamed"
+
+
+def test_store_lookup_survives_undo_and_redo(state):
+    store = state.artifacts
+    store.publish("doc", "a", tool_call_id="t1", applied=True)
+    store.publish("doc", "b", tool_call_id="t2", applied=True)
+    store.mark_applied("doc", 1, action="undo")
+    assert store["doc"].redo_version == 2
+    assert [v.value for _, v in store.published_by("t2")] == ["b"]
+    store.mark_applied("doc", 2, action="redo")
+    assert [v.value for _, v in store.published_by("t1")] == ["a"]

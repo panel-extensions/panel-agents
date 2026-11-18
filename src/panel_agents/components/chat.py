@@ -21,6 +21,10 @@ from .approval import approval_factory as default_approval_factory
 from .model_call import USAGE_CSS, ModelCallCard, usage_summary, usage_tooltip
 from .tool_call import ToolCallCard, _format_duration
 
+_Step = ToolCallState | ModelCallState
+
+_STEP_TYPES = (ToolCallState, ModelCallState)
+
 _THINKING_CSS = """
 :host { width: 100%; }
 .markdown { font-size: 0.85rem; opacity: 0.75; }
@@ -130,10 +134,18 @@ class AgentChat(Viewer):
             )
         if not self.readonly:
             self._feed._widget.on_action("stop", self._on_stop)
+        # Timeline items in order; only the ones shown get a view and a message.
         self._rendered: list[Any] = []
+        self._index: dict[int, int] = {}
+        self._run_items: dict[str | None, list[Any]] = {}
         self._views: dict[int, Any] = {}
         self._messages: dict[int, pmui.ChatMessage] = {}
+        # Steps (tool and model calls) that are not shown are built once they are, e.g. when their group expands.
+        self._unbuilt: dict[int, _Step] = {}
+        self._built_models: dict[int, ModelCallState] = {}
+        # Step groups keyed by their first step, and the group of each folded step.
         self._groups: dict[int, _StepGroup] = {}
+        self._group_of: dict[int, _StepGroup] = {}
         self._watchers: list[tuple[param.Parameterized, Any]] = []
         self._footers: dict[str, pmui.ChatMessage] = {}
         self._run_watchers: dict[str, tuple[param.Parameterized, Any]] = {}
@@ -152,7 +164,13 @@ class AgentChat(Viewer):
         return self._feed
 
     def view_for(self, item: MessageState | ModelCallState | ToolCallState) -> Any:
-        """The component rendering a timeline item."""
+        """
+        The component rendering a timeline item. Steps that are not shown,
+        such as calls folded into a collapsed group, are only built when
+        they are shown or asked for here.
+        """
+        if id(item) in self._unbuilt:
+            self._materialize([item])
         return self._views[id(item)]
 
     async def submit(self, text: str):
@@ -197,26 +215,58 @@ class AgentChat(Viewer):
 
     def _update_items(self, *_):
         items = self.state.items
-        n = len(self._rendered)
-        if len(items) < n or any(a is not b for a, b in zip(items[:n], self._rendered, strict=True)):
-            self._clear()
-            n = 0
-        for item in items[n:]:
-            message = self._build(item)
-            self._rendered.append(item)
-            if message is not None:
+        old = self._rendered
+        if len(items) >= len(old) and all(a is b for a, b in zip(items, old, strict=False)):
+            new = items[len(old):]
+            tail_from = len(old)
+            for item in new:
+                self._index[id(item)] = len(self._rendered)
+                self._rendered.append(item)
+                self._run_items.setdefault(getattr(item, "run_id", None), []).append(item)
+        else:
+            # Model calls recorded after their response are inserted before it rather than appended.
+            new, j = [], 0
+            for item in items:
+                if j < len(old) and item is old[j]:
+                    j += 1
+                else:
+                    new.append(item)
+            if j < len(old):
+                self._clear()
+                new = list(items)
+                tail_from = 0
+            else:
+                tail_from = next(i for i in range(len(items) - 1, -1, -1) if items[i] is old[-1]) + 1
+            self._rendered = list(items)
+            self._index = {id(item): i for i, item in enumerate(items)}
+            self._run_items = {}
+            for item in items:
+                self._run_items.setdefault(getattr(item, "run_id", None), []).append(item)
+        for item in new:
+            if isinstance(item, _STEP_TYPES):
+                # Whether a step is built now depends on the grouping, which needs every new item.
+                self._unbuilt[id(item)] = item
+                self._watch(item, self._regroup, "status")
+            elif (message := self._build(item)) is not None:
                 self._messages[id(item)] = message
-                self._feed.send(message, respond=False)
-        self._regroup()
+        self._regroup(new=new, tail_from=tail_from)
 
     def _clear(self):
         for obj, watcher in self._watchers:
             obj.param.unwatch(watcher)
+        for view in self._views.values():
+            if isinstance(view, ToolCallCard):
+                view._release()
         self._watchers = []
         self._rendered = []
+        self._index = {}
+        self._run_items = {}
         self._views = {}
         self._messages = {}
+        self._unbuilt = {}
+        self._built_models = {}
         self._groups = {}
+        self._group_of = {}
         self._footers = {}
         self._feed.clear()
 
@@ -240,23 +290,32 @@ class AgentChat(Viewer):
             params["timestamp"] = dt.datetime.fromtimestamp(created_at)
         return params
 
-    def _build(self, item) -> pmui.ChatMessage | None:
-        if isinstance(item, ToolCallState):
+    def _build_step(self, item: _Step) -> pmui.ChatMessage:
+        params = self._message_params(self._agent_name(item.run_id), item.started_at, compact=True)
+        if isinstance(item, ModelCallState):
+            card = ModelCallCard(item, state=self.state)
+            self._built_models[id(item)] = item
+        else:
             card = ToolCallCard(
                 item, state=self.state, approval_factory=self._approval_factory(),
                 label=self.tool_labels.get(item.tool_name),
             )
-            self._views[id(item)] = card
             self._watch(self, lambda e, c=card: setattr(c, "approval_factory", self._approval_factory()), ["approval_factory", "can_approve"])
             self._watch(self, lambda e, c=card, i=item: setattr(c, "label", self.tool_labels.get(i.tool_name)), "tool_labels")
-            self._watch(item, self._regroup, "status")
-            return pmui.ChatMessage(card, **self._message_params(self._agent_name(item.run_id), item.started_at, compact=True))
+        self._views[id(item)] = card
+        message = pmui.ChatMessage(card, visible=self._step_visible(item), **params)
+        self._messages[id(item)] = message
+        self._unbuilt.pop(id(item), None)
+        return message
+
+    def _step_visible(self, item: _Step) -> bool:
+        if (group := self._group_of.get(id(item))) is not None:
+            return group.expanded
         if isinstance(item, ModelCallState):
-            card = ModelCallCard(item, state=self.state)
-            self._views[id(item)] = card
-            self._watch(item, self._regroup, "status")
-            params = self._message_params(self._agent_name(item.run_id), item.started_at, compact=True)
-            return pmui.ChatMessage(card, visible=self.show_model_calls, **params)
+            return self._show_lone_model_call(item)
+        return True
+
+    def _build(self, item) -> pmui.ChatMessage | None:
         if not isinstance(item, MessageState):
             return None
         if item.kind == "thinking":
@@ -310,64 +369,122 @@ class AgentChat(Viewer):
         self._watch(item, update, ["content", "finished"])
         return message
 
-    def _foldable(self, item: ToolCallState | ModelCallState) -> bool:
+    def _foldable(self, item: _Step) -> bool:
         if isinstance(item, ModelCallState):
             return item.status == "success"
         if item.status != "success":
             return False
         if item.approval is not None and item.approval.status != "approved":
             return False
-        card = self._views.get(id(item))
-        return card is not None and not card.published_artifacts()
+        return not self.state.artifacts.published_by(item.tool_call_id)
 
     def _breaks_group(self, item) -> bool:
         message = self._messages.get(id(item))
         return message is not None and message.visible
 
-    @param.depends("group_tool_calls", "show_model_calls", "show_usage", watch=True)
-    def _regroup(self, *_):
-        """Fold runs of two or more untroubled tool and model calls of one run into a step group."""
-        runs: list[list[ToolCallState | ModelCallState]] = []
-        current: list[ToolCallState | ModelCallState] = []
+    def _fold_runs(self) -> dict[int, list[_Step]]:
+        """Runs of two or more untroubled steps of one run, keyed by their first step."""
+        runs: list[list[_Step]] = []
+        current: list[_Step] = []
+        group, models = self.group_tool_calls, self.show_model_calls
         for item in self._rendered:
-            if isinstance(item, ModelCallState) and not self.show_model_calls:
+            if isinstance(item, ModelCallState) and not models:
                 continue
-            if isinstance(item, (ToolCallState, ModelCallState)):
-                if self.group_tool_calls and self._foldable(item) and (not current or current[-1].run_id == item.run_id):
+            if isinstance(item, _STEP_TYPES):
+                foldable = group and self._foldable(item)
+                if foldable and (not current or current[-1].run_id == item.run_id):
                     current.append(item)
                     continue
                 runs.append(current)
-                current = [item] if self.group_tool_calls and self._foldable(item) else []
+                current = [item] if foldable else []
             elif self._breaks_group(item):
                 runs.append(current)
                 current = []
         runs.append(current)
-        wanted = {id(run[0]): run for run in runs if len(run) > 1}
+        return {id(run[0]): run for run in runs if len(run) > 1}
 
-        objects = list(self._feed.objects)
-        changed = False
-        for key in [k for k in self._groups if k not in wanted]:
-            group = self._groups.pop(key)
-            group.release()
-            if group.message in objects:
-                objects.remove(group.message)
-                changed = True
-        for key, members in wanted.items():
+    @param.depends("group_tool_calls", "show_model_calls", "show_usage", watch=True)
+    def _regroup(self, *_, new=(), tail_from=None):
+        """Fold runs of two or more untroubled tool and model calls of one run into a step group."""
+        wanted = self._fold_runs()
+        stale = [key for key in self._groups if key not in wanted]
+        for key in stale:
+            self._groups[key].release()
+        added, group_of = [], {}
+        for key, calls in wanted.items():
             group = self._groups.get(key)
             if group is None:
-                first = self._messages[key]
-                group = self._groups[key] = _StepGroup(self, first.user)
-                if first in objects:
-                    objects.insert(objects.index(first), group.message)
-                    changed = True
-            group.update([self._messages[id(m)] for m in members], members)
-        grouped = {id(m) for members in wanted.values() for m in members}
-        for item in self._rendered:
-            if isinstance(item, ModelCallState) and id(item) not in grouped:
-                self._messages[id(item)].visible = self._show_lone_model_call(item)
-        if changed:
-            self._feed.objects = objects
+                group = self._groups[key] = _StepGroup(self, self._agent_name(calls[0].run_id))
+                added.append(group)
+            for call in calls:
+                group_of[id(call)] = group
+        self._group_of = group_of
+        for key, calls in wanted.items():
+            self._groups[key].update(calls)
+        for key, item in self._built_models.items():
+            if key not in group_of:
+                self._messages[key].visible = self._show_lone_model_call(item)
+        shown = [item for item in self._unbuilt.values() if self._step_visible(item)]
+        for item in shown:
+            self._build_step(item)
+        built = {id(item) for item in shown}
+        placed = [item for item in new if id(item) in self._messages and id(item) not in built] + shown
+        self._place(placed, tail_from, added, [self._groups.pop(key) for key in stale])
         self._update_usage()
+
+    def _materialize(self, items: list[_Step]):
+        """Build steps that are not shown yet, e.g. when their group expands."""
+        for item in items:
+            self._build_step(item)
+        self._place(items, None, (), ())
+
+    def _place(self, items, tail_from, added, removed):
+        """
+        Put the messages of newly built items and new group rows into the
+        feed and take removed rows out, assigning the feed's objects at
+        most once. Items from ``tail_from`` on are appended, like
+        ChatFeed.send, after anything else in the feed.
+        """
+        if not (items or added or removed):
+            return
+        objects = list(self._feed.objects)
+        present = {id(obj) for obj in objects}
+        tail_from = len(self._rendered) if tail_from is None else tail_from
+        messages = []
+        for item in sorted(items, key=lambda i: self._index[id(i)]):
+            message = self._messages[id(item)]
+            index = self._index[id(item)]
+            position = len(objects) if index >= tail_from else self._position(objects, present, index)
+            objects.insert(position, message)
+            present.add(id(message))
+            messages.append(message)
+        for group in added:
+            first = self._messages.get(id(group.calls[0]))
+            if first is not None and id(first) in present:
+                position = objects.index(first)
+            else:
+                position = self._position(objects, present, self._index[id(group.calls[0])], own_row=False)
+            objects.insert(position, group.message)
+            present.add(id(group.message))
+        for group in removed:
+            if id(group.message) in present:
+                objects.remove(group.message)
+        self._feed.objects = objects
+        for message in messages:
+            self._feed._run_post_hook(message)
+
+    def _position(self, objects, present, index: int, own_row: bool = True) -> int:
+        """Where a message for the item at ``index`` goes: after what earlier items put in the feed."""
+        for j in range(index, -1, -1):
+            item = self._rendered[j]
+            message = self._messages.get(id(item)) if j < index else None
+            if message is not None and id(message) in present:
+                return objects.index(message) + 1
+            group = self._groups.get(id(item)) if j < index or own_row else None
+            if group is not None and id(group.message) in present:
+                return objects.index(group.message) + 1
+        owned = {id(m) for m in self._messages.values()} | {id(g.message) for g in self._groups.values()}
+        return next((k for k, obj in enumerate(objects) if id(obj) in owned), len(objects))
 
     def _show_lone_model_call(self, item: ModelCallState) -> bool:
         if not self.show_model_calls:
@@ -386,21 +503,12 @@ class AgentChat(Viewer):
 
     def _update_usage(self):
         """Show each finished run's usage totals under the last message of the run that is shown."""
-        objects = self._feed.objects
-        owners = {id(self._messages[id(item)]): item for item in self._rendered if id(item) in self._messages}
-        groups = {id(group.message): group.calls[0] for group in self._groups.values() if group.calls}
-        last: dict[str, pmui.ChatMessage] = {}
-        for message in objects:
-            item = owners.get(id(message)) or groups.get(id(message))
-            if item is None or not message.visible or (isinstance(item, MessageState) and item.role == "user"):
-                continue
-            last[item.run_id] = message
         wanted = {}
         if self.show_usage:
-            for run_id, message in last.items():
-                run = self.state.runs.get(run_id)
-                if run is not None and run.status != "running" and run.usage and run.parent_run_id is None:
-                    wanted[run_id] = message
+            for run_id, run in self.state.runs.items():
+                if run.status != "running" and run.usage and run.parent_run_id is None:
+                    if (message := self._last_shown(run_id)) is not None:
+                        wanted[run_id] = message
         for run_id, message in list(self._footers.items()):
             if wanted.get(run_id) is not message:
                 message.footer_objects = []
@@ -415,6 +523,17 @@ class AgentChat(Viewer):
                 continue
             message.footer_objects = [pn.pane.HTML(footer, margin=(0, 10), stylesheets=[USAGE_CSS], css_classes=["run-usage"])]
             self._footers[run_id] = message
+
+    def _last_shown(self, run_id: str) -> pmui.ChatMessage | None:
+        """The run's last visible message or group row in the feed, leaving out user messages."""
+        for item in reversed(self._run_items.get(run_id, ())):
+            message = self._messages.get(id(item))
+            if message is not None and message.visible and not (isinstance(item, MessageState) and item.role == "user"):
+                return message
+            group = self._groups.get(id(item))
+            if group is not None and group.message.visible:
+                return group.message
+        return None
 
     def _approval_factory(self):
         factory, can_approve = self.approval_factory, self.can_approve
@@ -434,26 +553,41 @@ class AgentChat(Viewer):
 
 
 class _StepGroup:
-    """The folded row standing in for a run of tool call messages."""
+    """The folded row standing in for a run of tool and model call messages."""
 
     def __init__(self, chat: AgentChat, user: str):
+        self.chat = chat
         self.expanded = False
-        self.members: list[pmui.ChatMessage] = []
         self.button = pmui.Button(
             variant="text", size="small", icon="expand_more", margin=0,
             sx={"textTransform": "none", "fontWeight": 400, "justifyContent": "flex-start", "color": "text.secondary"},
             on_click=lambda e: self.toggle(),
         )
         self.message = pmui.ChatMessage(self.button, **chat._message_params(user, None, compact=True))
-        self.calls: list[ToolCallState | ModelCallState] = []
+        self.calls: list[_Step] = []
 
-    def update(self, members: list[pmui.ChatMessage], calls: list[ToolCallState | ModelCallState]):
-        self.members, self.calls = members, calls
+    @property
+    def members(self) -> list[pmui.ChatMessage]:
+        """The messages of the steps built so far."""
+        return [m for c in self.calls if (m := self.chat._messages.get(id(c))) is not None]
+
+    def update(self, calls: list[_Step]):
+        if len(calls) == len(self.calls) and all(a is b for a, b in zip(calls, self.calls, strict=True)):
+            return
+        kept = {id(c) for c in calls}
+        left = [c for c in self.calls if id(c) not in kept]
+        self.calls = calls
+        for call in left:
+            if (message := self.chat._messages.get(id(call))) is not None:
+                message.visible = self.chat._step_visible(call)
         self._sync()
 
     def toggle(self):
         self.expanded = not self.expanded
+        if self.expanded:
+            self.chat._materialize([c for c in self.calls if id(c) in self.chat._unbuilt])
         self._sync()
+        self.chat._update_usage()
 
     def release(self):
         for message in self.members:

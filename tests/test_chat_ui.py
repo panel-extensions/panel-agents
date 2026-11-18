@@ -77,6 +77,10 @@ def test_chat_shows_streamed_text(page):
 
     state.apply(ev.RunStarted(run_id="r1", agent_name="Analyst"))
     state.apply(ev.TextMessageStart(message_id="m1", run_id="r1"))
+    # The test changes the state from outside the server's thread: an update made while the new
+    # message is still being rendered can be lost, so wait until it is.
+    pane = chat.view_for(state.messages["m1"]).object
+    wait_until(lambda: bool(pane._models), page)
     state.apply(ev.TextMessageContent(message_id="m1", delta="EMEA grew ", run_id="r1"))
     expect(page.locator(".markdown", has_text="EMEA grew")).to_be_visible()
     state.apply(ev.TextMessageContent(message_id="m1", delta="by **12%**.", run_id="r1"))

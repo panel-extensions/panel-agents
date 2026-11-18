@@ -5,7 +5,9 @@ import pytest
 from panel_agents import RunState
 from panel_agents import events as ev
 from panel_agents.components.chat import AgentChat
+from panel_agents.components.model_call import ModelCallCard
 from panel_agents.components.tool_call import ToolCallCard
+from panel_agents.state import ModelCallState
 
 
 def run_events():
@@ -298,3 +300,239 @@ def test_stop_cancels_the_runner():
     chat = AgentChat(runner=runner)
     chat._on_stop()
     assert runner.cancelled == 1
+
+
+def finished_run(run_id, n_calls=3, publish=True, usage=False, answer="EMEA leads."):
+    """
+    A finished run whose first calls fold into a group and whose last one
+    publishes a table. With ``usage`` each call is followed by the Usage of
+    the model request that issued it, which the state inserts as a model call.
+    """
+    events = [
+        ev.RunStarted(run_id=run_id),
+        ev.TextMessageStart(message_id=f"{run_id}-u", role="user", run_id=run_id),
+        ev.TextMessageContent(message_id=f"{run_id}-u", delta="Revenue?", run_id=run_id),
+        ev.ThinkingStart(message_id=f"{run_id}-t", run_id=run_id),
+        ev.ThinkingContent(message_id=f"{run_id}-t", delta="Look it up.", run_id=run_id),
+        ev.ThinkingEnd(message_id=f"{run_id}-t", run_id=run_id),
+    ]
+    for k in range(n_calls):
+        call_id = f"{run_id}-c{k}"
+        events += [
+            ev.ToolCallStart(tool_call_id=call_id, tool_name="read" if k else "list", run_id=run_id, timestamp=100.0),
+            ev.ToolCallArgs(tool_call_id=call_id, delta='{"name": "kpi"}', run_id=run_id),
+            ev.ToolCallEnd(tool_call_id=call_id, run_id=run_id),
+        ]
+        if publish and k == n_calls - 1:
+            events.append(ev.ArtifactPublished(artifact_id=f"{run_id}-a", value=[1], tool_call_id=call_id, run_id=run_id))
+        events.append(ev.ToolCallResult(tool_call_id=call_id, content="ok", run_id=run_id, timestamp=100.5))
+        if usage:
+            events.append(ev.Usage(model="m", input_tokens=100, output_tokens=10, duration=0.2, run_id=run_id, timestamp=100.6))
+    events += [
+        ev.TextMessageStart(message_id=f"{run_id}-m", run_id=run_id),
+        ev.TextMessageContent(message_id=f"{run_id}-m", delta=answer, run_id=run_id),
+        ev.RunFinished(run_id=run_id),
+    ]
+    return events
+
+
+def test_folded_calls_are_built_when_their_group_expands():
+    state = RunState.from_events(finished_run("r1"))
+    policy = lambda request, user: True
+    chat = AgentChat(state, can_approve=policy)
+    folded = [state.tool_calls[f"r1-c{k}"] for k in (0, 1)]
+    (group,) = group_rows(chat)
+    assert group.calls == folded
+    assert not any(id(c) in chat._views for c in folded)
+    chat.tool_labels = {"read": "Read the report"}
+    group.toggle()
+    members = [chat._messages[id(c)] for c in folded]
+    objects = chat.feed.objects
+    row = objects.index(group.message)
+    assert objects[row + 1:row + 3] == members
+    assert all(m.visible for m in members)
+    card = chat.view_for(folded[1])
+    assert "Read the report" in card._header.object
+    chat.tool_labels = {"read": "Read it"}
+    assert "Read it" in card._header.object
+    chat.approval_factory = None
+    assert card.approval_factory is None
+    group.toggle()
+    assert not any(m.visible for m in members)
+
+
+def test_view_for_builds_a_folded_call_hidden_in_place():
+    state = RunState.from_events(finished_run("r1"))
+    chat = AgentChat(state)
+    (group,) = group_rows(chat)
+    second = state.tool_calls["r1-c1"]
+    card = chat.view_for(second)
+    assert isinstance(card, ToolCallCard)
+    message = chat._messages[id(second)]
+    assert not message.visible
+    objects = chat.feed.objects
+    assert objects.index(group.message) < objects.index(message) < objects.index(chat._messages[id(state.tool_calls["r1-c2"])])
+    group.toggle()
+    first = chat._messages[id(state.tool_calls["r1-c0"])]
+    assert chat.feed.objects.index(first) == chat.feed.objects.index(message) - 1
+
+
+def test_ungrouping_builds_and_shows_folded_calls_in_order():
+    state = RunState.from_events(finished_run("r1"))
+    chat = AgentChat(state)
+    chat.group_tool_calls = False
+    assert group_rows(chat) == []
+    calls = [chat._messages[id(state.tool_calls[f"r1-c{k}"])] for k in range(3)]
+    assert all(m.visible for m in calls)
+    objects = chat.feed.objects
+    assert [objects.index(m) for m in calls] == [2, 3, 4]
+    chat.group_tool_calls = True
+    (group,) = group_rows(chat)
+    assert objects == chat.feed.objects[:2] + chat.feed.objects[3:]
+    assert chat.feed.objects.index(group.message) == 2
+
+
+class _Counted:
+    """Counts ChatMessage constructions and changes to the messages the feed's log renders."""
+
+    def __init__(self, monkeypatch):
+        self.messages = 0
+        self.assignments = 0
+        counter = self
+
+        class ChatMessage(pmui.ChatMessage):
+            def __init__(self, *args, **params):
+                counter.messages += 1
+                super().__init__(*args, **params)
+
+        class ChatFeed(pmui.ChatFeed):
+            def __init__(self, *args, **params):
+                super().__init__(*args, **params)
+                self._chat_log.param.watch(lambda e: setattr(counter, "assignments", counter.assignments + 1), "objects")
+
+        monkeypatch.setattr(pmui, "ChatMessage", ChatMessage)
+        monkeypatch.setattr(pmui, "ChatFeed", ChatFeed)
+
+    def reset(self):
+        self.messages = self.assignments = 0
+
+
+@pytest.mark.parametrize("n_runs", [1, 20])
+@pytest.mark.parametrize("usage", [False, True])
+def test_long_feeds_build_shown_items_once(monkeypatch, n_runs, usage):
+    # Per run: user message, thinking, the row of the folded steps, the publishing call and the answer.
+    counted = _Counted(monkeypatch)
+    cards = []
+    monkeypatch.setattr(ToolCallCard, "__init__", lambda self, *a, _init=ToolCallCard.__init__, **k: (cards.append(self), _init(self, *a, **k))[1])
+    state = RunState.from_events([e for i in range(n_runs) for e in finished_run(f"r{i}", usage=usage)])
+    chat = AgentChat(state, readonly=True)
+    assert counted.messages == 5 * n_runs
+    assert len(cards) == n_runs
+    assert counted.assignments == 1
+    assert len(chat.feed.objects) == 5 * n_runs
+
+    counted.reset()
+    state.add_user_message("One more")
+    assert counted.messages == 1
+    assert counted.assignments == 1
+
+    counted.reset()
+    first = chat.feed.objects[0]
+    state.apply_many(finished_run("next", usage=usage))
+    # Steps of a running run are shown, so a live run builds them; model calls inserted
+    # before their response go into place without rebuilding the feed.
+    assert chat.feed.objects[0] is first
+    assert counted.messages == (11 if usage else 7)
+    assert len(group_rows(chat)) == n_runs + 1
+
+
+def test_a_folded_group_of_tool_and_model_calls_expands_and_moves_the_usage_line():
+    state = RunState.from_events(finished_run("r1", publish=False, usage=True, answer=""))
+    chat = AgentChat(state, readonly=True)
+    (group,) = group_rows(chat)
+    steps = [state.tool_calls["r1-c0"], *list(state.model_calls.values())[1:], state.tool_calls["r1-c1"], state.tool_calls["r1-c2"]]
+    assert set(map(id, group.calls)) == set(map(id, steps))
+    assert any(isinstance(c, ModelCallState) for c in group.calls)
+    assert not any(id(c) in chat._messages for c in group.calls)
+    # The run shows no answer, so its totals sit under the group row.
+    assert group.message.footer_objects
+    group.toggle()
+    members = [chat._messages[id(c)] for c in group.calls]
+    objects = chat.feed.objects
+    row = objects.index(group.message)
+    assert objects[row + 1:row + 1 + len(members)] == members
+    assert all(m.visible for m in members)
+    assert isinstance(chat.view_for(group.calls[1]), ModelCallCard)
+    assert not group.message.footer_objects
+    assert members[-1].footer_objects
+    group.toggle()
+    assert group.message.footer_objects and not members[-1].footer_objects
+
+
+def test_hidden_model_calls_are_built_when_shown():
+    state = RunState.from_events(finished_run("r1", n_calls=1, publish=False, usage=True))
+    chat = AgentChat(state, show_model_calls=False)
+    (call,) = state.model_calls.values()
+    assert id(call) not in chat._messages
+    chat.show_model_calls = True
+    # A lone request of a finished run is reported by the usage line instead.
+    assert id(call) not in chat._messages
+    chat.show_usage = False
+    assert chat._messages[id(call)].visible
+    assert chat._messages[id(call)] in chat.feed.objects
+
+
+def test_post_hook_runs_for_each_message_put_in_the_feed():
+    state = RunState.from_events(finished_run("r1"))
+    hooked = []
+    chat = AgentChat(state, feed_params={"post_hook": lambda message, feed: hooked.append(message)})
+    assert hooked == [m for m in chat.feed.objects if m not in [g.message for g in chat._groups.values()]]
+    hooked.clear()
+    state.add_user_message("more")
+    assert hooked == [chat.feed.objects[-1]]
+
+
+def test_reset_releases_cards_from_the_artifact_store():
+    state = RunState.from_events(finished_run("r1"))
+    chat = AgentChat(state)
+    card = chat.view_for(state.tool_calls["r1-c2"])
+    assert card._artifacts.visible
+    state.reset()
+    store = state.artifacts
+    store.publish("r1-a", 1, tool_call_id="r1-c2")
+    assert card._unwatch_artifacts is None
+    assert not store._call_watchers.get("r1-c2")
+
+
+def test_replacing_the_artifacts_keeps_the_chat_working():
+    state = RunState.from_events(finished_run("r1"))
+    chat = AgentChat(state)
+    state.artifacts.artifacts = {}
+    state.add_user_message("more")
+    assert len(group_rows(chat)) == 1 and chat.feed.objects[-1].object.object == "more"
+
+
+def test_a_model_call_inserted_before_its_response_keeps_the_feed():
+    state = RunState(flush_interval=0)
+    chat = AgentChat(state, readonly=True)
+    state.apply_many([
+        ev.RunStarted(run_id="r1"),
+        ev.TextMessageStart(message_id="u", role="user", run_id="r1"),
+        ev.TextMessageContent(message_id="u", delta="Hi", run_id="r1"),
+    ])
+    state.apply(ev.Usage(model="m", input_tokens=1, output_tokens=1, run_id="r1"))
+    state.apply_many([
+        ev.TextMessageStart(message_id="a", run_id="r1"),
+        ev.TextMessageContent(message_id="a", delta="Hello", run_id="r1"),
+    ])
+    views = {id(i): chat.view_for(i) for i in state.items}
+    before = list(chat.feed.objects)
+    # A Usage without a ModelRequestStarted goes before the response it paid for.
+    state.apply(ev.Usage(model="m", input_tokens=2, output_tokens=2, run_id="r1"))
+    second = list(state.model_calls.values())[-1]
+    assert state.items.index(second) < state.items.index(state.messages["a"])
+    assert all(chat.view_for(i) is v for i, v in ((i, views[id(i)]) for i in state.items if id(i) in views))
+    objects = chat.feed.objects
+    assert [o for o in objects if o in before] == before
+    message = chat._messages[id(second)]
+    assert objects.index(message) < objects.index(chat._messages[id(state.messages["a"])])

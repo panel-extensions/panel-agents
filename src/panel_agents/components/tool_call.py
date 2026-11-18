@@ -256,7 +256,9 @@ class ToolCallCard(Viewer):
         self._step.param.watch(lambda e: setattr(self, "collapsed", e.new), "collapsed")
         self._approval_watcher = None
         self._rendered_result = None
-        self._artifact_watchers: list = []
+        self._unwatch_artifacts: Callable[[], None] | None = None
+        self._state_watcher = None
+        self._title_watchers: list = []
         self._chips: dict[str, pmui.Chip] = {}
 
         self.call.param.watch(self._update_header, ["tool_name", "args", "status", "ended_at", "approval"])
@@ -265,7 +267,7 @@ class ToolCallCard(Viewer):
         self.call.param.watch(self._update_result, ["result", "error", "status"])
         self.call.param.watch(self._watch_approval, "approval")
         if self.state is not None:
-            self.state.param.watch(self._watch_artifacts, "artifacts")
+            self._state_watcher = self.state.param.watch(self._watch_artifacts, "artifacts")
             self._watch_artifacts()
 
         self._update_header()
@@ -410,23 +412,32 @@ class ToolCallCard(Viewer):
         self._approval.param.update(objects=[widget], visible=True)
 
     def _watch_artifacts(self, *_):
-        for store, watcher in self._artifact_watchers:
-            store.param.unwatch(watcher)
-        store = self.state.artifacts
-        self._artifact_watchers = [(store, store.param.watch(self._update_artifacts, "artifacts"))]
+        if self._unwatch_artifacts is not None:
+            self._unwatch_artifacts()
+        # Only publishes concerning this call's artifacts notify the card, so publishing stays cheap in long chats.
+        self._unwatch_artifacts = self.state.artifacts._watch_call(self.call.tool_call_id, self._update_artifacts)
         self._update_artifacts()
 
     def published_artifacts(self) -> list[tuple[Any, Any]]:
         """Artifacts published by this call, as (artifact, latest matching version) pairs."""
         if self.state is None:
             return []
-        call_id = self.call.tool_call_id
-        found = []
-        for artifact in self.state.artifacts:
-            versions = [v for v in artifact.versions if v.tool_call_id == call_id]
-            if versions:
-                found.append((artifact, versions[-1]))
-        return found
+        return self.state.artifacts.published_by(self.call.tool_call_id)
+
+    def _release(self):
+        """Stop following the state's artifacts, e.g. when the chat showing the card is cleared."""
+        if self._state_watcher is not None:
+            self.state.param.unwatch(self._state_watcher)
+            self._state_watcher = None
+        if self._unwatch_artifacts is not None:
+            self._unwatch_artifacts()
+            self._unwatch_artifacts = None
+        self._unwatch_titles()
+
+    def _unwatch_titles(self):
+        for artifact, watcher in self._title_watchers:
+            artifact.param.unwatch(watcher)
+        self._title_watchers = []
 
     def _update_artifacts(self, *_):
         published = self.published_artifacts()
@@ -446,6 +457,9 @@ class ToolCallCard(Viewer):
                 chip.label = label
             chips[artifact.artifact_id] = chip
         self._chips = chips
+        # Titles can change without a publish, which is the only thing the store tells the card about.
+        self._unwatch_titles()
+        self._title_watchers = [(a, a.param.watch(self._update_artifacts, "title")) for a, _ in published]
         self._artifacts.param.update(objects=list(chips.values()), visible=bool(chips))
 
     def _activate(self, artifact_id: str):

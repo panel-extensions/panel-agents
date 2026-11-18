@@ -72,10 +72,11 @@ def test_chat_folds_model_calls_and_shows_the_run_totals(page):
     expect(page.locator(".run-usage .usage")).to_have_attribute("title", "8,318 input tokens, 3,000 from the cache\n244 output tokens\n2.7s waiting for the model\nclaude-haiku-4-5")
     row = page.get_by_role("button", name="2 steps, 3.0s, expand")
     expect(row).to_be_visible()
-    expect(page.locator(".model-call-card")).to_have_count(2)
-    expect(page.locator(".model-call-card").first).to_be_hidden()
+    # Folded steps are only built once their group expands.
+    expect(page.locator(".model-call-card")).to_have_count(0)
 
     row.click()
+    expect(page.locator(".model-call-card")).to_have_count(2)
     card = page.locator(".model-call-card").first
     expect(card).to_be_visible()
     expect(card.locator(".tc-head")).to_contain_text("claude-haiku-4-5")
