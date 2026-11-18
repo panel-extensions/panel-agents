@@ -298,3 +298,14 @@ def test_audit_log_include_existing():
     state.resolve_approval("t1", True, user="alice")
     log = AuditLog(RunState.from_events(state.events), include_existing=True)
     assert [r["tool_call_id"] for r in log.records] == ["t1"]
+
+
+def test_audit_log_include_existing_warns_when_events_were_dropped():
+    state = make_state()
+    state.max_events = 3
+    state.resolve_approval("t1", True, user="alice")
+    for i in range(5):
+        state.apply(ev.ArtifactPublished(artifact_id="doc", value=i))
+    with pytest.warns(UserWarning, match=f"dropped its {state.dropped_events} earliest events"):
+        log = AuditLog(state, include_existing=True)
+    assert log.records == []

@@ -12,6 +12,7 @@ import copy
 import datetime as dt
 import json
 import os
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,10 @@ class AuditLog:
     the decision, whether the arguments were edited, the reason and the
     user. Records are also kept in memory on ``records``.
 
+    ``include_existing`` records the decisions among ``state.events``; on
+    a state whose ``max_events`` dropped earlier events it warns that
+    decisions may be missing.
+
     >>> log = AuditLog(state, "approvals.jsonl")
     """
 
@@ -45,11 +50,17 @@ class AuditLog:
         """
         Start recording decisions on ``state``. With ``include_existing``,
         decisions already applied (e.g. from a loaded recording) are
-        recorded too.
+        recorded too, and a warning says when ``max_events`` dropped some.
         """
         if id(state) in self._unsubscribers:
             return
         if include_existing:
+            if state.dropped_events:
+                warnings.warn(
+                    f"The RunState dropped its {state.dropped_events} earliest events (max_events="
+                    f"{state.max_events}), so decisions made before them are not in the audit log.",
+                    stacklevel=2,
+                )
             for event in state.events:
                 if isinstance(event, ev.ApprovalResolved):
                     self._record(state, event)
