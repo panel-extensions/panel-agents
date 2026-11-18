@@ -166,7 +166,8 @@ def test_apply_button_labels_follow_the_applied_version():
     assert not view._apply.visible
     artifact.current = 3
     assert view._apply.label == "Apply v3"
-    assert list(view._version.options)[0].endswith("applied")
+    rows = [row for group in view._timeline._list.items for row in group["items"]]
+    assert [row["version"] for row in rows if row["secondary"].endswith("applied")] == [1]
 
 
 def test_apply_button_needs_a_callback_and_a_document():

@@ -8,9 +8,9 @@ PUBLIC = {
     "panel_agents": [
         "Action", "ActionRegistry", "AgentChat", "AgentDrawer", "ApprovalCard", "ApprovalPolicy", "ApprovalQueue",
         "ApprovalRequest", "ApprovalRule", "Artifact", "ArtifactPane", "ArtifactStore", "ArtifactVersion", "ArtifactView",
-        "AuditLog", "MessageState", "ModelCallCard", "ModelCallState", "Recorder", "RunInfo", "RunState", "RunTrace",
-        "ToolCallCard", "ToolCallState", "current_run_id", "current_tool_call_id", "dump_events", "events", "load_events",
-        "load_state", "register_diff", "register_renderer",
+        "AuditLog", "HistoryRecorder", "MessageState", "ModelCallCard", "ModelCallState", "Recorder", "RunInfo", "RunState",
+        "RunTrace", "ToolCallCard", "ToolCallState", "current_run_id", "current_tool_call_id", "dump_events", "events",
+        "load_events", "load_history", "load_state", "register_diff", "register_renderer",
     ],
     "panel_agents.actions": ["Action", "ActionRegistry"],
     "panel_agents.artifacts": [
@@ -31,7 +31,10 @@ PUBLIC = {
     ],
     "panel_agents.policy": ["ApprovalPolicy", "ApprovalRule"],
     "panel_agents.security": ["inert_markdown", "set_trusted_image_origins", "trusted_image_origins", "untrusted_markdown"],
-    "panel_agents.recording": ["Codec", "FORMAT_VERSION", "Recorder", "dump_events", "load_events", "load_state", "register_codec"],
+    "panel_agents.recording": [
+        "Codec", "FORMAT_VERSION", "HistoryRecorder", "Recorder", "dump_events", "load_events", "load_history", "load_state",
+        "register_codec",
+    ],
     "panel_agents.state": ["ApprovalRequest", "MessageState", "ModelCallState", "RunInfo", "RunState", "ToolCallState"],
     "panel_agents.adapters.pydantic_ai": [
         "ActionToolset", "AgentRunner", "Cassette", "CassetteError", "Divergence", "ModelRequestSummary",
@@ -75,7 +78,7 @@ def test_version_numbers_are_one_based():
     from panel_agents import events as ev
 
     public = [p for p in __import__("panel_agents").Artifact.param if not p.startswith("_")]
-    assert sorted(public) == ["applied", "artifact_id", "current", "kind", "name", "title", "versions"]
+    assert sorted(public) == ["applied", "artifact_id", "current", "kind", "name", "redo_version", "title", "undo_version", "versions"]
     state = RunState(flush_interval=0)
     for i in range(2):
         state.apply(ev.ArtifactPublished(artifact_id="doc", value=i, applied=True))

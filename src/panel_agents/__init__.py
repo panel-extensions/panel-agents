@@ -17,7 +17,7 @@ from .components import (
 )
 from .context import current_run_id, current_tool_call_id
 from .policy import ApprovalPolicy, ApprovalRule
-from .recording import Recorder, dump_events, load_events, load_state
+from .recording import HistoryRecorder, Recorder, dump_events, load_events, load_history, load_state
 from .state import (
     ApprovalRequest,
     MessageState,
@@ -43,6 +43,7 @@ __all__ = [
     "ArtifactVersion",
     "ArtifactView",
     "AuditLog",
+    "HistoryRecorder",
     "MessageState",
     "ModelCallCard",
     "ModelCallState",
@@ -57,6 +58,7 @@ __all__ = [
     "dump_events",
     "events",
     "load_events",
+    "load_history",
     "load_state",
     "register_diff",
     "register_renderer",

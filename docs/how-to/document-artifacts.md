@@ -32,7 +32,7 @@ def apply_version(artifact, version):
 pane = ArtifactPane(state=runner.state, on_apply=apply_version)
 ```
 
-When the user selects a version of a document, the header shows "Revert to vN" for versions before the applied one and "Apply vN" for versions after it. Clicking it calls `on_apply(artifact, version)` with the `Artifact` and the `ArtifactVersion` to apply, and the callback may be async. If the callback raises or returns False, the message is shown and nothing changes. Otherwise the pane records an `ARTIFACT_APPLIED` event through `RunState.apply_artifact_version`, so recordings and replays show which version was live. The button is disabled while the callback runs, so a double click cannot apply twice. `ArtifactView.apply_version(version)` does the same from code, taking a version number, and raises if there is no `on_apply` or no such version.
+When the user selects a version of a document in the history (see below), the header shows "Revert to vN" for versions before the applied one and "Apply vN" for versions after it. Clicking it calls `on_apply(artifact, version)` with the `Artifact` and the `ArtifactVersion` to apply, and the callback may be async. If the callback raises or returns False, the message is shown and nothing changes. Otherwise the pane records an `ARTIFACT_APPLIED` event through `RunState.apply_artifact_version`, so recordings and replays show which version was live. The button is disabled while the callback runs, so a double click cannot apply twice. `ArtifactView.apply_version(version)` does the same from code, taking a version number, and raises if there is no `on_apply` or no such version.
 
 Applying does not create a version. The compare tab compares new versions of a document with the applied one, so after a revert the agent's next edit is shown against what the host actually holds. An `AgentRunner` also tells the model: the next prompt it sends starts with a short note such as "ann applied version 1 of the artifact 'Dashboard' (dashboard)", so the agent does not keep building on a version that is no longer live.
 
@@ -99,6 +99,57 @@ class Dashboard:
 `AgentRunner` sets the run id while it drives the agent, including output functions, and the tool call id while each tool executes. The prompt's user message is recorded before the run id is set and the error recorded when a run is cancelled after it, so neither belongs to code that sees the id. The ids reach sync tools, which pydantic-ai runs through `anyio.to_thread.run_sync`, and actions an `ActionToolset` hands to the Panel session; do not rely on them in threads you start yourself. `RunState.user_run` sets the run id of its block. Outside them both return None.
 
 They are backed by a context variable, so they follow awaited code and the tasks it starts, but not callbacks triggered independently, which keeps a person's concurrent edits from being attributed to the agent. Two consequences follow from that. Code that reacts to the run's own events, such as a `RunState.subscribe` callback or a param watcher that fires while the runner applies an event, runs inside the run and publishes as the agent. A task a tool starts keeps the tool's ids even after the run has ended. From outside the run, `AgentRunner.run_id` is the id of the current or last run, `AgentRunner.running` says whether it is in progress, and `RunState.runs` maps every run id to its `RunInfo`.
+
+## Browse the history
+
+The artifact view lists the versions in a history grouped by the run that made them, newest first. It opens by default for documents, so in an `AgentDrawer` the artifacts view shows it right away; for other artifacts the History button in the header (labelled with the version shown, such as `v12`) opens it, and `ArtifactView(history=True)` opens it from code.
+
+Each group is headed by the run's input, the question the user asked, with its time and number of versions. A run made with `RunState.user_run` shows its input too; other edits by a person read "You edited" for the person viewing and "ann edited" for anyone else. Versions made outside a run are grouped while the same person keeps editing, and a person's edit made while an agent ran sits between the agent's versions before and after it. The latest group is open and older ones are folded, and a folded group sends and renders no rows until it is opened, so a history of hundreds of versions stays quick to update and to scroll.
+
+A row shows the version's operation, its number and time, and a filled marker on the applied version. Clicking it shows that version without applying it, and the Compare tab then compares it with the applied one. The operation label comes from the version's metadata:
+
+- `metadata["label"]`: a sentence for people, e.g. `"Placed revenue_chart at half width"`;
+- otherwise `metadata["op"]`: the operation's name, e.g. `"place_tile"`;
+- otherwise `"Version 12"`.
+
+Publish both when you have them; the label is shown and `op` stays available to the host.
+
+## Undo and redo
+
+For a document with an `on_apply` callback the history has Undo and Redo buttons, a restore button on every row that is not applied, and an undo button on the group of the applied version and the groups before it ("Undo turn" and "Go back to before this turn"). They all move the applied version through `on_apply` and record an `ARTIFACT_APPLIED` event, so no version is ever changed or removed and a replayed recording shows the same history. The same commands exist in code:
+
+```python
+await view.undo()            # back to the version applied before the last change
+await view.redo()            # forward again
+await view.undo_run(run_id)  # back to the version before the run's first version
+await view.apply_version(3)  # restore one version
+```
+
+`view.can_undo` and `view.can_redo` say whether the buttons are enabled, and `artifact.undo_version` and `artifact.redo_version` name the versions they would apply. Each returns whether the version was applied, so a refusing `on_apply` leaves everything as it was.
+
+What counts as a change follows the order in which versions were published and applied, which is what the `ARTIFACT_APPLIED` events record (their `action` is `"undo"`, `"redo"` or None):
+
+- Publishing an applied version, and applying a version by hand ("Apply", "Revert to", a row's restore), are changes. Undo goes back to the version that was applied before, so undoing a revert returns to where the revert started.
+- Undoing a run goes back to the version before the run's first version in one step. Redo then steps forward through the undone versions one at a time.
+- Publishing any new version ends redo, as in a text editor.
+- Versions a person published while the agent ran are undone with the agent's run when they came after its first version, since a version is a snapshot of the whole document. Restore such a version from its row to get it back.
+
+## Keep the history across sessions
+
+A `HistoryRecorder` writes the version history of documents to any sink a `Recorder` takes: a JSON Lines file, a text stream or a callable receiving each record, with values encoded by the same codecs. It keeps the `ARTIFACT_PUBLISHED` and `ARTIFACT_APPLIED` events of the artifacts you name and the start and end of each run that published one of their versions, so the history keeps its grouping and questions; messages, tool calls and other runs are left out. `load_history` restores such a file into a state:
+
+```python
+import os
+
+from panel_agents import HistoryRecorder, load_history
+
+path = f"history/{dashboard_id}.jsonl"
+if os.path.exists(path):
+    load_history(path, state)
+recorder = HistoryRecorder(state, path, artifact_ids=["dashboard"])
+```
+
+`load_history` applies the stored events without notifying the state's subscribers, so a recorder already attached does not write them again and an `AgentRunner` does not tell the model about versions it saw in an earlier session. Use `RunState.apply_many(events, notify=False)` the same way for events stored elsewhere. To store the history in a database, pass a callable sink and give `load_history` the stored records in order.
 
 ## Describe changes semantically
 

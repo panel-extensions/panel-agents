@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any
 
-from .events import Event
+from .events import ArtifactApplied, ArtifactPublished, Event, RunError, RunFinished, RunStarted
 from .state import RunState
 
 _log = logging.getLogger(__name__)
@@ -321,12 +321,81 @@ class Recorder:
         self.close()
 
 
+class HistoryRecorder(Recorder):
+    """
+    Record the version history of artifacts, e.g. to keep a document's
+    history across sessions.
+
+    Writes the ``ArtifactPublished`` and ``ArtifactApplied`` events of the
+    artifacts in ``artifact_ids`` (default: all) and, for each run that
+    published one of those versions, its ``RunStarted`` before the first
+    such version and its ``RunFinished`` or ``RunError``, so the history
+    keeps its grouping by run and the runs' inputs. Messages, tool calls
+    and runs that published nothing are left out. ``sink`` and
+    ``on_error`` work as for ``Recorder``; ``load_history`` restores
+    what it wrote.
+    """
+
+    def __init__(
+        self, state: RunState, sink: _Sink, *, artifact_ids: Iterable[str] | None = None, on_error: str = "log",
+    ):
+        self.artifact_ids = None if artifact_ids is None else set(artifact_ids)
+        self._started: dict[str, RunStarted] = {}
+        self._written: set[str] = set()
+        super().__init__(state, sink, on_error=on_error)
+
+    def _write(self, event: Event):
+        if isinstance(event, RunStarted):
+            self._started[event.run_id] = event
+            return
+        if isinstance(event, (RunFinished, RunError)):
+            self._started.pop(event.run_id, None)
+            if event.run_id in self._written:
+                self._written.discard(event.run_id)
+                super()._write(event)
+            return
+        if not isinstance(event, (ArtifactPublished, ArtifactApplied)):
+            return
+        if self.artifact_ids is not None and event.artifact_id not in self.artifact_ids:
+            return
+        if (start := self._started.pop(event.run_id, None)) is not None:
+            self._written.add(event.run_id)
+            super()._write(start)
+        super()._write(event)
+
+
+def load_history(source: _Source, state: RunState | None = None) -> RunState:
+    """
+    Restore a history written by ``HistoryRecorder`` (or any recording)
+    into ``state``, or into a new ``RunState``, and return the state.
+
+    The events are applied without notifying the state's subscribers, so
+    a recorder attached to it does not write them again and an
+    ``AgentRunner`` does not report them to the model as new versions. A
+    run that the stored session never finished is finished, since it can
+    no longer continue.
+    """
+    state = state if state is not None else RunState(flush_interval=0)
+    events = load_events(source)
+    state.apply_many(events, notify=False)
+    open_runs = {e.run_id: e.timestamp for e in events if isinstance(e, RunStarted)}
+    for event in events:
+        if isinstance(event, (RunFinished, RunError)):
+            open_runs.pop(event.run_id, None)
+    for run_id in open_runs:
+        if (run := state.runs.get(run_id)) is not None and run.status == "running":
+            state.apply(RunFinished(run_id=run_id), notify=False)
+    return state
+
+
 __all__ = [
     "FORMAT_VERSION",
     "Codec",
+    "HistoryRecorder",
     "Recorder",
     "dump_events",
     "load_events",
+    "load_history",
     "load_state",
     "register_codec",
 ]
