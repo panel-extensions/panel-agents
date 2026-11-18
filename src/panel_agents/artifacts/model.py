@@ -313,6 +313,8 @@ class ArtifactStore(param.Parameterized):
             refs = self._call_watchers.get(tool_call_id, [])
             if ref in refs:
                 refs.remove(ref)
+            if not refs:
+                self._call_watchers.pop(tool_call_id, None)
         return unwatch
 
     def _notify(self, tool_call_id: str):
