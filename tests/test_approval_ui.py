@@ -2,6 +2,7 @@ import pytest
 
 pytest.importorskip("playwright")
 
+import panel_material_ui as pmui
 from panel.tests.util import serve_component, wait_until
 from playwright.sync_api import expect
 from pydantic import BaseModel, Field
@@ -89,3 +90,35 @@ def test_plan_labels_on_batch_actions(page):
     page.get_by_role("button", name="Remove all").click()
     wait_until(lambda: not state.pending_approvals, page)
     assert {r.status for r in state.approvals.values()} == {"denied"}
+
+
+class Step(BaseModel):
+    question: str
+    builds_on: int | None = None
+    fast: bool = False
+
+
+@pytest.mark.parametrize("dark", [False, True], ids=["light", "dark"])
+def test_form_and_reason_inputs_share_edges(page, dark):
+    state = RunState(flush_interval=0)
+    state.apply_many([
+        ev.RunStarted(run_id="r"),
+        ev.ApprovalRequested(tool_call_id="s1", tool_name="plan_step", run_id="r", args={"question": "Revenue by region?"}, schema=Step.model_json_schema()),
+    ])
+    queue = ApprovalQueue(state, user="alice")
+    serve_component(page, pmui.Page(main=[pmui.Column(queue, width=600)], dark_theme=dark))
+
+    toggle = page.get_by_role("button", name="Edit")
+    expect(toggle).to_have_attribute("aria-pressed", "false")
+    assert toggle.evaluate("e => getComputedStyle(e).textTransform") == "none"
+    assert toggle.evaluate("e => getComputedStyle(e).borderTopWidth") == "0px"
+    toggle.click()
+    expect(toggle).to_have_attribute("aria-pressed", "true")
+
+    expect(page.locator("fieldset")).to_have_count(3)
+    edges = {(round(b["x"]), round(b["x"] + b["width"])) for b in (f.bounding_box() for f in page.locator("fieldset").all())}
+    assert len(edges) == 1, edges
+
+    approve = page.get_by_role("button", name="Approve", exact=True).bounding_box()
+    edit = toggle.bounding_box()
+    assert abs((edit["x"] + edit["width"]) - (approve["x"] + approve["width"])) <= 1
