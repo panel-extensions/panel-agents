@@ -1,3 +1,5 @@
+import re
+
 import panel_material_ui as pmui
 import pytest
 
@@ -49,7 +51,7 @@ def test_timeline_in_the_drawer(page, dark):
     # The latest run is open with its versions newest first, older runs are folded.
     expect(page.get_by_text("Which regions refund most?")).to_be_visible()
     expect(page.get_by_text("Place refund_table")).to_be_visible()
-    expect(page.get_by_text("v6 · ", exact=False)).to_contain_text("applied")
+    expect(page.get_by_text("v6 applied · ", exact=False)).to_be_visible()
     expect(page.get_by_text("ann edited")).to_be_visible()
     expect(page.get_by_text("Add node paid_by_region")).to_have_count(0)
 
@@ -85,7 +87,7 @@ def test_timeline_in_the_drawer(page, dark):
     wait_until(lambda: state.artifacts["dash"].applied == 5, page)
     assert applied == [5, 6, 3, 5]
     assert [e.action for e in state.events if isinstance(e, ev.ArtifactApplied)] == ["undo", "redo", "undo", None]
-    expect(page.get_by_text("v5 · ", exact=False)).to_contain_text("applied")
+    expect(page.get_by_text("v5 applied · ", exact=False)).to_be_visible()
 
 
 def test_history_toggle_and_new_runs(page):
@@ -93,7 +95,7 @@ def test_history_toggle_and_new_runs(page):
     drawer = AgentDrawer(state=state, main=pmui.Typography("The app"), width=420, open=True, tab="artifacts")
     serve_component(page, pmui.Page(main=[drawer]))
 
-    toggle = page.get_by_role("button", name="Version history")
+    toggle = page.get_by_role("button", name=re.compile("^Version history"))
     expect(page.get_by_text("Which regions refund most?")).to_be_visible()
     # Without on_apply there is nothing to undo or restore.
     expect(page.get_by_role("button", name="Undo", exact=True)).to_have_count(0)
@@ -107,4 +109,82 @@ def test_history_toggle_and_new_runs(page):
     state.apply(ev.ArtifactPublished(artifact_id="dash", value=[1], applied=True, run_id="r3", actor="agent", metadata={"op": "set_config"}))
     expect(page.get_by_text("set_config")).to_be_visible()
     expect(page.get_by_text("Place refund_table")).to_have_count(0)
-    expect(toggle).to_contain_text("v7")
+    expect(page.get_by_role("button", name="Version history, v7 shown")).to_be_visible()
+
+
+_ROWS = """list => [...list.querySelectorAll('.MuiListItemButton-root')].map(row => {
+    const icon = row.querySelector('.MuiListItemIcon-root .MuiIcon-root').getBoundingClientRect()
+    return {
+        label: row.querySelector('.MuiListItemText-primary').textContent,
+        secondary: row.querySelector('.MuiListItemText-secondary')?.textContent ?? '',
+        nested: !!row.parentElement.closest('.MuiCollapse-root'),
+        caret: !!row.querySelector('.MuiIconButton-root:not([title])'),
+        x: icon.x, height: row.getBoundingClientRect().height,
+    }
+})"""
+
+
+@pytest.mark.parametrize("width", [360, 480])
+def test_timeline_layout(page, width):
+    from panel_agents.components._timeline import BLOCKED_NOTE
+
+    state = history()
+    state.apply(ev.RunStarted(run_id="r3", input="Sort the refund table"))
+    state.apply(ev.ArtifactPublished(
+        artifact_id="dash", value={"edits": 7}, kind="json", title="Dashboard", applied=True, run_id="r3",
+        actor="agent", metadata={"label": "Sorted refund_table", "detail": "Sorted refund_table by refunds."},
+    ))
+    state.apply(ev.RunFinished(run_id="r3"))
+    drawer = AgentDrawer(
+        state=state, main=pmui.Typography("The app"), width=width, open=True, tab="artifacts",
+        on_apply=lambda artifact, version: None,
+    )
+    page.set_viewport_size({"width": 1000, "height": 900})
+    serve_component(page, pmui.Page(main=[drawer]))
+
+    timeline = page.locator(".MuiList-root").filter(has_text="ann edited").first
+    expect(timeline.get_by_text("Sort the refund table")).to_be_visible()
+    timeline.get_by_text("What is paid revenue by region?").click()
+    expect(timeline.get_by_text("Add node paid_by_region")).to_be_visible()
+    rows = {row["label"]: row for row in timeline.evaluate(_ROWS)}
+
+    # A run, or a person's edit, that made one version is one row without a caret or rows below it.
+    for label in ("Sort the refund table", "ann edited"):
+        assert not rows[label]["nested"] and not rows[label]["caret"]
+    assert rows["Sort the refund table"]["secondary"].startswith("v7 applied · ")
+    assert rows["What is paid revenue by region?"]["caret"] and rows["Place revenue_chart"]["nested"]
+
+    # The reason a run cannot be undone is a muted indicator, not part of the meta line.
+    assert all(BLOCKED_NOTE not in row["secondary"] for row in rows.values())
+    ann = timeline.locator(".MuiListItemButton-root").filter(has_text="ann edited")
+    expect(ann.get_by_role("button", name=BLOCKED_NOTE)).to_be_visible()
+
+    # Every row has the same height, and every icon in a column has the same x.
+    assert len({round(row["height"]) for row in rows.values()}) == 1
+    for nested in (False, True):
+        xs = [row["x"] for row in rows.values() if row["nested"] == nested]
+        assert len(xs) >= 2 and max(xs) - min(xs) <= 1, (nested, xs)
+    top = min(row["x"] for row in rows.values() if not row["nested"])
+    nested_x = min(row["x"] for row in rows.values() if row["nested"])
+    assert nested_x > top + 8
+
+    # The header has each action once, all the same size and centred on one line.
+    expect(page.get_by_role("button", name="Undo", exact=True)).to_have_count(1)
+    expect(page.get_by_role("button", name="Redo", exact=True)).to_have_count(1)
+    expect(page.get_by_role("button", name=re.compile("^Download"))).to_have_count(1)
+    expect(page.get_by_role("combobox", name="Artifact")).to_have_count(0)
+    controls = [
+        page.get_by_role("button", name="Undo", exact=True), page.get_by_role("button", name="Redo", exact=True),
+        page.get_by_role("button", name=re.compile("^Version history")), page.get_by_role("button", name=re.compile("^Download")),
+    ]
+    boxes = [control.bounding_box() for control in controls]
+    assert max(b["height"] for b in boxes) - min(b["height"] for b in boxes) <= 1, boxes
+    centres = [b["y"] + b["height"] / 2 for b in boxes]
+    assert max(centres) - min(centres) <= 1, boxes
+    assert max(b["x"] + b["width"] for b in boxes) <= width + 1000 - width
+
+    # Viewing another version offers to apply it once, in the bar above the list, not again on its row.
+    timeline.get_by_text("Add node paid_by_region").click()
+    expect(page.get_by_role("button", name="Revert to v1")).to_be_visible()
+    expect(page.get_by_text("Viewing v1, v7 is applied")).to_be_visible()
+    expect(page.get_by_role("button", name="Restore v1")).to_have_count(0)

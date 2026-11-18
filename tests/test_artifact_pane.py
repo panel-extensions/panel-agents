@@ -119,7 +119,7 @@ def test_pane_renders(store, document, comm):
 
 
 def rows(view):
-    return [row for group in view._timeline._list.items for row in group["items"]]
+    return [row for item in view._timeline._list.items for row in item.get("items", [item])]
 
 
 def test_view_history_selects_versions(store):
@@ -128,12 +128,12 @@ def test_view_history_selects_versions(store):
     assert rows(view) == []
     view.history = True
     assert [row["version"] for row in rows(view)] == [3, 2, 1]
-    assert view._history_button.label == "v3" and view._timeline._list.active == (0, 0)
+    assert view._history_button.description == "Version history, v3 shown" and view._timeline._list.active == (0, 0)
     view._timeline._list.active = (0, 2)
     assert store["query"].current == 1
     assert view._preview.objects[0].value == "line 0"
     store["query"].current = 2
-    assert view._history_button.label == "v2" and view._timeline._list.active == (0, 1)
+    assert view._history_button.description == "Version history, v2 shown" and view._timeline._list.active == (0, 1)
 
 
 def test_version_label():
@@ -149,7 +149,7 @@ def test_view_new_version_selects_latest(store):
     view = ArtifactView(store["query"], history=True)
     store["query"].current = 1
     publish_sql(store, 3)
-    assert view._history_button.label == "v3"
+    assert view._history_button.description == "Version history, v3 shown"
     assert len(rows(view)) == 3
     assert view._count.object == "3 versions"
 

@@ -182,12 +182,17 @@ def _apply_styles(table, styles: pd.DataFrame):
     return table
 
 
-# A quiet toggle like the drawer's: open shows the theme's selected tint, not a filled button.
+# The header's controls are all the size and shape of a small IconButton, so they line up.
+_ICON_BUTTON_SX = {
+    "minWidth": 0, "width": "30px", "height": "30px", "p": 0, "borderRadius": "50%",
+    "color": "var(--mui-palette-action-active)",
+    "& .MuiButton-startIcon, & .MuiButton-endIcon": {"m": 0},
+    "& .material-icons, & .MuiIcon-root": {"fontSize": "20px", "lineHeight": 1},
+}
+
+# A quiet toggle: open shows the theme's selected tint, not a filled button.
 _TOGGLE_SX = {
-    "border": 0, "borderRadius": "var(--mui-shape-borderRadius)", "px": 1, "py": "4px", "gap": "4px",
-    "color": "var(--mui-palette-text-primary)", "textTransform": "none", "lineHeight": 1.5,
-    "fontSize": "0.8125rem", "whiteSpace": "nowrap", "width": "auto",
-    "& .material-icons, & .MuiIcon-root": {"fontSize": "18px", "lineHeight": 1},
+    **_ICON_BUTTON_SX, "border": 0, "gap": 0,
     "&.Mui-selected, &.Mui-selected:hover": {
         "bgcolor": "var(--mui-palette-action-selected)", "color": "var(--mui-palette-text-primary)",
     },
@@ -260,49 +265,51 @@ class ArtifactView(Viewer):
         self._watchers: list = []
         self._diff_viewer = DiffViewer(context=3, max_height=520)
 
-        self._icon = pmui.Chip(size="small", variant="outlined", margin=(0, 8, 0, 0))
-        self._title = _plain_typography(variant="h6", margin=(0, 8), styles={"font-weight": "600"})
-        self._count = pmui.Typography(variant="caption", color="text.secondary", margin=(0, 8))
+        self._title = _plain_typography(
+            variant="subtitle1", margin=0, sizing_mode="stretch_width",
+            sx={"fontWeight": 600, "lineHeight": 1.3, "whiteSpace": "nowrap", "overflow": "hidden", "textOverflow": "ellipsis"},
+        )
+        self._count = pmui.Typography(variant="caption", color="text.secondary", margin=0, sx={"lineHeight": 1.3})
+        self._undo = pmui.IconButton(
+            icon="undo", description="Undo", size="small", disabled=True, margin=0, on_click=self._on_undo_click,
+        )
+        self._redo = pmui.IconButton(
+            icon="redo", description="Redo", size="small", disabled=True, margin=0, on_click=self._on_redo_click,
+        )
         # A ToggleButton exposes its state as aria-pressed.
         self._history_button = pmui.Toggle(
-            label="History", icon="history", icon_size="18px", description="Version history", sx=_TOGGLE_SX,
-            margin=(0, 0, 0, 8),
+            label="", icon="history", icon_size="20px", description="Version history", sx=_TOGGLE_SX, margin=0,
         )
         self._history_button.param.watch(self._on_history_toggle, "value")
-        self._undo = pmui.Button(
-            label="Undo", icon="undo", variant="text", size="small", color="primary", disabled=True,
-            margin=0, on_click=self._on_undo_click,
-        )
-        self._redo = pmui.Button(
-            label="Redo", icon="redo", variant="text", size="small", color="primary", disabled=True,
-            margin=0, on_click=self._on_redo_click,
+        self._download = pmui.FileDownload(
+            label="", icon="download", icon_size="20px", variant="text", color="default", description="Download",
+            callback=self._download_payload, margin=0, embed=False, sx=_ICON_BUTTON_SX,
         )
         self._timeline = VersionTimeline(on_view=self._view_version, on_restore=self._step)
-        self._timeline_controls = pmui.Row(
-            self._undo, self._redo, align="center", margin=(0, 0, 0, 12), styles={"align-items": "center", "gap": "4px"},
-        )
-        # Undo and Redo stay in view while the versions scroll.
         self._history_panel = pmui.Column(
-            self._timeline_controls,
             pmui.Column(self._timeline, sizing_mode="stretch_width", max_height=360, scroll="y-auto", margin=0),
-            sizing_mode="stretch_width", visible=False, margin=(8, 0, 0, 0),
+            sizing_mode="stretch_width", visible=False, margin=(4, 0, 0, 0),
             styles={"border-bottom": "1px solid var(--mui-palette-divider)"},
         )
-        self._download = pmui.FileDownload(
-            label="Download", icon="download", variant="outlined", size="small", color="primary",
-            callback=self._download_payload, margin=(0, 0, 0, 8), embed=False,
-        )
         self._apply = pmui.Button(
-            label="Apply", icon="restore", variant="contained", size="small", color="primary",
-            disable_elevation=True, visible=False, margin=(0, 0, 0, 8), on_click=self._on_apply_click,
+            label="Apply", icon="restore", variant="text", size="small", color="primary", margin=0,
+            on_click=self._on_apply_click,
+        )
+        self._viewing = pmui.Typography(variant="caption", color="text.secondary", margin=0, sizing_mode="stretch_width")
+        # Shown while a version other than the applied one is viewed.
+        self._apply_bar = pmui.Row(
+            self._viewing, self._apply, sizing_mode="stretch_width", visible=False, margin=(4, 0, 0, 0),
+            styles={
+                "align-items": "center", "gap": "8px", "padding": "0 4px 0 12px", "border-radius": "var(--mui-shape-borderRadius)",
+                "background": "rgba(var(--mui-palette-primary-mainChannel) / 0.08)",
+            },
         )
         self._apply_error = pmui.Alert(object="", severity="error", visible=False, closeable=True, sizing_mode="stretch_width", margin=(4, 0))
-        # Wraps the controls below the title when the view is narrow, e.g. in a drawer.
-        self._header = pmui.FlexBox(
-            pmui.Row(self._icon, self._title, self._count, align="center", margin=0, styles={"align-items": "center"}),
-            pmui.Row(self._history_button, self._apply, self._download, align="center", margin=0, styles={"align-items": "center"}),
-            flex_wrap="wrap", justify_content="space-between", align_items="center", gap="8px",
-            sizing_mode="stretch_width", visible=self.param.show_header, margin=(12, 0, 0, 0),
+        self._header = pmui.Row(
+            pmui.Column(self._title, self._count, margin=0, sizing_mode="stretch_width", styles={"min-width": "0", "gap": "0"}),
+            self._undo, self._redo, self._history_button, self._download,
+            sizing_mode="stretch_width", visible=self.param.show_header, margin=(8, 0, 0, 0),
+            styles={"align-items": "center", "gap": "2px", "padding": "0 4px 0 12px", "flex-wrap": "nowrap"},
         )
 
         self._preview = pmui.Column(sizing_mode="stretch_width")
@@ -329,7 +336,7 @@ class ArtifactView(Viewer):
             ("Preview", self._preview), ("Compare", compare), ("Metadata", self._metadata),
             active=["preview", "compare", "metadata"].index(self.mode), sizing_mode="stretch_width",
         )
-        self._layout_obj = pmui.Column(self._header, self._apply_error, self._history_panel, self._tabs, sizing_mode="stretch_width")
+        self._layout_obj = pmui.Column(self._header, self._apply_bar, self._apply_error, self._history_panel, self._tabs, sizing_mode="stretch_width")
 
         self._base.param.watch(lambda e: self.param.update(base=e.new), "value")
         self._target.param.watch(lambda e: self.param.update(target=e.new), "value")
@@ -368,7 +375,6 @@ class ArtifactView(Viewer):
 
     def _update_header(self, *events):
         artifact = self.artifact
-        self._icon.param.update(label=artifact.kind, icon=_kind_icon(artifact.kind))
         self._title.object = _escape_markdown(artifact.title or artifact.artifact_id)
         n = len(artifact.versions)
         self._count.object = f"{n} version{'s' if n != 1 else ''}"
@@ -439,7 +445,7 @@ class ArtifactView(Viewer):
         # A closed history is not built, so artifacts nobody browses cost nothing to update.
         shown = artifact if is_open else None
         self._timeline.param.update(artifact=shown, state=self.state, user=self._user(), can_apply=can_apply)
-        self._timeline_controls.visible = can_apply
+        self._undo.visible = self._redo.visible = can_apply
         with param.edit_constant(self):
             self.param.update(
                 can_undo=can_apply and artifact.undo_version is not None,
@@ -522,11 +528,12 @@ class ArtifactView(Viewer):
     def _update_apply(self):
         artifact = self.artifact
         if artifact is None or not artifact.is_document or self.on_apply is None or not self.versions:
-            self._apply.visible = False
+            self._apply_bar.visible = False
             return
         current, applied = artifact.current, artifact.applied
+        self._apply_bar.visible = current != applied
+        self._viewing.object = f"Viewing v{current}" + (f", v{applied} is applied" if applied is not None else "")
         self._apply.param.update(
-            visible=current != applied,
             label=f"Revert to v{current}" if current < applied else f"Apply v{current}",
             icon="history" if current < applied else "done",
         )
@@ -595,7 +602,8 @@ class ArtifactView(Viewer):
             self._metadata.object = {}
             return
         current = min(max(self.artifact.current or 1, 1), len(self.versions))
-        self._history_button.param.update(label=f"v{current}", description=f"Version history, v{current} shown")
+        self._history_button.description = f"Version history, v{current} shown"
+        self._download.description = f"Download v{current}"
         self._preview.objects = [self._render_version(current - 1)]
         self._update_metadata(current - 1)
         ext = _DOWNLOAD_EXTENSIONS.get(self.artifact.kind, "txt")

@@ -358,7 +358,7 @@ class AgentDrawer(Viewer):
     def _sync_artifact_select(self, *events):
         store = self.state.artifacts
         options = {a.title or a.artifact_id: a.artifact_id for a in store}
-        self._artifact_select.param.update(options=options, value=store.active, visible=bool(options))
+        self._artifact_select.param.update(options=options, value=store.active, visible=len(options) > 1)
         self._update_labels()
 
     def _on_artifact_select(self, event):

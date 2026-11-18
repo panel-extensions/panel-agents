@@ -41,7 +41,7 @@ def make_view(state, user="ann"):
 
 
 def rows(view):
-    return [row for group in view._timeline._list.items for row in group["items"] if "version" in row]
+    return [row for item in view._timeline._list.items for row in item.get("items", [item]) if "version" in row]
 
 
 def expand_all(view):
@@ -88,18 +88,21 @@ def test_timeline_lists_runs_newest_first():
         ("Add a refund table", "smart_toy"), ("You edited", "person"), ("Build the dashboard", "smart_toy"),
     ]
     assert [r["version"] for r in items[0]["items"]] == [6, 5]
-    assert items[0]["secondary"].endswith("2 versions")
+    assert items[0]["secondary"].startswith("2 versions · ")
     assert view._timeline._list.expanded == [(0,)]
     assert view._history_open and view._history_panel.visible
     assert [r["label"] for r in items[2]["items"]] == ["…"]
     expand_all(view)
     items = view._timeline._list.items
     assert [r["label"] for r in items[2]["items"]] == ["place_tile", "connect", "add_node"]
-    assert rows(view)[0]["secondary"].endswith("applied") and "actions" not in rows(view)[0]
+    assert rows(view)[0]["secondary"].startswith("v6 applied · ") and "actions" not in rows(view)[0]
     assert rows(view)[1]["actions"][0]["action"] == "restore"
     assert items[0]["actions"][0]["label"] == "Undo run" and items[0]["before"] == 4
-    # Going back to before ann's edit would undo the later run too, so it is not offered.
-    assert "actions" not in items[1] and items[1]["secondary"].endswith(BLOCKED_NOTE)
+    # ann's single edit is one row, without a group around it.
+    assert "items" not in items[1] and items[1]["version"] == 4 and items[1]["secondary"].endswith(" · move_tile")
+    # Going back to before ann's edit would undo the later run too, so a muted note says why instead.
+    assert [a["action"] for a in items[1]["actions"]] == ["restore", "blocked"]
+    assert items[1]["actions"][1]["label"] == BLOCKED_NOTE and BLOCKED_NOTE not in items[1]["secondary"]
     assert "actions" not in items[2]
 
 
@@ -118,7 +121,7 @@ def test_a_new_run_expands_and_folds_the_previous_one():
     view, _ = make_view(state)
     timeline = view._timeline
     timeline._list.expanded = [(0,), (2,)]
-    agent_run(state, "r3", "Sort the table", "set_config")
+    agent_run(state, "r3", "Sort the table", "set_config", "place_tile")
     assert [i["label"] for i in timeline._list.items][:2] == ["Sort the table", "Add a refund table"]
     assert timeline._list.expanded == [(0,), (3,)]
 
@@ -130,7 +133,7 @@ def test_clicking_a_row_views_the_version_and_compares_with_the_applied_one():
     artifact = state.artifacts["doc"]
     assert artifact.current == 5 and artifact.applied == 6 and applied == []
     assert (view.base, view.target) == (6, 5)
-    assert view._history_button.label == "v5"
+    assert view._history_button.description == "Version history, v5 shown"
     assert view._apply.label == "Revert to v5"
 
 
@@ -193,9 +196,10 @@ def test_the_history_shows_why_a_run_cannot_be_undone():
     state.apply(ev.RunFinished(run_id="r1"))
     timeline = VersionTimeline(artifact=state.artifacts["doc"], state=state, can_apply=True)
     headers = {item["label"]: item for item in timeline._list.items}
-    # No action that would do nothing: the reason is in the group's secondary text.
-    assert "actions" not in headers["Build it"] and "before" not in headers["Build it"]
-    assert headers["Build it"]["secondary"].endswith(BLOCKED_NOTE)
+    # No undo that would do nothing: a muted note says why, outside the secondary text.
+    assert [a["action"] for a in headers["Build it"]["actions"]] == ["restore", "blocked"]
+    assert "before" not in headers["Build it"] and BLOCKED_NOTE not in headers["Build it"]["secondary"]
+    assert headers["Build it"]["actions"][1]["label"] == BLOCKED_NOTE
 
 
 def test_a_group_without_a_run_is_not_undone_over_a_later_run():
@@ -208,8 +212,9 @@ def test_a_group_without_a_run_is_not_undone_over_a_later_run():
     agent_run(state, "ra", "Second", "place_tile")
     timeline = VersionTimeline(artifact=state.artifacts["doc"], state=state, can_apply=True, user="bob")
     headers = {item["label"]: item for item in timeline._list.items}
-    assert "actions" not in headers["ann edited"]
-    assert headers["ann edited"]["secondary"].endswith(BLOCKED_NOTE)
+    assert [(a["action"], a["label"]) for a in headers["ann edited"]["actions"]] == [
+        ("restore", "Restore v3"), ("blocked", BLOCKED_NOTE),
+    ]
     (action,) = headers["Second"]["actions"]
     assert action["label"] == "Undo run"
 
@@ -255,7 +260,7 @@ async def test_restoring_from_the_timeline_applies_and_views_the_version():
 async def test_undo_needs_on_apply_and_a_document():
     state = make_state()
     view = ArtifactView(state.artifacts["doc"], state=state)
-    assert not view.can_undo and not view._timeline_controls.visible
+    assert not view.can_undo and not view._undo.visible and not view._redo.visible
     assert "actions" not in rows(view)[1]
     state.apply(ev.ArtifactPublished(artifact_id="out", value=1))
     view = ArtifactView(state.artifacts["out"], state=state, on_apply=lambda *a: None)
@@ -288,7 +293,7 @@ async def test_replay_reproduces_undo_state_and_timeline(tmp_path):
     replayed_view, _ = make_view(replayed)
     expand_all(view)
     expand_all(replayed_view)
-    strip = lambda items: [(i["label"], [r["secondary"] for r in i["items"]]) for i in items]  # noqa: E731
+    strip = lambda items: [(i["label"], [r["secondary"] for r in i.get("items", [i])]) for i in items]  # noqa: E731
     assert strip(replayed_view._timeline._list.items) == strip(view._timeline._list.items)
 
 
@@ -395,8 +400,8 @@ async def test_undo_opens_the_group_of_the_applied_version():
     assert view._timeline._list.expanded == [(0,)]
     await view.undo_run()
     items, expanded = view._timeline._list.items, view._timeline._list.expanded
-    assert (1,) in expanded and items[1]["items"][0]["version"] == 4
-    assert view._timeline._list.active == (1, 0)
+    assert expanded == [(0,)] and items[1]["version"] == 4
+    assert view._timeline._list.active == (1,)
 
 
 def test_a_long_group_shows_its_latest_versions_first():
@@ -431,3 +436,42 @@ def test_history_recorder_attached_mid_run_keeps_the_run():
     publish(state, "add_node", run_id="r1", actor="agent")
     assert [r["type"] for r in records[1:]] == ["RUN_STARTED", "ARTIFACT_PUBLISHED"]
     assert load_history(records).runs["r1"].input == "Already running"
+
+
+def test_a_run_with_one_version_is_one_row():
+    state = make_state()
+    agent_run(state, "r3", "Sort the table", "set_config")
+    view, _ = make_view(state)
+    row = view._timeline._list.items[0]
+    assert "items" not in row and row["label"] == "Sort the table" and row["icon"] == "smart_toy"
+    assert row["version"] == 7 and row["secondary"].startswith("v7 applied · ") and row["secondary"].endswith(" · set_config")
+    assert view._timeline._list.active == (0,)
+    view._timeline._list.active = (1,)
+    view._timeline._list.expanded = [(1,)]
+    view._timeline._list.active = (1, 1)
+    assert state.artifacts["doc"].current == 5
+    view._timeline._list.active = (0,)
+    assert state.artifacts["doc"].current == 7
+
+
+def test_a_version_detail_is_the_row_tooltip():
+    from panel_agents.components._timeline import version_detail
+
+    state = RunState(flush_interval=0)
+    state.apply(ev.ArtifactPublished(artifact_id="doc", value=1, applied=True, metadata={
+        "label": "Added 2 components", "detail": "Added a. Added b.",
+    }))
+    state.apply(ev.ArtifactPublished(artifact_id="doc", value=2, applied=True, metadata={"label": "x", "detail": ["Added c.", "Added d."]}))
+    first, second = state.artifacts["doc"].versions
+    assert version_detail(first) == "Added a. Added b." and version_detail(second) == "Added c. Added d."
+    view, _ = make_view(state)
+    assert [r.get("tooltip") for r in rows(view)] == ["Added c. Added d.", "Added a. Added b."]
+
+
+def test_the_viewed_row_leaves_restoring_to_the_apply_button():
+    state = make_state()
+    view, _ = make_view(state)
+    assert [a["action"] for a in rows(view)[1]["actions"]] == ["restore"]
+    view._timeline._list.active = (0, 1)
+    assert state.artifacts["doc"].current == 5 and view._apply_bar.visible
+    assert "actions" not in rows(view)[1] and view._timeline._list.active == (0, 1)
