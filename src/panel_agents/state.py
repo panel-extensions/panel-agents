@@ -9,6 +9,7 @@ from events, replaying a recording reproduces the same state.
 from __future__ import annotations
 
 import copy
+import inspect
 import threading
 import time
 import uuid
@@ -21,7 +22,7 @@ import param
 from pydantic_core import from_json
 
 from . import events as ev
-from .artifacts import ArtifactStore
+from .artifacts import Artifact, ArtifactStore, ArtifactVersion
 from .context import _current_scope, _scope
 
 
@@ -32,6 +33,9 @@ def _new_id(prefix: str = "") -> str:
 def _session_user() -> str | None:
     import panel as pn
     return pn.state.user
+
+
+_OnApply = Callable[[Artifact, ArtifactVersion], Any]
 
 
 def _parse_partial_json(text: str) -> dict[str, Any]:
@@ -546,6 +550,90 @@ class RunState(param.Parameterized):
         if action not in (None, "undo", "redo"):
             raise ValueError(f"action must be 'undo', 'redo' or None, not {action!r}.")
         self.apply(ev.ArtifactApplied(artifact_id=artifact_id, version=version, user=user, action=action))
+
+    def undo(
+        self, artifact_id: str, *, user: str | None = None, on_apply: _OnApply | None = None,
+    ) -> ArtifactVersion | None:
+        """
+        Undo the last change to the applied version of a document artifact:
+        apply the version that was applied before it, recorded as an
+        ``ArtifactApplied`` event with ``action="undo"``. Undoing a revert
+        returns to the version applied before the revert.
+
+        ``on_apply(artifact, version)`` makes the host document match the
+        version first; raising or returning False refuses the step, and
+        nothing is recorded. It must be synchronous; ``ArtifactView`` awaits
+        an async one. ``user`` defaults to ``pn.state.user``. Returns the
+        applied version, or None if there was nothing to undo or the step
+        was refused.
+        """
+        return self._step(artifact_id, self.artifacts[artifact_id].undo_version, "undo", user, on_apply)
+
+    def redo(
+        self, artifact_id: str, *, user: str | None = None, on_apply: _OnApply | None = None,
+    ) -> ArtifactVersion | None:
+        """
+        Apply again the version the last undo moved away from, recorded with
+        ``action="redo"``. Redo lasts until the applied version changes
+        other than by undo or redo, i.e. a version is published as applied
+        or applied by hand; a proposal, published without ``applied``,
+        keeps it. Arguments and result as for ``undo``.
+        """
+        return self._step(artifact_id, self.artifacts[artifact_id].redo_version, "redo", user, on_apply)
+
+    def undo_run(
+        self, artifact_id: str, run_id: str | None = None, *, user: str | None = None,
+        on_apply: _OnApply | None = None,
+    ) -> ArtifactVersion | None:
+        """
+        Undo a whole run in one step: apply the version the host held
+        before the run first changed the applied version, recorded as one
+        ``ArtifactApplied`` event with ``action="undo"``. ``run_id``
+        defaults to the run of the applied version, and a child run counts
+        as part of its top-level run. Versions applied after the run
+        started, by the run or anyone else, are undone with it; ``redo``
+        steps forward through them again and ``redo_run`` redoes them all.
+        Raises ``ValueError`` if the run never changed the applied
+        version. Other arguments and result as for ``undo``.
+        """
+        artifact = self.artifacts[artifact_id]
+        return self._step(artifact_id, artifact.undo_run_target(run_id, self.runs), "undo", user, on_apply)
+
+    def redo_run(
+        self, artifact_id: str, run_id: str | None = None, *, user: str | None = None,
+        on_apply: _OnApply | None = None,
+    ) -> ArtifactVersion | None:
+        """
+        Redo a whole undo in one step, e.g. an ``undo_run``: apply again the
+        version the host held before it, recorded as one ``ArtifactApplied``
+        event with ``action="redo"``. Without ``run_id`` this redoes the
+        last undo; with it, the latest undo still redoable that undid a
+        version of that run, and any undos after it. Redo ends as for
+        ``redo``. Other arguments and result as for ``undo``.
+        """
+        artifact = self.artifacts[artifact_id]
+        return self._step(artifact_id, artifact.redo_run_target(run_id, self.runs), "redo", user, on_apply)
+
+    def _step(
+        self, artifact_id: str, number: int | None, action: str, user: str | None, on_apply: _OnApply | None,
+    ) -> ArtifactVersion | None:
+        if number is None:
+            return None
+        artifact = self.artifacts[artifact_id]
+        version = artifact.versions[number - 1]
+        if on_apply is not None:
+            result = on_apply(artifact, version)
+            if inspect.isawaitable(result):
+                if hasattr(result, "close"):
+                    result.close()
+                raise TypeError(f"RunState.{action} needs a synchronous on_apply; ArtifactView awaits async ones.")
+            if result is False:
+                return None
+        self.apply_artifact_version(
+            artifact_id, number, user=user if user is not None else _session_user(), action=action,
+        )
+        artifact.current = number
+        return version
 
     # Event handlers
 

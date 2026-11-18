@@ -122,16 +122,31 @@ For a document with an `on_apply` callback the history has Undo and Redo buttons
 await view.undo()            # back to the version applied before the last change
 await view.redo()            # forward again
 await view.undo_run(run_id)  # back to what the host held before the run changed it
+await view.redo_run()        # forward again through the whole run in one step
 await view.apply_version(3)  # restore one version
 ```
 
-`view.can_undo` and `view.can_redo` say whether the buttons are enabled, and `artifact.undo_version` and `artifact.redo_version` name the versions they would apply. Each returns whether the version was applied, so a refusing `on_apply` leaves everything as it was.
+`view.can_undo` and `view.can_redo` say whether the buttons are enabled, and `artifact.undo_version`, `artifact.redo_version` and `artifact.redo_run_version` name the versions they would apply. Each returns whether the version was applied, so a refusing `on_apply` leaves everything as it was.
+
+The same commands exist on `RunState`, for editors and command palettes that offer undo without an artifact view. They record the same events, so a recording does not show whether a view or the host made the step:
+
+```python
+def load(artifact, version):
+    editor.load(version.value)  # raise or return False to refuse
+
+state.undo("doc", on_apply=load)
+state.redo("doc", on_apply=load)
+state.undo_run("doc", run_id, on_apply=load)
+state.redo_run("doc", on_apply=load)
+```
+
+Each returns the applied `ArtifactVersion`, or None when there was nothing to do or `on_apply` refused. `on_apply` is optional, for a host that follows `artifact.applied` instead, and must be synchronous here; the view awaits an async one.
 
 What counts as a change follows the order in which versions were published and applied, which is what the `ARTIFACT_APPLIED` events record (their `action` is `"undo"`, `"redo"` or None):
 
 - Publishing an applied version, and applying a version by hand ("Apply", "Revert to", a row's restore), are changes. Undo goes back to the version that was applied before, so undoing a revert returns to where the revert started.
-- Undoing a run goes back to the version the host held before the run first published an applied version, in one step; proposals published before or during the run are skipped. A run that only proposed versions has nothing to undo and `undo_run` raises `ValueError`. Redo then steps forward through the undone versions one at a time.
-- Publishing a new applied version ends redo, as in a text editor; a proposal does not, since the document did not change.
+- Undoing a run goes back to the version the host held before the run first published an applied version, in one step; proposals published before or during the run are skipped. A run that only proposed versions has nothing to undo and `undo_run` raises `ValueError`. Redo then steps forward through the undone versions one at a time, and `redo_run` redoes the whole undo at once, also after some of it was redone. `redo_run(run_id)` redoes the latest undo that undid a version of that run, with any undo after it, since redo is linear.
+- Publishing a new applied version, or applying a version by hand, ends redo, as in a text editor; a proposal does not, since the document did not change.
 - Versions a person published while the agent ran are undone with the agent's run when they came after its first version, since a version is a snapshot of the whole document. Restore such a version from its row to get it back.
 
 ## Keep the history across sessions

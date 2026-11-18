@@ -16,6 +16,7 @@ PUBLIC = {
     "panel_agents.artifacts": [
         "Artifact", "ArtifactStore", "ArtifactVersion", "Change", "Diff", "StructuredDiff", "TableDiff", "TextDiff",
         "ValueDiff", "diff", "diff_structured", "diff_table", "diff_text", "diff_values", "infer_kind", "register_diff",
+        "root_run_id",
     ],
     "panel_agents.audit": ["AuditLog"],
     "panel_agents.context": ["current_run_id", "current_tool_call_id"],
@@ -78,7 +79,7 @@ def test_version_numbers_are_one_based():
     from panel_agents import events as ev
 
     public = [p for p in __import__("panel_agents").Artifact.param if not p.startswith("_")]
-    assert sorted(public) == ["applied", "artifact_id", "current", "kind", "name", "redo_version", "title", "undo_version", "versions"]
+    assert sorted(public) == ["applied", "artifact_id", "current", "kind", "name", "redo_run_version", "redo_version", "title", "undo_version", "versions"]
     state = RunState(flush_interval=0)
     for i in range(2):
         state.apply(ev.ArtifactPublished(artifact_id="doc", value=i, applied=True))
