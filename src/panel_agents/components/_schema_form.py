@@ -184,6 +184,10 @@ def _parse_date(value: Any) -> dt.date | None:
     return None
 
 
+# Narrower than Panel's default 10px side margin, so the fields line up with the text and inputs around the form.
+_MARGIN = (5, 4)
+
+
 class _Field:
     """A single property of the schema, bound to one widget or a nested group."""
 
@@ -263,7 +267,7 @@ class _Field:
 
     def _make_widget(self):
         kind = self.kind
-        common = dict(label=self.label, disabled=self.form.disabled, sizing_mode="stretch_width")
+        common = dict(label=self.label, disabled=self.form.disabled, sizing_mode="stretch_width", margin=_MARGIN)
         s = self.schema
         if kind == "object":
             required = set(s.get("required", []))
@@ -277,7 +281,7 @@ class _Field:
                 *(c.widget for c in self.children),
                 # Card titles render as HTML, and schemas may come from a third-party tool server.
                 title=html.escape(self.label), collapsible=True, outlined=True,
-                sizing_mode="stretch_width", margin=(5, 0), title_variant="subtitle1",
+                sizing_mode="stretch_width", margin=_MARGIN, title_variant="subtitle1",
             )
             return card
         if kind == "enum":
@@ -303,7 +307,7 @@ class _Field:
             widget = cls(value=None, **bounds, **common)
         elif kind == "boolean":
             cls = Checkbox if self.form.boolean_widget == "checkbox" else Switch
-            widget = cls(label=self.label, disabled=self.form.disabled, description=self.help)
+            widget = cls(label=self.label, disabled=self.form.disabled, description=self.help, margin=_MARGIN)
         elif kind == "date":
             widget = DatePicker(value=None, clearable=True, **common)
         elif kind == "datetime":
@@ -470,7 +474,7 @@ class _Field:
 def _help_text(text: str):
     from ..security import _plain_typography
     # Schema descriptions may come from a third-party tool server.
-    return _plain_typography(text, variant="body2", color="text.secondary", margin=(0, 5, 5, 5))
+    return _plain_typography(text, variant="body2", color="text.secondary", margin=(0, 4, 5, 4))
 
 
 class SchemaForm(Viewer):

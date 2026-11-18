@@ -93,6 +93,22 @@ _STYLESHEET = """
 """
 
 
+_TEXT_TOGGLE_SX = {
+    "width": "auto",
+    "border": 0,
+    "borderRadius": "var(--mui-shape-borderRadius, 4px)",
+    "padding": "4px 5px",
+    "gap": "4px",
+    "fontSize": "0.8125rem",
+    "fontWeight": 500,
+    "lineHeight": 1.75,
+    "letterSpacing": "0.02857em",
+    "textTransform": "none",
+    "color": "primary.main",
+    "&.Mui-selected, &.Mui-selected:hover": {"color": "primary.main", "backgroundColor": "action.selected"},
+}
+
+
 def _short(value: Any, limit: int = 80) -> str:
     text = value if isinstance(value, str) else json.dumps(value, default=str)
     return text if len(text) <= limit else text[: limit - 1] + "…"
@@ -259,8 +275,10 @@ class ApprovalCard(Viewer):
             self._diff_pane, visible=False, sizing_mode="stretch_width", margin=0,
         )
         self._form_holder = pmui.Column(sizing_mode="stretch_width", margin=0, visible=False)
+        # A ToggleButton keeps aria-pressed; restyled to read like pmui's small text Button.
         self._edit_toggle = pmui.Toggle(
-            icon="edit", variant="text", size="small", color="primary", margin=(0, 0),
+            icon="edit", icon_size="18px", variant="text", size="small", color="primary", margin=(0, 4),
+            sx=_TEXT_TOGGLE_SX,
             visible=bool(self.request.args or (self.request.schema or {}).get("properties")),
         )
         self._edit_toggle.param.watch(lambda e: setattr(self, "editing", e.new), "value")
