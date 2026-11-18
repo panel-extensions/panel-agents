@@ -18,6 +18,14 @@ The docstrings of the public modules, generated from the source. The [API overvi
       show_source: false
       heading_level: 3
 
+## Run context
+
+::: panel_agents.context
+    options:
+      show_root_heading: false
+      show_source: false
+      heading_level: 3
+
 ## Events
 
 ::: panel_agents.events

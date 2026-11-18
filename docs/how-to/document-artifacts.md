@@ -46,6 +46,58 @@ state.publish_artifact("dashboard", dashboard.to_dict(), applied=True)
 
 `RunState.publish_artifact` records an `ARTIFACT_PUBLISHED` event like a tool would, and an `AgentRunner` mentions the new version to the model on its next prompt.
 
+## Who made a version
+
+Every `ArtifactVersion` records who made it: `run_id` is the run it was published in, `tool_call_id` the tool call if a tool published it, `actor` who made it (`"agent"` or `"user"`, or any string a host chooses, such as `"import"`) and `user` the person's name when a person made it. The `ARTIFACT_PUBLISHED` event carries the same fields, so a replayed recording shows the same authors.
+
+Versions a tool publishes through `publish_artifact(ctx, ...)` or `artifact_return(...)` get the run, the tool call and the actor `"agent"`; the agent's name is on the run, `state.runs[version.run_id].agent_name`. `RunState.publish_artifact` fills them in from where it is called:
+
+- from code an `AgentRunner` runs, such as a document method a tool calls, the current run and tool call with the actor `"agent"`;
+- inside `RunState.user_run`, that run, the actor `"user"` and its user;
+- anywhere else, such as a widget callback, the actor `"user"` and `pn.state.user`, with no run.
+
+Each can be passed explicitly instead, e.g. `state.publish_artifact("dashboard", value, applied=True, actor="import")`. A widget callback that fires while the agent is running is still the user's: the run is only visible to code the run itself calls.
+
+Free-form `metadata` describes what a version did. A host editing a document one operation at a time can publish a version per operation:
+
+```python
+def place_tile(name, width):
+    dashboard.place(name, width)
+    state.publish_artifact(
+        "dashboard", dashboard.to_dict(), applied=True,
+        metadata={"op": "place_tile", "args": {"name": name, "width": width}},
+    )
+```
+
+Called from an agent's tool, `place_tile` publishes an agent version stamped with that tool call; called from the app's own widgets, a user version.
+
+## Group a person's edits into a run
+
+Agent versions are grouped by the run that made them. To group a batch of a person's edits the same way, wrap them in `RunState.user_run`:
+
+```python
+with state.user_run("Arranged the tiles") as run_id:
+    place_tile("revenue_chart", 50)
+    place_tile("note", 50)
+```
+
+It emits `RUN_STARTED` with the user as `agent_name` and the given input, and `RUN_FINISHED` when the block ends (also when it raises, since the edits made before the error stand). A user run has no messages and no model calls. Versions published inside it default to the run, the actor `"user"` and the user, which defaults to `pn.state.user` and can be passed as `user=`. Use it for edits made in one go; the state counts as `running` while the block is open. For edits spread over a longer time, pass the same `run_id` to each `publish_artifact` call instead.
+
+## Run and tool call ids
+
+Inside a tool, pydantic-ai's `RunContext` has the ids as `ctx.run_id` and `ctx.tool_call_id`. Host code that a tool calls without passing its context reads them with `current_run_id()` and `current_tool_call_id()`:
+
+```python
+from panel_agents import current_run_id, current_tool_call_id
+
+class Dashboard:
+    def place(self, name, width):
+        self.history.append({"op": "place_tile", "run_id": current_run_id(), "tool_call_id": current_tool_call_id()})
+        ...
+```
+
+`AgentRunner` sets the run id for the whole of `run()` and the tool call id while each tool executes, including sync tools pydantic-ai runs in a worker thread and actions an `ActionToolset` hands to the Panel session. `RunState.user_run` sets the run id of its block. Outside them both return None. They are backed by a context variable, so they follow awaited code and tasks it starts, but not callbacks triggered independently, which is what keeps a user's concurrent edits from being attributed to the agent. From outside the run, `AgentRunner.run_id` is the id of the current or last run, `AgentRunner.running` says whether it is in progress, and `RunState.runs` maps every run id to its `RunInfo`.
+
 ## Describe changes semantically
 
 The compare tab picks a diff strategy by artifact kind. Text kinds get a line diff and tables a cell diff. For structured documents, register a strategy that returns a `StructuredDiff`, a list of `Change(op, path, old, new, label)` records. `diff_structured` computes the changes between two nested dict and list values. A change's `path` is a tuple of the keys and list positions leading to it, such as `("nodes", "sales", "config")`, so keys containing dots stay unambiguous, and `path_str` renders it for display. A strategy can relabel the changes in the document's own terms:
