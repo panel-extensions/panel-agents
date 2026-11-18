@@ -20,6 +20,7 @@ import panel_material_ui as pmui
 import param
 from panel.viewable import Viewer
 
+from .._labels import APPROVAL_LABELS, _gerund, _lower, approval_labels, check_labels
 from ..security import _escape_markdown, _plain_typography, inert_markdown
 from ..state import ApprovalRequest, RunState
 from ._schema_form import SchemaForm, infer_schema, resolve_schema
@@ -217,8 +218,17 @@ class ApprovalCard(Viewer):
         Policy hook called as can_approve(request, user). When it returns
         False the decision buttons are disabled and policy_message is shown.""")
 
-    policy_message = param.String(default="You are not permitted to approve or deny this tool call.", doc="""
-        Explanation shown when can_approve rejects the current user.""")
+    policy_message = param.String(default=None, allow_None=True, doc="""
+        Explanation shown when can_approve rejects the current user.
+        Defaults to a sentence using the action labels.""")
+
+    labels = param.Dict(default=None, allow_None=True, doc="""
+        Wording of the actions and outcomes, e.g. {"approve": "Approve",
+        "deny": "Remove"} for a plan step. Keys: approve, deny, approved,
+        denied, edit, approve_edited, approved_edited, approve_all and
+        deny_all; missing ones are derived from approve and deny. Labels
+        on the request, declared with ApprovalRule(labels=...), take
+        precedence.""")
 
     require_reason = param.Selector(default="never", objects=["never", "deny", "edit", "always"], doc="""
         When a reason must be given: never, when denying, when approving
@@ -239,6 +249,7 @@ class ApprovalCard(Viewer):
             params["request"] = request
         if state is not None:
             params["state"] = state
+        check_labels(params.get("labels"))
         super().__init__(**params)
         self._form: SchemaForm | None = None
         self._args_pane = pn.pane.HTML(_args_html(self.request.args), stylesheets=[_STYLESHEET], sizing_mode="stretch_width", margin=(0, 4))
@@ -249,8 +260,7 @@ class ApprovalCard(Viewer):
         )
         self._form_holder = pmui.Column(sizing_mode="stretch_width", margin=0, visible=False)
         self._edit_toggle = pmui.Toggle(
-            label="Edit", icon="edit", variant="text", size="small", color="primary", margin=(0, 0),
-            description="Edit the arguments before approving",
+            icon="edit", variant="text", size="small", color="primary", margin=(0, 0),
             visible=bool(self.request.args or (self.request.schema or {}).get("properties")),
         )
         self._edit_toggle.param.watch(lambda e: setattr(self, "editing", e.new), "value")
@@ -259,14 +269,14 @@ class ApprovalCard(Viewer):
             sizing_mode="stretch_width", margin=(8, 4, 4, 4), size="small",
         )
         self._approve = pmui.Button(
-            label="Approve", color="primary", variant="contained", size="small",
+            color="primary", variant="contained", size="small",
             disable_elevation=True, margin=(4, 4), on_click=lambda e: self.approve(),
         )
         self._deny = pmui.Button(
-            label="Deny", color="error", variant="text", size="small",
+            color="error", variant="text", size="small",
             margin=(4, 4), on_click=lambda e: self.deny(),
         )
-        self._policy = pmui.Alert(object=self.policy_message, severity="info", variant="outlined", visible=False, sizing_mode="stretch_width", margin=(4, 4))
+        self._policy = pmui.Alert(object="", severity="info", variant="outlined", visible=False, sizing_mode="stretch_width", margin=(4, 4))
         self._error = pmui.Alert(object="", severity="error", visible=False, sizing_mode="stretch_width", margin=(4, 4))
         self._title = _plain_typography(
             self.request.tool_name, variant="subtitle1", margin=(0, 8, 0, 4),
@@ -306,6 +316,11 @@ class ApprovalCard(Viewer):
         return self._form
 
     @property
+    def resolved_labels(self) -> dict[str, str]:
+        """The action labels in effect: defaults, then ``labels``, then the request's own."""
+        return approval_labels(self.labels, self.request.labels)
+
+    @property
     def current_user(self) -> str | None:
         return self.user if self.user is not None else _current_user()
 
@@ -325,6 +340,7 @@ class ApprovalCard(Viewer):
             request = ApprovalRequest(
                 tool_call_id=request.tool_call_id, tool_name=request.tool_name, args=dict(args),
                 schema=request.schema, description=request.description, run_id=request.run_id,
+                labels=request.labels,
             )
         try:
             return bool(self.can_approve(request, self.current_user))
@@ -359,20 +375,35 @@ class ApprovalCard(Viewer):
         self._diff_section.visible = bool(changes)
         self._update_controls()
 
+    @param.depends("labels", watch=True)
+    def _check_labels(self):
+        check_labels(self.labels)
+        self._update_controls()
+        self._on_status()
+
+    def _policy_text(self, labels: dict[str, str]) -> str:
+        if self.policy_message is not None:
+            return self.policy_message
+        return f"You are not permitted to {_lower(labels['approve'])} or {_lower(labels['deny'])} this tool call."
+
     @param.depends("require_reason", "can_approve", "user", "policy_message", "error", watch=True)
     def _update_controls(self):
         edited = self.is_edited
-        self._approve.label = "Approve with edits" if edited else "Approve"
+        labels = self.resolved_labels
+        self._approve.label = labels["approve_edited"] if edited else labels["approve"]
+        self._deny.label = labels["deny"]
+        self._edit_toggle.param.update(label=labels["edit"], description=f"Edit the arguments before {_lower(_gerund(labels['approve']))}")
         permitted = self.permitted
         self._approve.disabled = self._deny.disabled = not permitted
         self._edit_toggle.disabled = not permitted
         self._reason.disabled = not permitted
-        self._policy.param.update(object=self.policy_message, visible=not permitted)
+        self._policy.param.update(object=self._policy_text(labels), visible=not permitted)
         self._error.param.update(object=_escape_markdown(self.error), visible=bool(self.error))
+        approve_edited = _lower(labels["approve_edited"])
         hint = {
             "never": "",
-            "deny": "Required to deny",
-            "edit": "Required to approve with edits" if not edited else "Required for edited approvals",
+            "deny": f"Required to {_lower(labels['deny'])}",
+            "edit": "Required for edited approvals" if edited and labels["approve"] == "Approve" else f"Required to {approve_edited}",
             "always": "Required",
         }[self.require_reason]
         self._reason.label = "Reason *" if self._reason_required_now() else "Reason"
@@ -389,7 +420,7 @@ class ApprovalCard(Viewer):
         if self.request.status != "pending":
             return "This request has already been resolved."
         if not self.permitted:
-            return self.policy_message
+            return self._policy_text(self.resolved_labels)
         mode = self.require_reason
         needs_reason = mode == "always" or (mode == "deny" and not approved) or (mode == "edit" and approved and self.is_edited)
         if needs_reason and not self._reason_text():
@@ -397,9 +428,9 @@ class ApprovalCard(Viewer):
             return "A reason is required for this decision."
         self._reason.error_state = False
         if approved and self.editing and self._form is not None and self._form.validate():
-            return "Fix the highlighted arguments before approving."
+            return f"Fix the highlighted arguments before {_lower(_gerund(self.resolved_labels['approve']))}."
         if approved and self.is_edited and not self._allows(self.edited_args):
-            return "You are not permitted to approve the call with these arguments."
+            return f"You are not permitted to {_lower(self.resolved_labels['approve'])} the call with these arguments."
         return None
 
     def approve(self) -> bool:
@@ -434,7 +465,8 @@ class ApprovalCard(Viewer):
             return
         approved = request.status == "approved"
         edits = _diff_args(request.args, request.final_args) if approved and request.final_args is not None else []
-        verdict = ("Approved with edits" if edits else "Approved") if approved else "Denied"
+        labels = self.resolved_labels
+        verdict = (labels["approved_edited"] if edits else labels["approved"]) if approved else labels["denied"]
         who = f" by **{_escape_markdown(request.user)}**" if request.user else ""
         when = f" at {_format_time(request.resolved_at)}" if request.resolved_at else ""
         items = [
@@ -485,28 +517,34 @@ class ApprovalQueue(Viewer):
     card_factory = param.Callable(default=None, allow_None=True, doc="""
         Optional callable(request, state, **params) returning an ApprovalCard.""")
 
+    labels = param.Dict(default=None, allow_None=True, doc="""
+        Action labels passed to each card, see ApprovalCard.labels. The
+        batch buttons use them too, unless every pending request carries
+        the same labels of its own.""")
+
     message = param.String(default="", doc="Outcome of the last batch action.")
 
     def __init__(self, state: RunState | None = None, **params):
         if state is not None:
             params["state"] = state
+        check_labels(params.get("labels"))
         super().__init__(**params)
         self._cards: dict[str, ApprovalCard] = {}
         self._ordered: list[ApprovalCard] = []
         self._count = pmui.Chip(label="0", size="small", color="warning", margin=(0, 8))
         self._approve_all = pmui.Button(
-            label="Approve all", icon="done_all", color="success", variant="outlined", size="small",
-            margin=(0, 4), on_click=lambda e: self.approve_all(),
+            icon="done_all", color="success", variant="outlined", size="small",
+            margin=(0, 4), sx={"whiteSpace": "nowrap"}, on_click=lambda e: self.approve_all(),
         )
         self._deny_all = pmui.Button(
-            label="Deny all", icon="block", color="error", variant="text", size="small",
-            margin=(0, 4), on_click=lambda e: self.deny_all(),
+            icon="block", color="error", variant="text", size="small",
+            margin=(0, 4), sx={"whiteSpace": "nowrap"}, on_click=lambda e: self.deny_all(),
         )
         self._message = pmui.Alert(object="", severity="warning", visible=False, sizing_mode="stretch_width", margin=(4, 0), closeable=True)
         self._empty = pmui.Typography("Nothing waiting for review.", variant="body2", color="text.secondary", margin=(8, 4))
         self._list = pmui.Column(sizing_mode="stretch_width", margin=0)
         header = pmui.Row(
-            pmui.Typography(self.title, variant="h6", margin=(0, 4)), self._count,
+            pmui.Typography(self.title, variant="h6", margin=(0, 4), sx={"whiteSpace": "nowrap"}), self._count,
             pn.Spacer(sizing_mode="stretch_width"), self._deny_all, self._approve_all,
             sizing_mode="stretch_width", margin=(0, 0, 4, 0), align="center",
         )
@@ -521,7 +559,7 @@ class ApprovalQueue(Viewer):
         return list(self._ordered)
 
     def _make_card(self, request: ApprovalRequest) -> ApprovalCard:
-        params = dict(can_approve=self.can_approve, require_reason=self.require_reason, user=self.user)
+        params = dict(can_approve=self.can_approve, require_reason=self.require_reason, user=self.user, labels=self.labels)
         if self.card_factory is not None:
             return self.card_factory(request, self.state, **params)
         return ApprovalCard(request=request, state=self.state, **params)
@@ -544,21 +582,37 @@ class ApprovalQueue(Viewer):
         self._count.visible = pending > 0
         self._approve_all.visible = self._deny_all.visible = pending > 1
         self._empty.visible = not cards
+        self._update_batch_labels()
 
-    @param.depends("can_approve", "require_reason", "user", watch=True)
+    @property
+    def batch_labels(self) -> dict[str, str]:
+        """The labels of the batch actions: the queue's, or those all pending requests share."""
+        own = [r.labels for r in self.state.pending_approvals]
+        shared = own[0] if own and all(labels == own[0] for labels in own) else None
+        return approval_labels(self.labels, shared)
+
+    def _update_batch_labels(self):
+        labels = self.batch_labels
+        self._approve_all.label = labels["approve_all"]
+        self._deny_all.label = labels["deny_all"]
+
+    @param.depends("can_approve", "require_reason", "user", "labels", watch=True)
     def _propagate(self):
+        check_labels(self.labels)
         for card in self._cards.values():
-            card.param.update(can_approve=self.can_approve, require_reason=self.require_reason, user=self.user)
+            card.param.update(can_approve=self.can_approve, require_reason=self.require_reason, user=self.user, labels=self.labels)
+        self._update_batch_labels()
 
     @param.depends("message", watch=True)
     def _show_message(self):
         self._message.param.update(object=_escape_markdown(self.message), visible=bool(self.message), closed=False)
 
     def _batch(self, approved: bool) -> int:
+        labels = self.batch_labels
         pending = [self._cards[r.tool_call_id] for r in list(self.state.pending_approvals) if r.tool_call_id in self._cards]
         done = sum(card.approve() if approved else card.deny() for card in pending)
         skipped = len(pending) - done
-        verb = "approved" if approved else "denied"
+        verb = _lower(labels["approved"] if approved else labels["denied"])
         self.message = f"{done} of {len(pending)} {verb}; {skipped} need attention." if skipped else ""
         return done
 
@@ -571,4 +625,4 @@ class ApprovalQueue(Viewer):
         return self._batch(False)
 
 
-__all__ = ["ApprovalCard", "ApprovalQueue", "approval_factory"]
+__all__ = ["APPROVAL_LABELS", "ApprovalCard", "ApprovalQueue", "approval_factory", "approval_labels"]

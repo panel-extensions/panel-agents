@@ -243,6 +243,7 @@ class ApprovalRequested(Event):
     args: dict[str, Any] = field(default_factory=dict)
     schema: dict[str, Any] | None = None
     description: str | None = None
+    labels: dict[str, str] | None = None
 
 
 @dataclass(kw_only=True)

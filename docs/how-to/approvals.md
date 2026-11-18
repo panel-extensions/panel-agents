@@ -45,6 +45,21 @@ queue = ApprovalQueue(runner.state, can_approve=policy.can_approve, require_reas
 
 Requests that no rule matches, such as those from a tool that raises `ApprovalRequired` itself, can be decided by anyone.
 
+## Action labels
+
+The cards say "Approve" and "Deny" by default. When an approval is not about a tool call as such, for example a step of a plan the agent proposed, give the rule other words. They are recorded on the `ApprovalRequested` event, so a replayed session shows the same buttons.
+
+```python
+policy = ApprovalPolicy([
+    ApprovalRule("plan_step", labels={"approve": "Approve", "deny": "Remove"}),
+    "run_sql",
+])
+```
+
+The plan steps now show "Approve" and "Remove", once decided they read "Removed", and the tool-call card's badge says "Removed" instead of "Denied". The `run_sql` cards keep "Approve" and "Deny". An `ApprovalQueue` names its batch buttons "Approve all" and "Remove all" while every pending request is a plan step.
+
+Only `approve` and `deny` usually need to be given. The past tense (`approved`, `denied`) is derived by adding "d" or "ed", so pass it as well for an irregular verb, and the batch and edit wording (`approve_all`, `deny_all`, `approve_edited`, `approved_edited`) is derived from those; any of them, and `edit` for the edit toggle, can be overridden. To change the wording for every card rather than per tool, pass `labels` to `ApprovalCard` or `ApprovalQueue`; labels from a rule take precedence. The deny action keeps its red text style, which suits a removal as well.
+
 ## Who may approve is enforced, not only shown
 
 The cards use `can_approve` to disable their buttons, but the decision is checked again where it takes effect, and the `RunState` is the only arbiter:

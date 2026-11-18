@@ -10,8 +10,8 @@ This page lists the public API of panel-agents 1.x. Every name below is covered 
 | --- | --- |
 | `AgentChat(state=None, *, runner, callback, readonly, add_user_message, approval_factory, can_approve, user, assistant, placeholder, tool_labels, group_tool_calls, feed_params)` | Chat feed of a `RunState` with streaming messages, thinking steps, tool-call cards and an error alert for a failed run; `tool_labels` names calls in the user's words and `group_tool_calls` folds runs of finished calls into one row. `submit(text)` sends text as the user would. |
 | `AgentDrawer(runner=None, *, state, main, open, width, title, variant, overlay_below, tab, show_artifacts, show_approvals, open_on_approval, can_approve, on_apply, chat_params)` | A right-hand drawer with the chat, artifacts and approvals, docked beside `main`. `toggle` (with `aria-expanded` and the pending count in its accessible name), `content`, `chat`, `artifacts`, `approvals`, `new_conversation()`. |
-| `ApprovalCard(request=None, state=None, *, can_approve, policy_message, require_reason, user, editing)` | Review card for one tool call: edit arguments, approve or deny. `approve()`, `deny()`, `form`, `permitted`, `is_edited`. |
-| `ApprovalQueue(state, *, can_approve, require_reason, user, show_resolved, title, card_factory)` | The pending approvals of a state as cards. `approve_all()`, `deny_all()`, `cards`. |
+| `ApprovalCard(request=None, state=None, *, can_approve, policy_message, require_reason, user, editing, labels)` | Review card for one tool call: edit arguments, approve or deny. `labels` changes the wording of the actions, e.g. `{"approve": "Approve", "deny": "Remove"}`; a request's own labels take precedence. `approve()`, `deny()`, `form`, `permitted`, `is_edited`, `resolved_labels`. |
+| `ApprovalQueue(state, *, can_approve, require_reason, user, show_resolved, title, card_factory, labels)` | The pending approvals of a state as cards. `labels` is passed to each card and names the batch actions, unless all pending requests share labels of their own. `approve_all()`, `deny_all()`, `cards`, `batch_labels`. |
 | `ArtifactPane(store=None, *, state, on_apply, show_list, list_width, empty_message, view_options)` | Lists a store's artifacts and shows the active one. `views`, `active_view`. |
 | `ArtifactView(artifact, *, mode, base, target, diff_layout, diff_options, show_header, on_apply, state, user)` | One artifact with versions, compare, metadata and apply/revert for documents. `base` and `target` are version numbers. `apply_version(version=None)`, `compute_diff()`. |
 | `ToolCallCard(call, *, state, approval_factory, max_chars, max_items, max_lines, collapsed, label)` | Card for one tool call with arguments, status, result and published artifacts; `label` (a string or a callable of the arguments) replaces the tool name in the header. Structured and code-like results are shown as highlighted code blocks, cut to `max_lines` until expanded. |
@@ -34,7 +34,7 @@ This page lists the public API of panel-agents 1.x. Every name below is covered 
 | --- | --- |
 | `Artifact`, `ArtifactVersion`, `ArtifactStore` | Versioned artifacts. `Artifact.current` is the number of the version shown, `Artifact.is_document` and `Artifact.applied_version` describe documents; `ArtifactStore.publish(...)` and `mark_applied(artifact_id, version)`. |
 | `register_diff(*kinds)` | Register a diff strategy `func(old, new, **options) -> Diff` for artifact kinds. |
-| `ApprovalPolicy(rules)`, `ApprovalRule(tool, when=None, approvers=None)` | Which tool calls need approval and who may give it. `approvers` is a collection of user names or a callable `(request, user) -> bool`. `requires_approval(tool, args)`, `can_approve(request, user)`, `can_decide(request, user, args=None)`, `rule_for(tool, args)`. |
+| `ApprovalPolicy(rules)`, `ApprovalRule(tool, when=None, approvers=None, labels=None)` | Which tool calls need approval and who may give it. `approvers` is a collection of user names or a callable `(request, user) -> bool`. `labels` names the decision actions for the matching calls and is recorded on `ApprovalRequested.labels` and `ApprovalRequest.labels`. `requires_approval(tool, args)`, `can_approve(request, user)`, `can_decide(request, user, args=None)`, `rule_for(tool, args)`. |
 | `ActionRegistry()`, `Action` | Typed front-end actions run in the user's session. `action(...)`, `add(func, *, name, description)`, `remove(name)`, `await invoke(name, args)`; `Action(name, description, function)`, `Action.from_function(function, name=None, description=None)`, `parameters`, `validate(args)`. |
 
 ## `panel_agents.events`
@@ -47,7 +47,7 @@ The artifact model above, plus the diff API: `diff(old, new, kind=None, **option
 
 ## `panel_agents.components`
 
-The components above, plus `render(value, kind=None, **options)`, which renders a value with the registered renderers, and `approval_factory(request, state)`, the default `AgentChat.approval_factory`.
+The components above, plus `render(value, kind=None, **options)`, which renders a value with the registered renderers, and `approval_factory(request, state)`, the default `AgentChat.approval_factory`. `panel_agents.components.approval.approval_labels(*overrides)` returns the full action wording (`approve`, `deny`, `approved`, `denied`, `edit`, `approve_edited`, `approved_edited`, `approve_all`, `deny_all`) with later overrides taking precedence, and `APPROVAL_LABELS` lists the keys.
 
 ## `panel_agents.recording`
 

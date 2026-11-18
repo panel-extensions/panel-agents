@@ -80,6 +80,10 @@ class ApprovalRequest(param.Parameterized):
 
     run_id = param.String(default=None, allow_None=True)
 
+    labels = param.Dict(default=None, allow_None=True, doc="""
+        Wording of the decision actions, e.g. {"approve": "Approve", "deny": "Remove"},
+        overriding the approval components' own labels.""")
+
     @property
     def edited(self) -> bool:
         return self.final_args is not None and self.final_args != self.args
@@ -466,6 +470,7 @@ class RunState(param.Parameterized):
             tool_call_id=event.tool_call_id, tool_name=event.tool_name, args=dict(event.args),
             schema=event.schema, description=event.description,
             requested_at=event.timestamp, run_id=event.run_id,
+            labels=dict(event.labels) if event.labels else None,
         )
         self.approvals = {**self.approvals, event.tool_call_id: request}
         self.pending_approvals = [*self.pending_approvals, request]

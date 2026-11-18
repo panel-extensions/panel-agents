@@ -360,6 +360,7 @@ class _PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
     input: Any = None
     tool_defs: dict[str, ToolDefinition] = field(default_factory=dict)
     validated_args: dict[str, dict[str, Any]] = field(default_factory=dict)
+    approval_policy: ApprovalPolicy | None = None
 
     error: Exception | None = None
     _text_id: str | None = None
@@ -445,11 +446,13 @@ class _PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
     async def handle_deferred_tool_requests(self, event: DeferredToolRequestsEvent) -> AsyncIterator[ev.Event]:
         for call in event.requests.approvals:
             tool_def = self.tool_defs.get(call.tool_name)
+            args = self.validated_args.get(call.tool_call_id, call.args_as_dict())
+            rule = self.approval_policy.rule_for(call.tool_name, args) if self.approval_policy else None
             yield ev.ApprovalRequested(
-                tool_call_id=call.tool_call_id, tool_name=call.tool_name,
-                args=self.validated_args.get(call.tool_call_id, call.args_as_dict()),
+                tool_call_id=call.tool_call_id, tool_name=call.tool_name, args=args,
                 schema=tool_def.parameters_json_schema if tool_def else None,
                 description=tool_def.description if tool_def else None,
+                labels=dict(rule.labels) if rule is not None and rule.labels else None,
             )
 
     async def handle_function_tool_result(self, event: FunctionToolResultEvent) -> AsyncIterator[ev.Event]:
@@ -652,6 +655,7 @@ class AgentRunner(param.Parameterized):
         stream = _PanelEventStream(
             run_id=run_id, thread_id=self.thread_id, agent_name=self.agent.name,
             input=prompt, tool_defs=self._tool_defs, validated_args=self._validated,
+            approval_policy=self.approval_policy,
         )
         model_prompt = prompt
         if self._notes and isinstance(prompt, str):
