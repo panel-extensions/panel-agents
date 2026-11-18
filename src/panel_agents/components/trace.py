@@ -113,13 +113,14 @@ class RunTrace(Viewer):
         self._axis = pn.pane.HTML(sizing_mode="stretch_width", margin=0, stylesheets=[_AXIS_CSS])
         self._rows = pn.Column(sizing_mode="stretch_width", margin=0)
         self._layout = pn.Column(self._totals, self._axis, self._rows, sizing_mode="stretch_width", css_classes=["run-trace"])
-        self._cache: dict[int, tuple[Any, pn.pane.HTML | None]] = {}
+        # Cards are kept per item and rows per item and depth, so expanded cards survive other runs and switching back.
         self._cards: dict[int, Any] = {}
-        self._shown: list[Any] = []
-        self._watchers: list[tuple[param.Parameterized, Any]] = []
+        self._rows_by_key: dict[tuple[int, int], tuple[Any, pn.pane.HTML | None]] = {}
+        self._shown: list[tuple[Any, int]] | None = None
+        self._watched_run: tuple[Any, Any] | None = None
         self.state.param.watch(self._update_rows, "items")
         self.state.param.watch(self._watch_run, "runs")
-        self._watch_run()
+        self._show_run()
 
     def __panel__(self):
         return self._layout
@@ -128,19 +129,22 @@ class RunTrace(Viewer):
     def run(self):
         return self.state.runs.get(self.run_id) if self.run_id else None
 
-    def _unwatch(self):
-        for obj, watcher in self._watchers:
-            obj.param.unwatch(watcher)
-        self._watchers = []
-
     @param.depends("run_id", watch=True)
-    def _watch_run(self, *_):
-        self._unwatch()
-        self._cache, self._cards, self._shown = {}, {}, []
-        self._rows.objects = []
-        if (run := self.run) is not None:
-            self._watchers.append((run, run.param.watch(self._refresh, ["status", "ended_at", "usage", "input"])))
+    def _show_run(self):
+        self._shown = None
+        self._watch_run()
         self._update_rows()
+
+    def _watch_run(self, *_):
+        run = self.run
+        if self._watched_run is not None:
+            if self._watched_run[0] is run:
+                return
+            self._watched_run[0].param.unwatch(self._watched_run[1])
+            self._watched_run = None
+        if run is not None:
+            self._watched_run = (run, run.param.watch(self._refresh, ["status", "ended_at", "usage", "input"]))
+        self._refresh()
 
     def _items(self) -> list[Any]:
         return [i for i in self.state.items if i.run_id == self.run_id] if self.run_id else []
@@ -170,44 +174,61 @@ class RunTrace(Viewer):
             rows += [(child, 1) for child in children.get(id(item), [])]
         return rows
 
-    def _row(self, item: Any, depth: int) -> tuple[Any, pn.pane.HTML | None]:
+    def _card(self, item: Any) -> Any:
+        card = self._cards.get(id(item))
+        if card is not None:
+            return card
         if isinstance(item, MessageState):
             if item.kind == "error":
-                view = pmui.Alert(
+                card = pmui.Alert(
                     object=_escape_markdown(item.content), severity="error", variant="outlined",
                     sizing_mode="stretch_width", margin=(4, 0),
                 )
             else:
-                view = untrusted_markdown(item.content, sizing_mode="stretch_width", margin=(4, 0), stylesheets=[_TEXT_CSS])
-                self._watchers.append((item, item.param.watch(lambda e, p=view: setattr(p, "object", e.new), "content")))
-            return view, None
-        if isinstance(item, ModelCallState):
-            card = ModelCallCard(item, state=self.state, show_tool_count=True)
+                card = untrusted_markdown(item.content, sizing_mode="stretch_width", margin=(4, 0), stylesheets=[_TEXT_CSS])
+                item.param.watch(lambda e, p=card: setattr(p, "object", e.new), "content")
         else:
-            card = ToolCallCard(item, state=self.state)
+            if isinstance(item, ModelCallState):
+                card = ModelCallCard(item, state=self.state, show_tool_count=True)
+            else:
+                card = ToolCallCard(item, state=self.state)
+            item.param.watch(self._refresh_item, ["status", "ended_at"])
         self._cards[id(item)] = card
-        self._watchers.append((item, item.param.watch(self._refresh, ["status", "ended_at"])))
-        bar = pn.pane.HTML(margin=0, stylesheets=[_BAR_CSS], css_classes=["rt-timing"])
-        # Only the card is indented, so the bars of every row share one time axis.
-        body = pn.Column(card, sizing_mode="stretch_width", margin=(0, 0, 0, 24 * depth))
-        return pn.Row(body, bar, sizing_mode="stretch_width", margin=0, styles={"gap": "12px"}), bar
+        return card
 
-    def _update_rows(self, *_):
+    def _row(self, item: Any, depth: int) -> tuple[Any, pn.pane.HTML | None]:
+        key = (id(item), depth)
+        if key not in self._rows_by_key:
+            card = self._card(item)
+            if isinstance(item, MessageState):
+                self._rows_by_key[key] = (card, None)
+            else:
+                bar = pn.pane.HTML(margin=0, stylesheets=[_BAR_CSS], css_classes=["rt-timing"])
+                # Only the card is indented, so the bars of every row share one time axis.
+                body = pn.Column(card, sizing_mode="stretch_width", margin=(0, 0, 0, 24 * depth))
+                row = pn.Row(body, bar, sizing_mode="stretch_width", margin=0, styles={"gap": "12px"})
+                self._rows_by_key[key] = (row, bar)
+        return self._rows_by_key[key]
+
+    def _update_rows(self, event=None):
+        if event is not None and self._shown is not None:
+            old, new = event.old, event.new
+            appended = len(new) >= len(old) and all(a is b for a, b in zip(old, new, strict=False))
+            if appended and all(i.run_id != self.run_id for i in new[len(old):]):
+                return
         rows = self._nested()
-        if [r for r, _ in rows] != self._shown:
-            views = []
-            for item, depth in rows:
-                key = id(item)
-                if key not in self._cache:
-                    self._cache[key] = self._row(item, depth)
-                views.append(self._cache[key][0])
-            self._shown = [r for r, _ in rows]
-            self._rows.objects = views
+        if self._shown is None or [(id(i), d) for i, d in rows] != [(id(i), d) for i, d in self._shown]:
+            self._rows.objects = [self._row(item, depth)[0] for item, depth in rows]
+            self._shown = rows
         self._refresh()
+
+    def _refresh_item(self, *events):
+        if self._shown is not None and any(i is events[0].obj for i, _ in self._shown):
+            self._refresh()
 
     def _window(self) -> tuple[float, float]:
         run = self.run
-        items = [i for i in self._shown if isinstance(i, (ModelCallState, ToolCallState))]
+        items = [i for i, _ in self._shown or [] if isinstance(i, (ModelCallState, ToolCallState))]
         starts = [i.started_at for i in items if i.started_at is not None]
         ends = [i.ended_at for i in items if i.ended_at is not None]
         start = run.started_at if run is not None and run.started_at is not None else min(starts, default=0.0)
@@ -223,8 +244,8 @@ class RunTrace(Viewer):
         run = self.run
         start, end = self._window()
         span = end - start
-        for item in self._shown:
-            bar = self._cache.get(id(item), (None, None))[1]
+        for item, depth in self._shown or []:
+            bar = self._rows_by_key[(id(item), depth)][1]
             if bar is None:
                 continue
             begin = item.started_at if item.started_at is not None else start

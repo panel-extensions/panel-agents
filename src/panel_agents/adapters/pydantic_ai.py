@@ -64,6 +64,7 @@ from .model_trace import (
     _METADATA_KEY,
     ModelRequestSummary,
     ModelTraceRecorder,
+    _attempt_id,
     _response_cost,
     fingerprint,
     load_messages,
@@ -127,6 +128,8 @@ class _UsageEvent(CapabilityEvent, namespace="panel_agents"):
     error: str | None = None
     finish_reason: str | None = None
     provider_response_id: str | None = None
+    attempt_of: str | None = None
+    started: datetime | None = None
 
 
 async def publish_artifact(
@@ -317,12 +320,14 @@ class _RunCapability(AbstractCapability[Any]):
             "request_id": request_id,
         }
         response = replace(response, metadata={**(response.metadata or {}), _METADATA_KEY: stamp})
-        for attempt in getattr(response, "failed_attempts", None) or []:
+        for i, attempt in enumerate(getattr(response, "failed_attempts", None) or [], start=1):
             usage = attempt.usage
+            cost = getattr(usage, "cost", None) if usage is not None else None
             await ctx.emit(_UsageEvent(
                 model=attempt.model_name, input_tokens=usage.input_tokens if usage else 0,
                 output_tokens=usage.output_tokens if usage else 0, cached_tokens=usage.cache_read_tokens if usage else 0,
-                duration=attempt.duration.total_seconds(), request_id=uuid.uuid4().hex,
+                cost_usd=float(cost) if cost is not None else None, duration=attempt.duration.total_seconds(),
+                request_id=_attempt_id(request_id, i), attempt_of=request_id, started=attempt.timestamp,
                 error=_shorten(attempt.error or "Response rejected", 300),
             ))
         usage = response.usage
@@ -514,11 +519,15 @@ class _PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
         if isinstance(event, _ModelRequestEvent):
             yield ev.ModelRequestStarted(request_id=event.request_id, model=event.model)
         elif isinstance(event, _UsageEvent):
-            yield ev.Usage(
+            timing = {}
+            if event.started is not None and event.duration is not None:
+                timing["timestamp"] = event.started.timestamp() + event.duration
+            yield ev.Usage(**timing,
                 model=event.model, input_tokens=event.input_tokens, output_tokens=event.output_tokens,
                 cached_tokens=event.cached_tokens, cost_usd=event.cost_usd, duration=event.duration,
                 request_id=event.request_id, tool_call_ids=list(event.tool_call_ids), error=event.error,
                 finish_reason=event.finish_reason, provider_response_id=event.provider_response_id,
+                attempt_of=event.attempt_of,
             )
 
 

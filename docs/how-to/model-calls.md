@@ -14,9 +14,9 @@ for item in state.items:
         print(item.model, item.input_tokens, item.cached_tokens, item.output_tokens, item.cost_usd, item.duration, item.tool_call_ids)
 ```
 
-`state.model_calls` maps request ids to the same objects. A request that fails, or is cut off because the run was cancelled, ends with `status="failed"` and an `error`. Attempts that pydantic-ai retried before one succeeded, for example with a fallback model, are failed requests of their own. `cached_tokens` are the input tokens the provider read from its cache; they are included in `input_tokens`.
+`state.model_calls` maps request ids to the same objects. A request that fails, or is cut off because the run was cancelled, ends with `status="failed"` and an `error`. Attempts that pydantic-ai retried before one succeeded, for example with a fallback model, belong to the request they were made for: they are listed in its `attempts`, as `Usage` events with an `error` and `attempt_of` set to its request id, and the timeline keeps one item per request. `cached_tokens` are the input tokens the provider read from its cache; they are included in `input_tokens`.
 
-`RunInfo` totals the requests of a run: `requests`, `input_tokens`, `output_tokens`, `cached_tokens`, `cost_usd`, `model_duration` (the seconds spent waiting for the model) and `models`, with the run's wall-clock `duration`.
+`RunInfo` totals the requests of a run: `requests` (every `Usage` event, retried attempts included), `input_tokens`, `output_tokens`, `cached_tokens`, `cost_usd`, `model_duration` (the seconds spent waiting for the model) and `models`, with the run's wall-clock `duration`.
 
 Another adapter only needs to emit the same two events. A `Usage` event without a `request_id`, as recordings made before these events were written hold, still becomes a model call, placed before the messages and tool calls that followed the previous one in its run.
 
@@ -27,10 +27,10 @@ Another adapter only needs to emit the same two events. A `Usage` event without 
 Model requests are steps like tool calls: once a request succeeded it folds into the run's "2 steps · 3.0s" row together with the tool calls around it, so a finished run shows its steps as one row, its answer and the usage line under the answer:
 
 ```
-2 requests · 8.3k in · 244 out · $0.0034 · 3.2s
+2 requests · 8.3k in · 244 out · $0.0034 · 3.2s total
 ```
 
-Steps count the tool calls, and the duration is the time from the first folded step's start to the last one's end. A failed request never folds. A request with no step group to fold into, such as the only request of a run that answered without tools, shows while the run is in progress and is then left to the usage line. The usage line's tooltip adds the cached tokens, the time spent in the model and the models used.
+Steps count the tool calls, and the duration is the time from the first folded step's start to the last one's end; the usage line's "total" is the wall time of the whole run, answer included. A failed request never folds. A request with no step group to fold into, such as the only request of a run that answered without tools, shows while the run is in progress and is then left to the usage line. The usage line's tooltip adds the cached tokens, the time spent in the model and the models used. A request with retried attempts shows how many in its header and lists them in its details. The usage line covers the run's own requests: those of a sub-run (a run with a `parent_run_id`) are not added to its parent's.
 
 Both are parameters:
 

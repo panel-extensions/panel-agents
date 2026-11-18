@@ -163,6 +163,10 @@ class ModelCallState(param.Parameterized):
 
     provider_response_id = param.String(default=None, allow_None=True)
 
+    attempts = param.List(default=[], item_type=ev.Usage, doc="""
+        Failed attempts at this request that a retry or fallback
+        recovered from, as their ``Usage`` events.""")
+
     started_at = param.Number(default=None, allow_None=True)
 
     ended_at = param.Number(default=None, allow_None=True)
@@ -223,7 +227,12 @@ class RunInfo(param.Parameterized):
 
     @property
     def requests(self) -> int:
-        """Number of model requests, failed ones included."""
+        """
+        Number of model requests, failed ones and retried attempts
+        included, as reported by ``Usage`` events. A request cut off by a
+        ``RunError`` without a ``Usage`` of its own is not counted;
+        ``AgentRunner`` always reports one.
+        """
         return len(self.usage)
 
     @property
@@ -640,9 +649,19 @@ class RunState(param.Parameterized):
         self._add_item(request)
 
     def _on_usage(self, event: ev.Usage):
+        request = self.model_calls.get(event.request_id) if event.request_id else None
+        parent = self.model_calls.get(event.attempt_of) if event.attempt_of else None
+        if (request is not None and request.status != "running") or (
+            parent is not None and event.request_id and any(a.request_id == event.request_id for a in parent.attempts)
+        ):
+            # A request is reported once; a repeated Usage would count its tokens twice.
+            return
         if run := self.runs.get(event.run_id):
             run.usage = [*run.usage, event]
-        request = self.model_calls.get(event.request_id) if event.request_id else None
+        if parent is not None and request is None:
+            # Attempts belong to their request rather than the timeline, which stays append-only.
+            parent.attempts = [*parent.attempts, event]
+            return
         if request is None:
             request = self._insert_model_call(event)
         request.param.update(

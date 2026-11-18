@@ -68,7 +68,7 @@ def test_chat_folds_model_calls_and_shows_the_run_totals(page):
     chat = AgentChat(traced_run(), readonly=True, feed_params={"height": 600})
     serve_component(page, chat)
 
-    expect(page.locator(".run-usage")).to_have_text("2 requests · 8.3k in · 244 out · $0.0034 · 3.2s")
+    expect(page.locator(".run-usage")).to_have_text("2 requests · 8.3k in · 244 out · $0.0034 · 3.2s total")
     expect(page.locator(".run-usage .usage")).to_have_attribute("title", "8,318 input tokens, 3,000 from the cache\n244 output tokens\n2.7s waiting for the model\nclaude-haiku-4-5")
     row = page.get_by_role("button", name="2 steps, 3.0s, expand")
     expect(row).to_be_visible()
@@ -125,6 +125,9 @@ def test_trace_lists_the_runs_steps_on_one_time_axis(page, width):
     lefts = page.locator(".rt-track").evaluate_all("els => els.map(e => Math.round(e.getBoundingClientRect().left))")
     assert len(set(lefts)) == 1
     assert page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth") <= 0
+    # The token counts give way before the model name is cut short.
+    names = page.locator(".mc-model").evaluate_all("els => els.map(e => e.scrollWidth - e.clientWidth)")
+    assert names and max(names) <= 0
 
     page.locator(".model-call-card").first.locator("[aria-label='show more']").first.click()
     details = page.locator(".model-call-card").first.locator("dl")

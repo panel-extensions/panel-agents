@@ -33,9 +33,9 @@ _MODEL_HEADER_CSS = _HEADER_CSS + """
   color: var(--mui-palette-primary-main, #1976d2);
   background: rgba(var(--mui-palette-primary-mainChannel, 25 118 210) / 0.1);
 }
-@container (max-width: 380px) { .mc-tools { display: none; } }
-@container (max-width: 300px) { .mc-cost { display: none; } }
-@container (max-width: 200px) { .mc-tokens { display: none; } }
+@container (max-width: 420px) { .mc-tools { display: none; } }
+@container (max-width: 360px) { .mc-cost { display: none; } }
+@container (max-width: 320px) { .mc-tokens { display: none; } }
 """
 
 _DETAILS_CSS = """
@@ -90,7 +90,8 @@ def usage_summary(run: RunInfo) -> str:
     if run.cost_usd is not None:
         parts.append(format_cost(run.cost_usd))
     if run.duration is not None:
-        parts.append(_format_duration(run.duration))
+        # "total" tells the run's wall time apart from a step group's duration, which leaves out the answer.
+        parts.append(f"{_format_duration(run.duration)} total")
     return " · ".join(parts)
 
 
@@ -156,6 +157,9 @@ class ModelCallCard(Viewer):
         meta = []
         if call.status == "failed":
             meta.append('<span class="tc-badge error">Failed</span>')
+        elif call.attempts:
+            n = len(call.attempts)
+            meta.append(f'<span class="tc-badge warning">{n} {"retry" if n == 1 else "retries"}</span>')
         if self.show_tool_count and call.tool_call_ids:
             meta.append(f'<span class="mc-tools">{_plural(len(call.tool_call_ids), "tool call")}</span>')
         if call.status == "success" or call.input_tokens or call.output_tokens:
@@ -182,6 +186,7 @@ class ModelCallCard(Viewer):
             lines.append(f"{call.cached_tokens:,} of {call.input_tokens:,} input tokens from the cache")
         if call.error:
             lines.append(call.error)
+        lines += [f"Attempt {i} failed: {a.error}" for i, a in enumerate(call.attempts, start=1)]
         return "\n".join(lines)
 
     def _tool_names(self) -> list[str]:
@@ -202,6 +207,10 @@ class ModelCallCard(Viewer):
             ("cost", format_cost(call.cost_usd)), ("finish", call.finish_reason),
             ("tool calls", ", ".join(self._tool_names())),
             ("response id", call.provider_response_id), ("request id", call.request_id), ("run id", call.run_id),
+        ]
+        rows += [
+            (f"attempt {i}", f"{a.error} ({_format_duration(a.duration)})" if a.duration is not None else a.error)
+            for i, a in enumerate(call.attempts, start=1)
         ]
         items = "".join(f"<dt>{escape(k)}</dt><dd>{escape(str(v))}</dd>" for k, v in rows if v)
         return f"<dl>{items}</dl>"

@@ -54,7 +54,7 @@ events = merge_model_calls(load_events("runs/events.jsonl"), load_model_calls("r
 state = RunState.from_events(events)
 ```
 
-Each call is matched to its run by `run_id` and placed where `AgentRunner` emits it today: before the text and tool calls of its response, which the bare `Usage` events of the recording mark, or, without them, the `tool_call_id`s of the calls it issued. The bare `Usage` events are replaced, so the totals of a run are not counted twice. Calls of runs the recording does not hold are left out, and so are calls whose request id the recording already has, so merging into a newer recording changes nothing. The result is a list of events like any other: record it with `dump_events` to keep the merged session. To show it in a chat that is already open, `state.reset()` and `state.apply_many(events)`.
+Each call is matched to its run by `run_id` and placed where `AgentRunner` emits it today: before the text and tool calls of its response, which the bare `Usage` events of the recording mark, or, without them, the `tool_call_id`s of the calls it issued. Failed attempts that a retry recovered from are attached to their request, as they are live. The bare `Usage` events a call takes the place of are replaced, so the totals of a run are not counted twice. Runs the recording does not hold are left out, and so are runs it already holds `ModelRequestStarted` events for, so merging into a recording made since model calls are recorded changes nothing. The result is a list of events like any other: record it with `dump_events` to keep the merged session. To show it in a chat that is already open, `state.reset()` and `state.apply_many(events)`.
 
 ## Continue a conversation
 

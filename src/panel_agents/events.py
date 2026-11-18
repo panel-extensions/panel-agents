@@ -299,6 +299,9 @@ class Usage(Event):
     """Why the request failed, None if it succeeded."""
     finish_reason: str | None = None
     provider_response_id: str | None = None
+    attempt_of: str | None = None
+    """For a failed attempt that a retry or fallback recovered from, the
+    ``request_id`` of the request it belongs to."""
 
 
 @dataclass(kw_only=True)
