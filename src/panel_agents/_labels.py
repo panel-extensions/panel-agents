@@ -22,11 +22,12 @@ def _lower(text: str) -> str:
     return text[:1].lower() + text[1:]
 
 
+def _is_default(labels: Mapping[str, str], key: str) -> bool:
+    return labels[key].strip() == _DEFAULTS[key]
+
+
 def _missing_past(labels: Mapping[str, str]) -> list[str]:
-    return [
-        past for verb, past in _PAST.items()
-        if verb in labels and labels[verb] != _DEFAULTS[verb] and past not in labels
-    ]
+    return [past for verb, past in _PAST.items() if verb in labels and not _is_default(labels, verb) and past not in labels]
 
 
 def check_labels(labels: Mapping[str, str] | None) -> dict[str, str] | None:
@@ -54,17 +55,18 @@ def _apply(labels: dict[str, str], layer: Mapping[str, str]) -> dict[str, str]:
     for verb in _missing_past(layer):
         layer.pop(next(v for v, p in _PAST.items() if p == verb))
     out = dict(labels)
-    if "approve" in layer or "approved" in layer:
-        approve = layer.get("approve", out["approve"])
-        approved = layer.get("approved", _DEFAULTS["approved"] if approve == _DEFAULTS["approve"] else out["approved"])
+    if "approve" in layer:
+        approve = layer["approve"]
         out.update(
-            approve=approve, approved=approved, approve_all=f"{approve} all",
-            approve_edited=f"{approve} with edits", approved_edited=f"{approved} with edits",
+            approve=approve, approve_all=f"{approve} all", approve_edited=f"{approve} with edits",
+            approved=_DEFAULTS["approved"] if _is_default(layer, "approve") else out["approved"],
         )
-    if "deny" in layer or "denied" in layer:
-        deny = layer.get("deny", out["deny"])
-        denied = layer.get("denied", _DEFAULTS["denied"] if deny == _DEFAULTS["deny"] else out["denied"])
-        out.update(deny=deny, denied=denied, deny_all=f"{deny} all")
+    if "approve" in layer or "approved" in layer:
+        approved = layer.get("approved", out["approved"])
+        out.update(approved=approved, approved_edited=f"{approved} with edits")
+    if "deny" in layer:
+        deny = layer["deny"]
+        out.update(deny=deny, deny_all=f"{deny} all", denied=_DEFAULTS["denied"] if _is_default(layer, "deny") else out["denied"])
     out.update(layer)
     return out
 
@@ -74,9 +76,10 @@ def approval_labels(*layers: Mapping[str, str] | None) -> dict[str, str]:
     The wording of an approval's actions and outcomes, resolving each
     layer in turn over the defaults.
 
-    A layer that sets ``approve`` or ``deny`` also resets the wording
-    derived from it in earlier layers: ``approve_all``, ``deny_all``,
-    ``approve_edited`` and ``approved_edited``. A changed verb must come
+    A layer that sets ``approve`` resets ``approve_all``,
+    ``approve_edited`` and ``approved_edited`` from earlier layers, one
+    that sets only ``approved`` resets ``approved_edited``, and one that
+    sets ``deny`` resets ``deny_all``. A changed verb must come
     with its past tense (``approved``, ``denied``); a layer from a
     recording that lacks it keeps the earlier verb. Unknown keys are
     ignored, so recordings with newer labels still load.
@@ -88,12 +91,25 @@ def approval_labels(*layers: Mapping[str, str] | None) -> dict[str, str]:
     return labels
 
 
-def _uses_default_verbs(labels: Mapping[str, str]) -> bool:
-    return labels["approve"] == _DEFAULTS["approve"] and labels["deny"] == _DEFAULTS["deny"]
+class FrozenLabels(dict):
+    """A read-only dict of labels that still copies and pickles."""
+
+    def _readonly(self, *args, **kwargs):
+        raise TypeError("Approval labels are read-only.")
+
+    __setitem__ = __delitem__ = clear = pop = popitem = setdefault = update = __ior__ = _readonly
+
+    def __reduce__(self):
+        return (type(self), (dict(self),))
 
 
 class Labels(param.Dict):
-    """A ``param.Dict`` of approval labels, validated with ``check_labels``."""
+    """A ``param.Dict`` of approval labels, validated with ``check_labels``; any mapping is stored as a dict."""
+
+    def __set__(self, obj, value):
+        if isinstance(value, Mapping) and type(value) is not dict:
+            value = dict(value)
+        super().__set__(obj, value)
 
     def _validate_value(self, value, allow_None):
         super()._validate_value(value, allow_None)

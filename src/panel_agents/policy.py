@@ -13,10 +13,9 @@ from __future__ import annotations
 import fnmatch
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
-from types import MappingProxyType
 from typing import Any
 
-from ._labels import check_labels
+from ._labels import FrozenLabels, check_labels
 from .state import ApprovalRequest
 
 _Approvers = Collection[str] | Callable[[ApprovalRequest, str | None], bool]
@@ -59,7 +58,7 @@ class ApprovalRule:
 
     def __post_init__(self):
         if self.labels is not None:
-            object.__setattr__(self, "labels", MappingProxyType(check_labels(self.labels)))
+            object.__setattr__(self, "labels", FrozenLabels(check_labels(self.labels)))
 
     def matches(self, tool_name: str, args: dict[str, Any] | None = None) -> bool:
         """Whether a call to ``tool_name`` with ``args`` needs approval under this rule."""
