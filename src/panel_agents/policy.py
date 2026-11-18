@@ -11,10 +11,11 @@ permission hook.
 from __future__ import annotations
 
 import fnmatch
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from ._labels import check_labels
 from .state import ApprovalRequest
 
 _Approvers = Collection[str] | Callable[[ApprovalRequest, str | None], bool]
@@ -39,6 +40,12 @@ class ApprovalRule:
         ``(request, user) -> bool``. ``user`` is None when the app has no
         authentication, and a callable that raises denies. None lets
         anyone decide.
+    labels
+        Wording of the decision actions on the approval card, queue and
+        tool-call badge, e.g. ``{"approve": "Approve", "deny": "Remove"}``
+        for a plan step. It is recorded on the ``ApprovalRequested``
+        event, so replayed sessions show the same words. See
+        ``ApprovalCard.labels`` for the keys.
     """
 
     tool: str
@@ -46,6 +53,12 @@ class ApprovalRule:
     when: Callable[[dict[str, Any]], bool] | None = None
 
     approvers: _Approvers | None = None
+
+    labels: Mapping[str, str] | None = None
+
+    def __post_init__(self):
+        if self.labels is not None:
+            object.__setattr__(self, "labels", check_labels(self.labels))
 
     def matches(self, tool_name: str, args: dict[str, Any] | None = None) -> bool:
         """Whether a call to ``tool_name`` with ``args`` needs approval under this rule."""
@@ -128,6 +141,7 @@ def _with_args(request: ApprovalRequest, args: dict[str, Any]) -> ApprovalReques
     return ApprovalRequest(
         tool_call_id=request.tool_call_id, tool_name=request.tool_name, args=dict(args),
         schema=request.schema, description=request.description, run_id=request.run_id,
+        labels=request.labels,
     )
 
 

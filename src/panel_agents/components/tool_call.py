@@ -15,6 +15,7 @@ import panel_material_ui as pmui
 import param
 from panel.viewable import Viewer
 
+from .._labels import _lower, approval_labels
 from ..security import _escape_markdown
 from ..state import ApprovalRequest, RunState, ToolCallState
 from .approval import ApprovalCard
@@ -316,6 +317,8 @@ class ToolCallCard(Viewer):
         meta = []
         if badge := _STATUS_BADGES.get(call.status):
             label, kind = badge
+            if call.status == "denied":
+                label = escape(self._approval_labels()["denied"])
             meta.append(f'<span class="tc-badge {kind}">{label}</span>')
         elif call.approval is not None and call.approval.status == "approved" and call.approval.edited:
             meta.append('<span class="tc-badge warning">Edited</span>')
@@ -323,6 +326,10 @@ class ToolCallCard(Viewer):
             meta.append(f'<span class="tc-duration">{_format_duration(call.duration)}</span>')
         parts.append(f'<span class="tc-meta">{"".join(meta)}</span>')
         self._header.object = f'<div class="tc-head">{"".join(parts)}</div>'
+
+    def _approval_labels(self) -> dict[str, str]:
+        request = self.call.approval
+        return approval_labels(request.labels if request is not None else None)
 
     def _update_args(self, *_):
         text = _format_args(self.call.args, self.call.args_text)
@@ -345,12 +352,13 @@ class ToolCallCard(Viewer):
         call = self.call
         if call.status in ("failed", "denied"):
             denied = call.status == "denied"
-            message = call.error or ("The call was denied." if denied else "The call failed.")
+            denied_label = self._approval_labels()["denied"]
+            message = call.error or (f"The call was {_lower(denied_label)}." if denied else "The call failed.")
             # Denial reasons are prose; errors are often tracebacks or driver messages, kept verbatim.
             self._error_text.object = "" if denied else f"<pre>{escape(message)}</pre>"
             self._error.param.update(
                 object=_escape_markdown(message) if denied else "", visible=True,
-                severity="warning" if denied else "error", title="Denied" if denied else "Error",
+                severity="warning" if denied else "error", title=denied_label if denied else "Error",
             )
             self._show_result(None)
             return
