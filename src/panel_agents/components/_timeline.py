@@ -109,6 +109,10 @@ def _time(timestamp: float | None) -> str:
     return moment.strftime("%b %d, %H:%M")
 
 
+#: Shown on a group that cannot be undone as a whole because later edits came after it.
+BLOCKED_NOTE = "Later edits came after this run; undo them first"
+
+
 class VersionTimeline(Viewer):
     """
     The versions of an artifact grouped by run, newest first. The latest
@@ -264,6 +268,15 @@ class VersionTimeline(Viewer):
         # Only a run that changed the applied version can be undone, back to what the host held before it.
         before = self.artifact._version_before([v.version for v in group.versions])
         if self.can_apply and before is not None and applied is not None and applied >= group.first:
+            runs = self.state.runs if self.state is not None else None
+            mine = (
+                set(self.artifact.run_versions(group.run_id, runs)) if group.run_id is not None
+                else {v.version for v in group.versions}
+            )
+            if self.artifact._undo_crosses(before, mine):
+                # Going back would undo later edits made outside the group too; they are undone first.
+                item["secondary"] = " · ".join(filter(None, (item["secondary"], BLOCKED_NOTE)))
+                return item
             label = "Undo run" if applied <= group.last else "Go back to before this run"
             item["actions"] = [{"action": "undo_group", "label": label, "icon": "undo", "inline": True}]
             item["before"] = before
