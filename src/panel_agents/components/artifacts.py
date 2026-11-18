@@ -29,7 +29,7 @@ from ..artifacts.model import Artifact, ArtifactStore, ArtifactVersion
 from ..security import _escape_markdown, _plain_typography
 from ..state import RunState
 from ._diff import DiffViewer
-from ._timeline import VersionTimeline
+from ._timeline import VersionTimeline, root_run_id
 from .renderers import render
 
 _KIND_ICONS = {
@@ -458,7 +458,8 @@ class ArtifactView(Viewer):
         """
         Undo a whole run: apply the version the host held before the run
         first changed the applied version (``run_id`` defaults to the run
-        of the applied version). Versions applied after that, by the run
+        of the applied version). A child run counts as part of its
+        top-level run in ``state``. Versions applied after that, by the run
         or anyone else, are undone with it, and ``redo`` steps forward
         through them again. Raises ``ValueError`` if the run never changed
         the applied version, e.g. because it only proposed versions.
@@ -472,7 +473,8 @@ class ArtifactView(Viewer):
             run_id = applied.run_id if applied is not None else None
             if run_id is None:
                 raise ValueError("The applied version was not published in a run.")
-        numbers = [v.version for v in self.versions if v.run_id == run_id]
+        run_id = root_run_id(self.state, run_id)
+        numbers = [v.version for v in self.versions if root_run_id(self.state, v.run_id) == run_id]
         if not numbers:
             raise ValueError(f"No version of {artifact.artifact_id!r} was published in run {run_id!r}.")
         before = artifact._version_before(numbers)

@@ -58,24 +58,38 @@ class VersionGroup:
         return self.versions[-1].version
 
 
-def group_versions(versions: list[ArtifactVersion]) -> list[VersionGroup]:
+def root_run_id(state: RunState | None, run_id: str | None) -> str | None:
+    """The top-level run that ``run_id`` belongs to, following ``parent_run_id`` through ``state.runs``."""
+    seen = set()
+    while state is not None and run_id is not None and run_id not in seen:
+        seen.add(run_id)
+        run = state.runs.get(run_id)
+        if run is None or run.parent_run_id is None:
+            break
+        run_id = run.parent_run_id
+    return run_id
+
+
+def group_versions(versions: list[ArtifactVersion], state: RunState | None = None) -> list[VersionGroup]:
     """
     Group versions in publication order. A group is a run of consecutive
-    versions with the same ``run_id``, or without one and by the same
-    actor and user, so versions a person made while an agent ran split
-    that run into two groups around them.
+    versions made in the same top-level run of ``state``, so a child run
+    a tool starts stays part of the agent's run, or without a run and by
+    the same actor and user. Versions a person made while an agent ran
+    split that run into two groups around them.
     """
     groups: list[VersionGroup] = []
     for version in versions:
+        run_id = root_run_id(state, version.run_id)
         group = groups[-1] if groups else None
         if group is not None and (
-            (version.run_id is not None and version.run_id == group.run_id)
-            or (version.run_id is None and group.run_id is None and (version.actor, version.user) == (group.actor, group.user))
+            (run_id is not None and run_id == group.run_id)
+            or (run_id is None and group.run_id is None and (version.actor, version.user) == (group.actor, group.user))
         ):
             group.versions.append(version)
             continue
         groups.append(VersionGroup(
-            key=f"{version.run_id or 'edits'}@{version.version}", run_id=version.run_id,
+            key=f"{run_id or 'edits'}@{version.version}", run_id=run_id,
             actor=version.actor, user=version.user, versions=[version],
         ))
     return groups
@@ -184,7 +198,7 @@ class VersionTimeline(Viewer):
 
     def _refresh(self, *events):
         artifact = self.artifact
-        self._groups = groups = group_versions(artifact.versions) if artifact else []
+        self._groups = groups = group_versions(artifact.versions, self.state) if artifact else []
         if groups and groups[-1].key != self._newest:
             # A new run starts expanded; the ones before it fold away unless a person opened them.
             if self._newest is not None:

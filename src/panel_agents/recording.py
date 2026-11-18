@@ -329,8 +329,9 @@ class HistoryRecorder(Recorder):
     Writes the ``ArtifactPublished`` and ``ArtifactApplied`` events of the
     artifacts in ``artifact_ids`` (default: all) and, for each run that
     published one of those versions, its ``RunStarted`` before the first
-    such version and its ``RunFinished`` or ``RunError``, so the history
-    keeps its grouping by run and the runs' inputs. Messages, tool calls
+    such version, after those of the runs it is a child of, and its
+    ``RunFinished`` or ``RunError``, so the history keeps its grouping
+    by run and the runs' inputs. Messages, tool calls
     and runs that published nothing are left out. ``sink`` and
     ``on_error`` work as for ``Recorder``; ``load_history`` restores
     what it wrote.
@@ -365,10 +366,16 @@ class HistoryRecorder(Recorder):
             return
         if self.artifact_ids is not None and event.artifact_id not in self.artifact_ids:
             return
-        if (start := self._started.pop(event.run_id, None)) is not None:
-            self._written.add(event.run_id)
-            super()._write(start)
+        self._write_start(event.run_id)
         super()._write(event)
+
+    def _write_start(self, run_id: str | None):
+        if (start := self._started.pop(run_id, None)) is None:
+            return
+        # A child run's parent comes first, so the restored history still groups it with its parent.
+        self._write_start(start.parent_run_id)
+        self._written.add(run_id)
+        super()._write(start)
 
 
 def load_history(source: _Source, state: RunState | None = None) -> RunState:

@@ -284,6 +284,35 @@ def test_history_recorder_keeps_versions_and_their_runs(tmp_path):
     assert [r["type"] for r in written[1:]] == ["ARTIFACT_PUBLISHED"]
 
 
+async def test_a_child_run_stays_part_of_its_agent_run(tmp_path):
+    state = RunState(flush_interval=0)
+    path = tmp_path / "history.jsonl"
+    recorder = HistoryRecorder(state, path)
+    publish(state, "start", user="ann")
+    state.apply(ev.RunStarted(run_id="r1", agent_name="assistant", input="Build the dashboard"))
+    publish(state, "add_node", run_id="r1", actor="agent")
+    state.apply(ev.RunStarted(run_id="r1-batch", parent_run_id="r1", input="Arrange"))
+    publish(state, "place_tile", run_id="r1-batch", actor="agent")
+    state.apply(ev.RunFinished(run_id="r1-batch"))
+    publish(state, "connect", run_id="r1", actor="agent")
+    state.apply(ev.RunFinished(run_id="r1"))
+    recorder.close()
+
+    groups = group_versions(state.artifacts["doc"].versions, state)
+    assert [(g.run_id, g.first, g.last) for g in groups] == [(None, 1, 1), ("r1", 2, 4)]
+    view, applied = make_view(state)
+    assert view._timeline._list.items[0]["label"] == "Build the dashboard"
+    state.artifacts["doc"].current = 3
+    await view.apply_version(3)
+    assert await view.undo_run()
+    assert applied[-1] == 1
+
+    restored = load_history(path)
+    assert restored.runs["r1-batch"].parent_run_id == "r1"
+    restored_groups = group_versions(restored.artifacts["doc"].versions, restored)
+    assert [(g.run_id, g.first, g.last) for g in restored_groups] == [(None, 1, 1), ("r1", 2, 4)]
+
+
 def test_load_history_finishes_runs_the_stored_session_left_open(tmp_path):
     state = RunState(flush_interval=0)
     path = tmp_path / "history.jsonl"
