@@ -303,14 +303,15 @@ class Cassette(FunctionModel):
         self._compare_requests(number, messages)
 
     def _compare_requests(self, number: int, messages: list[ModelMessage]):
-        request = messages[-1] if messages else None
+        # Both sides are every request after the last response, as the recorder holds them.
+        sent = _sent(messages, set())
         recorded_requests = self._requests[number - 1]
         for kind, extract in (("prompt", _prompts), ("retry", _retries)):
             expected_values = [value for message in recorded_requests for value in extract(message)]
-            if (actual_values := extract(request)) != expected_values:
+            if (actual_values := [value for message in sent for value in extract(message)]) != expected_values:
                 self._diverge(Divergence(number, kind, expected_values, actual_values))
         expected_parts = {k: v for message in recorded_requests for k, v in _tool_parts(message).items()}
-        actual_parts = _tool_parts(request)
+        actual_parts = {k: v for message in sent for k, v in _tool_parts(message).items()}
         for call_id in dict.fromkeys([*expected_parts, *actual_parts]):
             part, expected_part = actual_parts.get(call_id), expected_parts.get(call_id) or self._returns.get(call_id)
             actual_value = _normalize(part.content) if part else None

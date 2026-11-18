@@ -16,6 +16,7 @@ from pydantic_ai.messages import (
     TextPart,
     ToolCallPart,
     ToolReturnPart,
+    UserPromptPart,
 )
 
 from panel_agents import ApprovalPolicy, Recorder, load_state
@@ -666,10 +667,30 @@ async def test_playback_of_a_run_cancelled_during_a_tool_and_continued(tmp_path,
         outputs = [await runner.run("Totals?"), await runner.run("Again?")]
     calls = load_model_calls(path)
 
-    cassette = Cassette.from_trace(path)
+    cassette = Cassette.from_trace(path, strict=True)
     assert len(cassette.responses) == len(calls)
     replay = make_runner(regions_agent(cassette, process))
     _cancel_at_the_first_tool(replay)
     replayed = [await replay.run("Totals?"), await replay.run("Again?")]
     assert replayed == outputs
-    assert cassette.remaining == 0
+    assert (cassette.remaining, cassette.divergences) == (0, [])
+
+
+def _summarize_earlier_turns(messages):
+    """Replace the turns before the newest prompt with one request summarizing them, as a compacting processor does."""
+    prompts = [
+        i for i, m in enumerate(messages)
+        if isinstance(m, ModelRequest) and any(isinstance(p, UserPromptPart) and p.content != "summary of earlier turns" for p in m.parts)
+    ]
+    if len(prompts) < 2:
+        return messages
+    return [ModelRequest(parts=[UserPromptPart("summary of earlier turns")]), *messages[prompts[-1]:]]
+
+
+async def test_playback_of_a_processor_that_summarizes_earlier_turns(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    _, outputs = await record_regions(path, ["Totals?", "Again?"], _summarize_earlier_turns)
+    cassette = Cassette.from_trace(path, strict=True)
+    replay, replayed = await play_regions(cassette, ["Totals?", "Again?"], _summarize_earlier_turns)
+    assert replay.error is None and replayed == outputs
+    assert (cassette.remaining, cassette.divergences) == (0, [])
