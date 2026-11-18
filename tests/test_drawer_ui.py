@@ -119,6 +119,9 @@ def test_toggle_looks_like_a_small_text_button(page, dark):
         return toggle.evaluate("el => getComputedStyle(el).backgroundColor")
 
     idle = background()
+    toggle.focus()
+    expect(toggle).to_have_css("outline-style", "solid")
+    toggle.blur()
     toggle.hover()
     wait_until(lambda: background() not in (idle, "rgba(127, 127, 127, 0.16)"), page)
     page.mouse.move(0, 0)
