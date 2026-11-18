@@ -88,3 +88,45 @@ def test_a_narrow_window_overlays_the_drawer(page):
     # Overlaid, the app keeps its whole width.
     paper = page.locator(".MuiPaper-root").first
     wait_until(lambda: paper.bounding_box()["width"] > 850, page)
+
+
+_LOOK = """el => {
+  const style = getComputedStyle(el)
+  const box = el.getBoundingClientRect()
+  return {
+    textTransform: style.textTransform, fontFamily: style.fontFamily, fontSize: style.fontSize,
+    fontWeight: style.fontWeight, lineHeight: style.lineHeight, letterSpacing: style.letterSpacing,
+    height: box.height, middle: Math.round(box.top + box.height / 2),
+  }
+}"""
+
+
+@pytest.mark.parametrize("dark", [False, True], ids=["light", "dark"])
+def test_toggle_looks_like_a_small_text_button(page, dark):
+    drawer = AgentDrawer(state=RunState(), main=pmui.Typography("The app"))
+    share = pmui.Button(label="Share", icon="share", variant="text", size="small", margin=0)
+    serve_component(
+        page,
+        pmui.Page(main=[pmui.Row(share, drawer.toggle, styles={"align-items": "center"}), drawer], dark_theme=dark),
+    )
+    toggle = page.locator("button.pa-toggle")
+    button = page.get_by_role("button", name="Share")
+    expect(toggle).to_be_visible()
+    expect(button).to_be_visible()
+    assert toggle.evaluate(_LOOK) == button.evaluate(_LOOK)
+
+    def background():
+        return toggle.evaluate("el => getComputedStyle(el).backgroundColor")
+
+    idle = background()
+    toggle.focus()
+    expect(toggle).to_have_css("outline-style", "solid")
+    toggle.blur()
+    toggle.hover()
+    wait_until(lambda: background() not in (idle, "rgba(127, 127, 127, 0.16)"), page)
+    page.mouse.move(0, 0)
+    toggle.click()
+    wait_until(lambda: drawer.open, page)
+    page.get_by_role("button", name="Close", exact=True).click()
+    wait_until(lambda: not drawer.open, page)
+    wait_until(lambda: background() == idle, page)
