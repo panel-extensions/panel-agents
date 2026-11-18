@@ -178,8 +178,86 @@ def test_replay_reproduces_undo_redo_and_whole_run_steps():
     state.undo_run("doc", "r3")
     replayed = RunState.from_events(state.events)
     live, loaded = state.artifacts["doc"], replayed.artifacts["doc"]
-    assert stacks(loaded) == stacks(live)
+    assert stacks(loaded) == stacks(live) and loaded.current == live.current
     for name in ("redo_run", "undo", "undo_run", "redo"):
         assert getattr(replayed, name)("doc").version == getattr(state, name)("doc").version
         assert stacks(loaded) == stacks(live)
     assert applied_events(replayed) == applied_events(state)
+
+
+def three_versions(*runs):
+    state = RunState(flush_interval=0)
+    publish(state, "base")
+    for i, run_id in enumerate(runs):
+        if run_id is None:
+            publish(state, f"edit{i}")
+        else:
+            agent_run(state, run_id, "Edit", f"op{i}")
+    return state
+
+
+def test_a_version_applied_again_moves_to_the_end_of_the_undo_history():
+    state = three_versions("A", "A")
+    artifact = state.artifacts["doc"]
+    state.apply_artifact_version("doc", 2)
+    assert artifact._undo == [1, 3]
+    assert state.undo("doc").version == 3 and state.undo("doc").version == 1
+    assert state.undo("doc") is None
+
+
+def test_redo_run_after_reapplying_versions_by_hand_redoes_everything_once():
+    state = RunState(flush_interval=0)
+    publish(state, "base")
+    agent_run(state, "A", "Edit", "op1", "op2")
+    state.apply_artifact_version("doc", 2)
+    state.apply_artifact_version("doc", 3)
+    artifact = state.artifacts["doc"]
+    assert state.undo_run("doc").version == 1
+    assert state.redo_run("doc").version == 3
+    assert stacks(artifact) == (3, 2, None, None)
+    events, calls = len(state.events), []
+    assert state.redo_run("doc", on_apply=lambda *a: calls.append(a)) is None
+    assert state.redo_run("doc", "A", on_apply=lambda *a: calls.append(a)) is None
+    assert len(state.events) == events and not calls
+
+
+def test_undoing_a_run_that_is_undone_already_does_nothing():
+    state = three_versions(None, "A")
+    state.undo("doc")
+    state.undo("doc")
+    artifact = state.artifacts["doc"]
+    assert stacks(artifact) == (1, None, 2, 2)
+    events, calls = len(state.events), []
+    assert artifact.undo_run_target("A", state.runs) is None
+    assert state.undo_run("doc", "A", on_apply=lambda *a: calls.append(a)) is None
+    assert len(state.events) == events and not calls and artifact.redo_version == 2
+
+    state = three_versions("A")
+    assert state.undo_run("doc", "A").version == 1
+    events = len(state.events)
+    assert state.undo_run("doc", "A", on_apply=lambda *a: calls.append(a)) is None
+    assert len(state.events) == events and not calls
+
+
+async def test_a_view_does_not_undo_a_run_twice():
+    state = three_versions("A")
+    applied = []
+    view = ArtifactView(state.artifacts["doc"], state=state, on_apply=lambda a, v: applied.append(v.version))
+    assert await view.undo_run("A")
+    assert not await view.undo_run("A")
+    assert applied == [1]
+
+
+def test_replay_shows_the_applied_version_as_current():
+    state = make_state()
+    state.undo_run("doc")
+    state.apply_artifact_version("doc", 2)
+    state.undo("doc")
+    publish(state, "proposal", run_id="r3", actor="agent", applied=False)
+    state.redo("doc")
+    state.apply_artifact_version("doc", 6)
+    state.undo_run("doc", "r2")
+    replayed = RunState.from_events(state.events).artifacts["doc"]
+    live = state.artifacts["doc"]
+    assert (replayed.current, *stacks(replayed)) == (live.current, *stacks(live))
+    assert live.current == live.applied

@@ -458,7 +458,8 @@ class ArtifactView(Viewer):
         Undo a whole run through ``on_apply``, as ``RunState.undo_run``
         does, resolving child runs through ``state``. Raises
         ``ValueError`` if the run never changed the applied version.
-        Returns whether the version was applied.
+        Returns whether the version was applied, so False if the run is
+        undone already.
         """
         artifact = self.artifact
         if artifact is None:

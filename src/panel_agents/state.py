@@ -593,7 +593,8 @@ class RunState(param.Parameterized):
         as part of its top-level run. Versions applied after the run
         started, by the run or anyone else, are undone with it; ``redo``
         steps forward through them again and ``redo_run`` redoes them all.
-        Raises ``ValueError`` if the run never changed the applied
+        Returns None without calling ``on_apply`` if the run is undone
+        already, and raises ``ValueError`` if it never changed the applied
         version. Other arguments and result as for ``undo``.
         """
         artifact = self.artifacts[artifact_id]
@@ -617,9 +618,9 @@ class RunState(param.Parameterized):
     def _step(
         self, artifact_id: str, number: int | None, action: str, user: str | None, on_apply: _OnApply | None,
     ) -> ArtifactVersion | None:
-        if number is None:
-            return None
         artifact = self.artifacts[artifact_id]
+        if number is None or number == artifact.applied:
+            return None
         version = artifact.versions[number - 1]
         if on_apply is not None:
             result = on_apply(artifact, version)
@@ -632,7 +633,6 @@ class RunState(param.Parameterized):
         self.apply_artifact_version(
             artifact_id, number, user=user if user is not None else _session_user(), action=action,
         )
-        artifact.current = number
         return version
 
     # Event handlers
