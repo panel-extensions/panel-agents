@@ -95,8 +95,8 @@ def test_timeline_lists_runs_newest_first():
     assert [r["label"] for r in items[2]["items"]] == ["place_tile", "connect", "add_node"]
     assert rows(view)[0]["secondary"].endswith("applied") and "actions" not in rows(view)[0]
     assert rows(view)[1]["actions"][0]["action"] == "restore"
-    assert items[0]["actions"][0]["label"] == "Undo turn" and items[0]["before"] == 4
-    assert items[1]["actions"][0]["label"] == "Go back to before this turn"
+    assert items[0]["actions"][0]["label"] == "Undo run" and items[0]["before"] == 4
+    assert items[1]["actions"][0]["label"] == "Go back to before this run"
     assert "actions" not in items[2]
 
 
@@ -156,7 +156,7 @@ async def test_undo_run_goes_back_before_the_run_and_redo_steps_through_it():
     assert artifact.redo_version == 5
     assert await view.redo() and await view.redo()
     assert artifact.applied == 6 and not view.can_redo
-    with pytest.raises(ValueError, match="first version"):
+    with pytest.raises(ValueError, match="did not change the applied version"):
         await view.undo_run("r1")
     with pytest.raises(ValueError, match="No version"):
         await view.undo_run("missing")
@@ -192,9 +192,11 @@ async def test_a_new_version_ends_redo():
     view, _ = make_view(state)
     await view.undo()
     assert view.can_redo
-    publish(state, "set_config", run_id="r9", actor="agent", applied=False)
-    assert not view.can_redo and state.artifacts["doc"].applied == 5
-    assert state.artifacts["doc"].undo_version == 4
+    publish(state, "proposal", run_id="r9", actor="agent", applied=False)
+    assert view.can_redo and state.artifacts["doc"].applied == 5
+    publish(state, "set_config", run_id="r9", actor="agent")
+    assert not view.can_redo and state.artifacts["doc"].applied == 8
+    assert state.artifacts["doc"].undo_version == 5
 
 
 async def test_restoring_from_the_timeline_applies_and_views_the_version():
@@ -290,4 +292,74 @@ def test_load_history_finishes_runs_the_stored_session_left_open(tmp_path):
         publish(state, "add_node", run_id="r1", actor="agent")
     restored = load_history(path)
     assert restored.runs["r1"].status == "finished" and not restored.running
+    assert restored.runs["r1"].ended_at == state.artifacts["doc"].latest.created_at
     assert len(restored.artifacts["doc"].versions) == 1
+
+
+async def test_undo_run_skips_a_proposal_published_before_the_run():
+    state = RunState(flush_interval=0)
+    publish(state, "base")
+    publish(state, "proposal", actor="agent", applied=False)
+    publish(state, "a", run_id="r1", actor="agent")
+    publish(state, "b", run_id="r1", actor="agent")
+    view, applied = make_view(state)
+    assert view._timeline._list.items[0]["before"] == 1
+    assert await view.undo_run("r1")
+    artifact = state.artifacts["doc"]
+    assert applied == [1] and artifact.applied == 1 and artifact.redo_version == 3
+    assert await view.redo() and artifact.applied == 3
+
+
+async def test_a_run_that_only_proposed_cannot_be_undone():
+    state = RunState(flush_interval=0)
+    publish(state, "base")
+    publish(state, "proposal", run_id="r1", actor="agent", applied=False)
+    view, applied = make_view(state)
+    assert "actions" not in view._timeline._list.items[0]
+    with pytest.raises(ValueError, match="did not change"):
+        await view.undo_run("r1")
+    assert applied == []
+
+
+async def test_undo_opens_the_group_of_the_applied_version():
+    state = make_state()
+    view, _ = make_view(state)
+    assert view._timeline._list.expanded == [(0,)]
+    await view.undo_run()
+    items, expanded = view._timeline._list.items, view._timeline._list.expanded
+    assert (1,) in expanded and items[1]["items"][0]["version"] == 4
+    assert view._timeline._list.active == (1, 0)
+
+
+def test_a_long_group_shows_its_latest_versions_first():
+    from panel_agents.components._timeline import ROW_LIMIT
+
+    state = RunState(flush_interval=0)
+    for i in range(ROW_LIMIT + 7):
+        publish(state, f"edit {i}", user="ann")
+    view, _ = make_view(state)
+    rows = view._timeline._list.items[0]["items"]
+    assert len(rows) == ROW_LIMIT + 1 and rows[-1]["label"] == "Show 7 more"
+    view._timeline._on_click(rows[-1])
+    rows = view._timeline._list.items[0]["items"]
+    assert len(rows) == ROW_LIMIT + 7 and rows[-1]["version"] == 1
+
+
+async def test_apply_validates_its_action_first():
+    state = make_state()
+    view, applied = make_view(state)
+    with pytest.raises(ValueError, match="action"):
+        await view.apply_version(2, action="rewind")
+    assert applied == []
+    with pytest.raises(ValueError, match="needs an artifact"):
+        await ArtifactView(None, on_apply=lambda *a: None).undo_run("r1")
+
+
+def test_history_recorder_attached_mid_run_keeps_the_run():
+    state = RunState(flush_interval=0)
+    state.apply(ev.RunStarted(run_id="r1", input="Already running"))
+    records = []
+    HistoryRecorder(state, records.append)
+    publish(state, "add_node", run_id="r1", actor="agent")
+    assert [r["type"] for r in records[1:]] == ["RUN_STARTED", "ARTIFACT_PUBLISHED"]
+    assert load_history(records).runs["r1"].input == "Already running"

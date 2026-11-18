@@ -182,12 +182,16 @@ def _apply_styles(table, styles: pd.DataFrame):
     return table
 
 
+# A quiet toggle like the drawer's: open shows the theme's selected tint, not a filled button.
 _TOGGLE_SX = {
+    "border": 0, "borderRadius": "var(--mui-shape-borderRadius)", "px": 1, "py": "4px", "gap": "4px",
     "color": "var(--mui-palette-text-primary)", "textTransform": "none", "lineHeight": 1.5,
-    "& .MuiButton-startIcon": {"display": "inline-flex", "alignItems": "center", "mr": "4px"},
+    "fontSize": "0.8125rem", "whiteSpace": "nowrap", "width": "auto",
+    "& .material-icons, & .MuiIcon-root": {"fontSize": "18px", "lineHeight": 1},
+    "&.Mui-selected, &.Mui-selected:hover": {
+        "bgcolor": "var(--mui-palette-action-selected)", "color": "var(--mui-palette-text-primary)",
+    },
 }
-
-_TOGGLE_SX_OPEN = {**_TOGGLE_SX, "bgcolor": "var(--mui-palette-action-selected)"}
 
 
 class ArtifactView(Viewer):
@@ -259,10 +263,12 @@ class ArtifactView(Viewer):
         self._icon = pmui.Chip(size="small", variant="outlined", margin=(0, 8, 0, 0))
         self._title = _plain_typography(variant="h6", margin=(0, 8), styles={"font-weight": "600"})
         self._count = pmui.Typography(variant="caption", color="text.secondary", margin=(0, 8))
-        self._history_button = pmui.Button(
-            label="History", icon="history", variant="text", size="small", color="default",
-            description="Version history", margin=(0, 0, 0, 8), on_click=lambda e: self.param.update(history=not self._history_open),
+        # A ToggleButton exposes its state as aria-pressed.
+        self._history_button = pmui.Toggle(
+            label="History", icon="history", icon_size="18px", description="Version history", sx=_TOGGLE_SX,
+            margin=(0, 0, 0, 8),
         )
+        self._history_button.param.watch(self._on_history_toggle, "value")
         self._undo = pmui.Button(
             label="Undo", icon="undo", variant="text", size="small", color="primary", disabled=True,
             margin=0, on_click=self._on_undo_click,
@@ -273,11 +279,13 @@ class ArtifactView(Viewer):
         )
         self._timeline = VersionTimeline(on_view=self._view_version, on_restore=self._step)
         self._timeline_controls = pmui.Row(
-            self._undo, self._redo, align="center", margin=(0, 0, 0, 4), styles={"align-items": "center", "gap": "4px"},
+            self._undo, self._redo, align="center", margin=(0, 0, 0, 12), styles={"align-items": "center", "gap": "4px"},
         )
+        # Undo and Redo stay in view while the versions scroll.
         self._history_panel = pmui.Column(
-            self._timeline_controls, self._timeline, sizing_mode="stretch_width", visible=False,
-            max_height=400, scroll="y-auto", margin=(8, 0, 0, 0),
+            self._timeline_controls,
+            pmui.Column(self._timeline, sizing_mode="stretch_width", max_height=360, scroll="y-auto", margin=0),
+            sizing_mode="stretch_width", visible=False, margin=(8, 0, 0, 0),
             styles={"border-bottom": "1px solid var(--mui-palette-divider)"},
         )
         self._download = pmui.FileDownload(
@@ -411,14 +419,11 @@ class ArtifactView(Viewer):
         artifact = self.artifact
         is_open = self._history_open
         self._history_panel.visible = is_open
-        # A quiet toggle like the drawer's: open is shown with the theme's selected tint, not a filled button.
-        self._history_button.sx = _TOGGLE_SX_OPEN if is_open else _TOGGLE_SX
+        self._history_button.value = is_open
         can_apply = artifact is not None and artifact.is_document and self.on_apply is not None
         # A closed history is not built, so artifacts nobody browses cost nothing to update.
         shown = artifact if is_open else None
-        self._timeline.param.update(state=self.state, user=self._user(), can_apply=can_apply)
-        if self._timeline.artifact is not shown:
-            self._timeline.artifact = shown
+        self._timeline.param.update(artifact=shown, state=self.state, user=self._user(), can_apply=can_apply)
         self._timeline_controls.visible = can_apply
         with param.edit_constant(self):
             self.param.update(
@@ -427,6 +432,10 @@ class ArtifactView(Viewer):
             )
         self._undo.disabled = not self.can_undo or self._applying
         self._redo.disabled = not self.can_redo or self._applying
+
+    def _on_history_toggle(self, event):
+        if event.new != self._history_open:
+            self.history = event.new
 
     async def undo(self) -> bool:
         """
@@ -447,24 +456,29 @@ class ArtifactView(Viewer):
 
     async def undo_run(self, run_id: str | None = None) -> bool:
         """
-        Undo a whole run: apply the version before the first version
-        ``run_id`` published (default: the run of the applied version).
-        Versions published after that one, by the run or anyone else, are
-        undone with it, and ``redo`` steps forward through them again.
+        Undo a whole run: apply the version the host held before the run
+        first changed the applied version (``run_id`` defaults to the run
+        of the applied version). Versions applied after that, by the run
+        or anyone else, are undone with it, and ``redo`` steps forward
+        through them again. Raises ``ValueError`` if the run never changed
+        the applied version, e.g. because it only proposed versions.
         Returns whether the version was applied.
         """
         artifact = self.artifact
+        if artifact is None:
+            raise ValueError("ArtifactView.undo_run needs an artifact.")
         if run_id is None:
-            applied = artifact.applied_version if artifact else None
+            applied = artifact.applied_version
             run_id = applied.run_id if applied is not None else None
             if run_id is None:
                 raise ValueError("The applied version was not published in a run.")
-        first = next((v.version for v in self.versions if v.run_id == run_id), None)
-        if first is None:
+        numbers = [v.version for v in self.versions if v.run_id == run_id]
+        if not numbers:
             raise ValueError(f"No version of {artifact.artifact_id!r} was published in run {run_id!r}.")
-        if first == 1:
-            raise ValueError(f"Run {run_id!r} published the first version of {artifact.artifact_id!r}; there is nothing before it.")
-        return await self._step(first - 1, "undo")
+        before = artifact._version_before(numbers)
+        if before is None:
+            raise ValueError(f"Run {run_id!r} did not change the applied version of {artifact.artifact_id!r} from an earlier one.")
+        return await self._step(before, "undo")
 
     async def _step(self, number: int | None, action: str | None = None) -> bool:
         if number is None:
@@ -472,6 +486,7 @@ class ArtifactView(Viewer):
         if not await self.apply_version(number, action=action):
             return False
         self.artifact.current = number
+        self._timeline.reveal(number)
         return True
 
     async def _on_undo_click(self, event):
@@ -513,6 +528,8 @@ class ArtifactView(Viewer):
         """
         if self.on_apply is None:
             raise RuntimeError("ArtifactView.apply_version needs an on_apply callback that changes the host document.")
+        if action not in (None, "undo", "redo"):
+            raise ValueError(f"action must be 'undo', 'redo' or None, not {action!r}.")
         if self._applying:
             return False
         artifact = self.artifact

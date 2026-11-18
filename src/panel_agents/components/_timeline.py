@@ -18,11 +18,24 @@ from ..state import RunState
 
 _ACTOR_ICONS = {"agent": "smart_toy", "user": "person"}
 
-# Two-line rows as tight as a dense single-line list item, so a run's operations scan quickly.
+# Rows an open group shows before a "Show more" row, so one long group stays cheap to send and render.
+ROW_LIMIT = 50
+
+# Two-line rows as tight as a dense single-line list item, so a run's operations scan quickly. A row's
+# restore button shows on hover or focus only, except on touch screens.
+_ROW_ACTION = "& .MuiCollapse-root .MuiIconButton-root[title]"
 _LIST_SX = {
     "& .MuiListItemButton-root": {"py": "1px", "minHeight": "40px"},
     "& .MuiListItemText-root": {"my": "2px"},
     "& .MuiListItemText-secondary": {"fontSize": "0.75rem"},
+    "@media (hover: hover)": {
+        _ROW_ACTION: {"opacity": 0},
+        (
+            "& .MuiCollapse-root .MuiListItemButton-root:hover .MuiIconButton-root[title], "
+            "& .MuiCollapse-root .MuiListItemButton-root:focus-within .MuiIconButton-root[title], "
+            "& .MuiCollapse-root .MuiIconButton-root[title]:focus-visible"
+        ): {"opacity": 1},
+    },
 }
 
 
@@ -94,8 +107,9 @@ def _time(timestamp: float | None) -> str:
 class VersionTimeline(Viewer):
     """
     The versions of an artifact grouped by run, newest first. The latest
-    group starts expanded and older ones collapsed, so a long history
-    renders only the rows of the groups a person opens.
+    group starts expanded and older ones collapsed, and an open group
+    shows its latest ``ROW_LIMIT`` versions with a row showing more, so
+    a long history renders only the rows a person asks for.
     """
 
     artifact = param.ClassSelector(class_=Artifact, allow_None=True)
@@ -119,6 +133,7 @@ class VersionTimeline(Viewer):
         super().__init__(**params)
         self._groups: list[VersionGroup] = []
         self._expanded: set[str] = set()
+        self._limits: dict[str, int] = {}
         self._newest: str | None = None
         self._syncing = False
         self._list = pmui.MenuList(
@@ -128,8 +143,10 @@ class VersionTimeline(Viewer):
         self._list.param.watch(self._on_expanded, "expanded")
         self._list.on_action("restore", self._on_restore_action)
         self._list.on_action("undo_group", self._on_undo_action)
+        self._list.on_click(self._on_click)
         self._watchers: list = []
-        self._bind()
+        self._bound = None
+        self._update()
 
     def __panel__(self):
         return self._list
@@ -138,21 +155,33 @@ class VersionTimeline(Viewer):
     def groups(self) -> list[VersionGroup]:
         return list(self._groups)
 
-    @param.depends("artifact", watch=True)
-    def _bind(self):
-        for obj, watcher in self._watchers:
-            obj.param.unwatch(watcher)
-        self._watchers = []
-        self._expanded.clear()
-        self._newest = None
-        if self.artifact is not None:
-            self._watchers = [
-                (self.artifact, self.artifact.param.watch(self._refresh, ["versions", "applied"])),
-                (self.artifact, self.artifact.param.watch(self._on_current, "current")),
-            ]
+    @param.depends("artifact", "can_apply", "user", "state", watch=True)
+    def _update(self):
+        # One refresh however many of these change together.
+        if self.artifact is not self._bound:
+            for obj, watcher in self._watchers:
+                obj.param.unwatch(watcher)
+            self._watchers = []
+            self._expanded.clear()
+            self._limits.clear()
+            self._newest = None
+            self._bound = self.artifact
+            if self.artifact is not None:
+                self._watchers = [
+                    (self.artifact, self.artifact.param.watch(self._refresh, ["versions", "applied"])),
+                    (self.artifact, self.artifact.param.watch(self._on_current, "current")),
+                ]
         self._refresh()
 
-    @param.depends("can_apply", "user", "state", watch=True)
+    def reveal(self, version: int):
+        """Open the group holding ``version`` and show its row."""
+        for group in self._groups:
+            if group.first <= version <= group.last:
+                self._expanded.add(group.key)
+                self._limits[group.key] = max(self._limits.get(group.key, ROW_LIMIT), group.last - version + 1)
+                self._refresh()
+                return
+
     def _refresh(self, *events):
         artifact = self.artifact
         self._groups = groups = group_versions(artifact.versions) if artifact else []
@@ -165,7 +194,14 @@ class VersionTimeline(Viewer):
         items, expanded = [], []
         for gi, group in enumerate(reversed(groups)):
             if group.key in self._expanded:
-                rows = [self._row(v) for v in reversed(group.versions)]
+                limit = self._limits.get(group.key, ROW_LIMIT)
+                rows = [self._row(v) for v in reversed(group.versions[-limit:])]
+                if (hidden := len(group.versions) - limit) > 0:
+                    rows.append({
+                        "id": f"{group.key}/more", "more": group.key, "label": f"Show {min(hidden, ROW_LIMIT)} more",
+                        "secondary": f"{hidden} earlier version{'s' if hidden != 1 else ''}", "selectable": False,
+                        "icon": "expand_more",
+                    })
                 expanded.append((gi,))
             else:
                 # Rows are sent only once a group is opened, which keeps a long history cheap to update.
@@ -184,8 +220,10 @@ class VersionTimeline(Viewer):
         groups = self._groups
         for gi, group in enumerate(reversed(groups)):
             if group.first <= (current or 0) <= group.last:
-                # A collapsed group has no row to highlight.
-                return (gi, group.last - current) if (gi,) in expanded else None
+                # A collapsed group, or a row beyond the ones shown, has nothing to highlight.
+                index = group.last - current
+                shown = index < self._limits.get(group.key, ROW_LIMIT)
+                return (gi, index) if (gi,) in expanded and shown else None
         return None
 
     def _on_current(self, event):
@@ -204,7 +242,9 @@ class VersionTimeline(Viewer):
             "color": "primary" if applied else "action",
         }
         if self.can_apply and not applied:
-            item["actions"] = [{"action": "restore", "label": f"Restore v{version.version}", "icon": "restore", "inline": True}]
+            item["actions"] = [{
+                "action": "restore", "label": f"Restore v{version.version}", "icon": "settings_backup_restore", "inline": True,
+            }]
         return item
 
     def _header(self, group: VersionGroup, rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -216,10 +256,12 @@ class VersionTimeline(Viewer):
             "icon": _ACTOR_ICONS.get(group.actor or "", "edit_note"),
         }
         applied = self.artifact.applied
-        if self.can_apply and group.first > 1 and applied is not None and applied >= group.first:
-            label = "Undo turn" if applied <= group.last else "Go back to before this turn"
+        # Only a run that changed the applied version can be undone, back to what the host held before it.
+        before = self.artifact._version_before([v.version for v in group.versions])
+        if self.can_apply and before is not None and applied is not None and applied >= group.first:
+            label = "Undo run" if applied <= group.last else "Go back to before this run"
             item["actions"] = [{"action": "undo_group", "label": label, "icon": "undo", "inline": True}]
-            item["before"] = group.first - 1
+            item["before"] = before
         return item
 
     def _group_label(self, group: VersionGroup) -> str:
@@ -242,6 +284,11 @@ class VersionTimeline(Viewer):
         opened = expanded - self._expanded
         self._expanded = expanded
         if opened:
+            self._refresh()
+
+    def _on_click(self, item: dict[str, Any]):
+        if isinstance(item, dict) and (key := item.get("more")):
+            self._limits[key] = self._limits.get(key, ROW_LIMIT) + ROW_LIMIT
             self._refresh()
 
     def _on_active(self, event):

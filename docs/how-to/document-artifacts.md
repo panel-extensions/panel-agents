@@ -102,9 +102,9 @@ They are backed by a context variable, so they follow awaited code and the tasks
 
 ## Browse the history
 
-The artifact view lists the versions in a history grouped by the run that made them, newest first. It opens by default for documents, so in an `AgentDrawer` the artifacts view shows it right away; for other artifacts the History button in the header (labelled with the version shown, such as `v12`) opens it, and `ArtifactView(history=True)` opens it from code.
+The artifact view lists the versions in a history grouped by the run that made them, newest first. It opens by default for documents, so in an `AgentDrawer` the artifacts view shows it right away; for other artifacts the History toggle in the header (labelled with the version shown, such as `v12`) opens it, and `ArtifactView(history=True)` opens it from code.
 
-Each group is headed by the run's input, the question the user asked, with its time and number of versions. A run made with `RunState.user_run` shows its input too; other edits by a person read "You edited" for the person viewing and "ann edited" for anyone else. Versions made outside a run are grouped while the same person keeps editing, and a person's edit made while an agent ran sits between the agent's versions before and after it. The latest group is open and older ones are folded, and a folded group sends and renders no rows until it is opened, so a history of hundreds of versions stays quick to update and to scroll.
+Each group is headed by the run's input, the question the user asked, with its time and number of versions. A run made with `RunState.user_run` shows its input too; other edits by a person read "You edited" for the person viewing and "ann edited" for anyone else. Versions made outside a run are grouped while the same person keeps editing, and a person's edit made while an agent ran sits between the agent's versions before and after it. The latest group is open and older ones are folded. A folded group sends and renders no rows until it is opened, and an open group shows its latest 50 versions with a "Show 50 more" row below them, so the cost of an update grows with the number of runs and the rows people open rather than with the number of versions. With 500 versions in 100 runs, the drawer loads in about half a second and opening a run or viewing a version takes a few hundred milliseconds.
 
 A row shows the version's operation, its number and time, and a filled marker on the applied version. Clicking it shows that version without applying it, and the Compare tab then compares it with the applied one. The operation label comes from the version's metadata:
 
@@ -116,12 +116,12 @@ Publish both when you have them; the label is shown and `op` stays available to 
 
 ## Undo and redo
 
-For a document with an `on_apply` callback the history has Undo and Redo buttons, a restore button on every row that is not applied, and an undo button on the group of the applied version and the groups before it ("Undo turn" and "Go back to before this turn"). They all move the applied version through `on_apply` and record an `ARTIFACT_APPLIED` event, so no version is ever changed or removed and a replayed recording shows the same history. The same commands exist in code:
+For a document with an `on_apply` callback the history has Undo and Redo buttons, a restore button on every row that is not applied (shown on hover or focus), and an undo button on each run that changed the applied version, up to the applied one ("Undo run" and "Go back to before this run"). They all move the applied version through `on_apply` and record an `ARTIFACT_APPLIED` event, so no version is ever changed or removed and a replayed recording shows the same history. The same commands exist in code:
 
 ```python
 await view.undo()            # back to the version applied before the last change
 await view.redo()            # forward again
-await view.undo_run(run_id)  # back to the version before the run's first version
+await view.undo_run(run_id)  # back to what the host held before the run changed it
 await view.apply_version(3)  # restore one version
 ```
 
@@ -130,8 +130,8 @@ await view.apply_version(3)  # restore one version
 What counts as a change follows the order in which versions were published and applied, which is what the `ARTIFACT_APPLIED` events record (their `action` is `"undo"`, `"redo"` or None):
 
 - Publishing an applied version, and applying a version by hand ("Apply", "Revert to", a row's restore), are changes. Undo goes back to the version that was applied before, so undoing a revert returns to where the revert started.
-- Undoing a run goes back to the version before the run's first version in one step. Redo then steps forward through the undone versions one at a time.
-- Publishing any new version ends redo, as in a text editor.
+- Undoing a run goes back to the version the host held before the run first published an applied version, in one step; proposals published before or during the run are skipped. A run that only proposed versions has nothing to undo and `undo_run` raises `ValueError`. Redo then steps forward through the undone versions one at a time.
+- Publishing a new applied version ends redo, as in a text editor; a proposal does not, since the document did not change.
 - Versions a person published while the agent ran are undone with the agent's run when they came after its first version, since a version is a snapshot of the whole document. Restore such a version from its row to get it back.
 
 ## Keep the history across sessions

@@ -75,13 +75,15 @@ class Artifact(param.Parameterized):
 
     redo_version = param.Integer(default=None, allow_None=True, constant=True, doc="""
         Number of the version redoing the last undo would apply, or None
-        if there is nothing to redo. Publishing a version ends redo.""")
+        if there is nothing to redo. Publishing an applied version ends redo.""")
 
     def __init__(self, **params):
         super().__init__(**params)
         # Previously applied version numbers; derived from the order versions were published and applied.
         self._undo: list[int] = []
         self._redo: list[int] = []
+        # For each version published as applied, the version the host held before it.
+        self._applied_before: dict[int, int | None] = {}
 
     def _stacks(self) -> dict[str, int | None]:
         return {
@@ -109,6 +111,15 @@ class Artifact(param.Parameterized):
             self._undo.append(applied)
             self._redo.clear()
         return {"applied": number, **self._stacks()}
+
+    def _version_before(self, versions: list[int]) -> int | None:
+        """
+        The version the host held before the first of ``versions`` that
+        was published as applied, e.g. to undo a whole run; None if none
+        of them changed the applied version or nothing was applied before.
+        """
+        changed = sorted(v for v in versions if v in self._applied_before)
+        return self._applied_before[changed[0]] if changed else None
 
     @property
     def is_document(self) -> bool:
@@ -155,10 +166,11 @@ class Artifact(param.Parameterized):
             metadata=metadata or {},
         )
         update = {"versions": [*self.versions, version], "current": version.version}
-        self._redo.clear()
         if applied:
+            self._applied_before[version.version] = self.applied
             if self.applied is not None:
                 self._undo.append(self.applied)
+            self._redo.clear()
             update["applied"] = version.version
         update.update(self._stacks())
         with param.edit_constant(self):

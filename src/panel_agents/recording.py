@@ -340,7 +340,14 @@ class HistoryRecorder(Recorder):
         self, state: RunState, sink: _Sink, *, artifact_ids: Iterable[str] | None = None, on_error: str = "log",
     ):
         self.artifact_ids = None if artifact_ids is None else set(artifact_ids)
-        self._started: dict[str, RunStarted] = {}
+        # Runs already in progress may still publish versions, so their start is kept as if it had just been seen.
+        self._started: dict[str, RunStarted] = {
+            run.run_id: RunStarted(
+                run_id=run.run_id, thread_id=run.thread_id, parent_run_id=run.parent_run_id,
+                agent_name=run.agent_name, input=run.input, timestamp=run.started_at or 0.0,
+            )
+            for run in state.runs.values() if run.status == "running"
+        }
         self._written: set[str] = set()
         super().__init__(state, sink, on_error=on_error)
 
@@ -378,13 +385,16 @@ def load_history(source: _Source, state: RunState | None = None) -> RunState:
     state = state if state is not None else RunState(flush_interval=0)
     events = load_events(source)
     state.apply_many(events, notify=False)
-    open_runs = {e.run_id: e.timestamp for e in events if isinstance(e, RunStarted)}
+    open_runs: dict[str, float] = {}
     for event in events:
         if isinstance(event, (RunFinished, RunError)):
             open_runs.pop(event.run_id, None)
-    for run_id in open_runs:
+        elif isinstance(event, RunStarted) or event.run_id in open_runs:
+            open_runs[event.run_id] = event.timestamp
+    for run_id, last in open_runs.items():
         if (run := state.runs.get(run_id)) is not None and run.status == "running":
-            state.apply(RunFinished(run_id=run_id), notify=False)
+            # Finished at its last stored event, not at load time, so its duration stays meaningful.
+            state.apply(RunFinished(run_id=run_id, timestamp=last), notify=False)
     return state
 
 

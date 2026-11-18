@@ -79,7 +79,7 @@ def test_timeline_in_the_drawer(page, dark):
     wait_until(lambda: state.artifacts["dash"].applied == 6, page)
 
     # Undoing the run goes back to the version before it; a row restores one version.
-    page.get_by_role("button", name="Undo turn").click()
+    page.get_by_role("button", name="Undo run").click()
     wait_until(lambda: state.artifacts["dash"].applied == 3, page)
     page.get_by_role("button", name="Restore v5").click()
     wait_until(lambda: state.artifacts["dash"].applied == 5, page)
