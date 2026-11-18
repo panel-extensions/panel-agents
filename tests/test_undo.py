@@ -1,3 +1,5 @@
+import random
+
 import pytest
 
 from panel_agents import RunState
@@ -261,3 +263,67 @@ def test_replay_shows_the_applied_version_as_current():
     live = state.artifacts["doc"]
     assert (replayed.current, *stacks(replayed)) == (live.current, *stacks(live))
     assert live.current == live.applied
+
+
+def full_stacks(artifact):
+    return (
+        artifact.current, *stacks(artifact), list(artifact._undo), list(artifact._redo),
+        [list(step) for step in artifact._redo_steps],
+    )
+
+
+def random_history(rnd):
+    state = RunState(flush_interval=0)
+    publish(state, "base")
+    runs = []
+    for i in range(25):
+        artifact = state.artifacts["doc"]
+        op = rnd.choice(["run", "child", "user", "proposal", "hand", "undo", "redo", "undo_run", "redo_run", "redo_run_id"])
+        if op == "run":
+            run_id = f"r{len(runs)}"
+            runs.append(run_id)
+            state.apply(ev.RunStarted(run_id=run_id, agent_name="assistant"))
+            for _ in range(rnd.randint(1, 3)):
+                publish(state, f"op{i}", run_id=run_id, actor="agent", applied=rnd.random() < 0.8)
+            state.apply(ev.RunFinished(run_id=run_id))
+        elif op == "child" and runs:
+            child = f"{rnd.choice(runs)}.{i}"
+            state.apply(ev.RunStarted(run_id=child, parent_run_id=child.split(".")[0], agent_name="assistant"))
+            publish(state, f"op{i}", run_id=child, actor="agent")
+            state.apply(ev.RunFinished(run_id=child))
+        elif op in ("user", "proposal"):
+            publish(state, f"op{i}", applied=op == "user")
+        elif op == "hand":
+            state.apply_artifact_version("doc", rnd.randint(1, len(artifact.versions)))
+        elif op in ("undo", "redo", "redo_run"):
+            getattr(state, op)("doc")
+        elif op == "redo_run_id" and runs:
+            run_id = rnd.choice(runs)
+            if state.redo_run("doc", run_id) is not None:
+                assert not set(artifact.run_versions(run_id, state.runs)) & set(artifact._redo)
+        elif op == "undo_run" and runs:
+            applied, redo = artifact.applied, list(artifact._redo)
+            try:
+                version = state.undo_run("doc", rnd.choice(runs))
+            except ValueError:
+                continue
+            assert version is None or version.version != applied
+            assert artifact._redo[:len(redo)] == redo
+        timeline = [*artifact._undo, artifact.applied, *reversed(artifact._redo)]
+        assert len(set(timeline)) == len(timeline)
+        assert [n for step in artifact._redo_steps for n in step] == artifact._redo
+    return state
+
+
+@pytest.mark.parametrize("seed", range(200))
+def test_random_histories_replay_and_keep_each_version_once(seed):
+    state = random_history(random.Random(seed))
+    replayed = RunState.from_events(state.events)
+    assert full_stacks(replayed.artifacts["doc"]) == full_stacks(state.artifacts["doc"])
+
+
+def test_undo_does_not_step_back_to_a_version_applied_again_later():
+    state = three_versions(None, None)
+    state.apply_artifact_version("doc", 1)
+    assert [state.undo("doc").version, state.undo("doc").version, state.undo("doc")] == [3, 2, None]
+    assert [state.redo("doc").version, state.redo("doc").version] == [3, 1]
