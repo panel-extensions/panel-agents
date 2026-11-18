@@ -159,23 +159,23 @@ def make_view(on_apply, state=None):
 
 def test_apply_button_labels_follow_the_applied_version():
     state, artifact, view = make_view(lambda artifact, version: None)
-    assert not view._apply.visible
+    assert not view._apply_bar.visible
     artifact.current = 1
-    assert view._apply.visible and view._apply.label == "Revert to v1"
+    assert view._apply_bar.visible and view._apply.label == "Revert to v1"
     state.apply_artifact_version("doc", 1)
-    assert not view._apply.visible
+    assert not view._apply_bar.visible
     artifact.current = 3
     assert view._apply.label == "Apply v3"
-    rows = [row for group in view._timeline._list.items for row in group["items"]]
-    assert [row["version"] for row in rows if row["secondary"].endswith("applied")] == [1]
+    rows = [row for item in view._timeline._list.items for row in item.get("items", [item])]
+    assert [row["version"] for row in rows if " applied" in row["secondary"]] == [1]
 
 
 def test_apply_button_needs_a_callback_and_a_document():
     state, artifact, view = make_view(None)
     artifact.current = 1
-    assert not view._apply.visible
+    assert not view._apply_bar.visible
     plain = publish(state, "text", applied=False, artifact_id="plain", kind="text")
-    assert not ArtifactView(plain, on_apply=lambda a, v: None)._apply.visible
+    assert not ArtifactView(plain, on_apply=lambda a, v: None)._apply_bar.visible
 
 
 async def test_apply_version_calls_back_and_records():

@@ -21,20 +21,39 @@ _ACTOR_ICONS = {"agent": "smart_toy", "user": "person"}
 # Rows an open group shows before a "Show more" row, so one long group stays cheap to send and render.
 ROW_LIMIT = 50
 
-# Two-line rows as tight as a dense single-line list item, so a run's operations scan quickly. A row's
-# restore button shows on hover or focus only, except on touch screens.
-_ROW_ACTION = "& .MuiCollapse-root .MuiIconButton-root[title]"
+#: Shown on a group that cannot be undone as a whole because later edits came after it.
+BLOCKED_NOTE = "Later edits came after this run; undo them first"
+
+# Every row is two lines of the same height with one line of secondary text, every
+# leading icon sits in one column and every trailing button is 30px wide, 8px from the
+# right like the view's header buttons, so trailing buttons line up in columns too. A
+# row's actions take no space until it is hovered or focused, except on touch screens;
+# the muted note that a run cannot be undone stays visible and only explains.
+_ROW_ACTION = f'& .MuiListItemButton-root .MuiIconButton-root[title]:not([title="{BLOCKED_NOTE}"])'
+_BLOCKED = f'& .MuiIconButton-root[title="{BLOCKED_NOTE}"]'
 _LIST_SX = {
-    "& .MuiListItemButton-root": {"py": "1px", "minHeight": "40px"},
-    "& .MuiListItemText-root": {"my": "2px"},
+    "& .MuiListItemButton-root": {"py": "2px", "pr": 1, "minHeight": "48px", "gap": "4px"},
+    "& .MuiListItemIcon-root": {"minWidth": "32px", "color": "var(--mui-palette-text-secondary)"},
+    "& .MuiListItemIcon-root .MuiIcon-root": {"fontSize": "20px"},
+    "& .MuiListItemText-root": {"my": "2px", "minWidth": 0},
+    "& .MuiListItemText-primary, & .MuiListItemText-secondary": {
+        "whiteSpace": "nowrap", "overflow": "hidden", "textOverflow": "ellipsis",
+    },
     "& .MuiListItemText-secondary": {"fontSize": "0.75rem"},
+    # The list sets the first action's and the caret's margins inline.
+    "& .MuiListItemButton-root .MuiIconButton-root": {
+        "marginLeft": "0 !important", "p": "5px", "width": "30px", "height": "30px", "flex": "none",
+    },
+    "& .MuiListItemButton-root .MuiIconButton-root .MuiIcon-root, & .MuiListItemButton-root .MuiIconButton-root svg": {
+        "fontSize": "20px",
+    },
+    _BLOCKED: {"color": "var(--mui-palette-text-disabled)", "pointerEvents": "none"},
     "@media (hover: hover)": {
-        _ROW_ACTION: {"opacity": 0},
+        _ROW_ACTION: {"display": "none"},
         (
-            "& .MuiCollapse-root .MuiListItemButton-root:hover .MuiIconButton-root[title], "
-            "& .MuiCollapse-root .MuiListItemButton-root:focus-within .MuiIconButton-root[title], "
-            "& .MuiCollapse-root .MuiIconButton-root[title]:focus-visible"
-        ): {"opacity": 1},
+            "& .MuiListItemButton-root:hover .MuiIconButton-root[title], "
+            "& .MuiListItemButton-root:focus-within .MuiIconButton-root[title]"
+        ): {"display": "inline-flex"},
     },
 }
 
@@ -95,6 +114,14 @@ def version_label(version: ArtifactVersion) -> str:
     return f"Version {version.version}"
 
 
+def version_detail(version: ArtifactVersion) -> str | None:
+    """The full description of a version from its ``detail`` metadata, e.g. every change a run made."""
+    detail = (version.metadata or {}).get("detail")
+    if isinstance(detail, (list, tuple)):
+        detail = " ".join(str(d) for d in detail if d)
+    return " ".join(detail.split()) if isinstance(detail, str) and detail.strip() else None
+
+
 def _shorten(text: str, limit: int = 70) -> str:
     text = " ".join(text.split())
     return text if len(text) <= limit else text[: limit - 1] + "…"
@@ -107,10 +134,6 @@ def _time(timestamp: float | None) -> str:
     if moment.date() == datetime.now().date():
         return moment.strftime("%H:%M")
     return moment.strftime("%b %d, %H:%M")
-
-
-#: Shown on a group that cannot be undone as a whole because later edits came after it.
-BLOCKED_NOTE = "Later edits came after this run; undo them first"
 
 
 class VersionTimeline(Viewer):
@@ -186,8 +209,9 @@ class VersionTimeline(Viewer):
         """Open the group holding ``version`` and show its row."""
         for group in self._groups:
             if group.first <= version <= group.last:
-                self._expanded.add(group.key)
-                self._limits[group.key] = max(self._limits.get(group.key, ROW_LIMIT), group.last - version + 1)
+                if len(group.versions) > 1:
+                    self._expanded.add(group.key)
+                    self._limits[group.key] = max(self._limits.get(group.key, ROW_LIMIT), group.last - version + 1)
                 self._refresh()
                 return
 
@@ -202,6 +226,10 @@ class VersionTimeline(Viewer):
             self._expanded.add(self._newest)
         items, expanded = [], []
         for gi, group in enumerate(reversed(groups)):
+            if len(group.versions) == 1:
+                # A run that made one version is one row, without a group around it.
+                items.append(self._single(group))
+                continue
             if group.key in self._expanded:
                 limit = self._limits.get(group.key, ROW_LIMIT)
                 rows = [self._row(v) for v in reversed(group.versions[-limit:])]
@@ -224,11 +252,12 @@ class VersionTimeline(Viewer):
         finally:
             self._syncing = False
 
-    def _active_path(self, expanded: list[tuple[int]]) -> tuple[int, int] | None:
+    def _active_path(self, expanded: list[tuple[int]]) -> tuple[int, ...] | None:
         current = self.artifact.current if self.artifact else None
-        groups = self._groups
-        for gi, group in enumerate(reversed(groups)):
+        for gi, group in enumerate(reversed(self._groups)):
             if group.first <= (current or 0) <= group.last:
+                if len(group.versions) == 1:
+                    return (gi,)
                 # A collapsed group, or a row beyond the ones shown, has nothing to highlight.
                 index = group.last - current
                 shown = index < self._limits.get(group.key, ROW_LIMIT)
@@ -236,51 +265,90 @@ class VersionTimeline(Viewer):
         return None
 
     def _on_current(self, event):
+        if self.can_apply:
+            # The viewed row's restore action moves to the view's Apply button.
+            self._refresh()
+            return
         self._syncing = True
         try:
             self._list.active = self._active_path([tuple(p) for p in self._list.expanded])
         finally:
             self._syncing = False
 
+    def _restorable(self, version: ArtifactVersion) -> bool:
+        artifact = self.artifact
+        return self.can_apply and version.version not in (artifact.applied, artifact.current)
+
+    def _meta(self, version: ArtifactVersion) -> str:
+        applied = self.artifact.applied == version.version
+        return " · ".join(filter(None, (f"v{version.version}{' applied' if applied else ''}", _time(version.created_at))))
+
     def _row(self, version: ArtifactVersion) -> dict[str, Any]:
         applied = self.artifact.applied == version.version
-        secondary = " · ".join(filter(None, (f"v{version.version}", _time(version.created_at), "applied" if applied else None)))
         item = {
             "id": f"v{version.version}", "version": version.version, "label": version_label(version),
-            "secondary": secondary, "icon": "radio_button_checked" if applied else "radio_button_unchecked",
+            "secondary": self._meta(version), "icon": "radio_button_checked" if applied else "radio_button_unchecked",
             "color": "primary" if applied else "action",
         }
-        if self.can_apply and not applied:
-            item["actions"] = [{
-                "action": "restore", "label": f"Restore v{version.version}", "icon": "settings_backup_restore", "inline": True,
-            }]
+        if detail := version_detail(version):
+            item["tooltip"] = detail
+        if self._restorable(version):
+            item["actions"] = [self._restore_action(version)]
+        return item
+
+    @staticmethod
+    def _restore_action(version: ArtifactVersion) -> dict[str, Any]:
+        return {"action": "restore", "label": f"Restore v{version.version}", "icon": "settings_backup_restore", "inline": True}
+
+    def _single(self, group: VersionGroup) -> dict[str, Any]:
+        version = group.versions[0]
+        applied = self.artifact.applied == version.version
+        label, summary = self._group_label(group), version_label(version)
+        item = {
+            "id": f"v{version.version}", "version": version.version, "label": label,
+            "secondary": " · ".join(filter(None, (self._meta(version), summary if summary != label else None))),
+            "icon": _ACTOR_ICONS.get(group.actor or "", "edit_note"), "color": "primary" if applied else "action",
+        }
+        # The summary may be cut off in a narrow drawer, so the tooltip has it in full.
+        shown = summary if summary != label else None
+        if tooltip := ": ".join(filter(None, (shown, version_detail(version)))):
+            item["tooltip"] = tooltip
+        actions = self._group_actions(group, item)
+        if self._restorable(version):
+            actions.insert(0, self._restore_action(version))
+        if actions:
+            item["actions"] = actions
         return item
 
     def _header(self, group: VersionGroup, rows: list[dict[str, Any]]) -> dict[str, Any]:
         n = len(group.versions)
-        count = f"{n} version{'s' if n != 1 else ''}"
         item = {
             "id": group.key, "label": self._group_label(group), "selectable": False, "items": rows,
-            "secondary": " · ".join(filter(None, (_time(group.versions[0].created_at), count))),
-            "icon": _ACTOR_ICONS.get(group.actor or "", "edit_note"),
+            "secondary": " · ".join(filter(None, (f"{n} versions", _time(group.versions[0].created_at)))),
+            "icon": _ACTOR_ICONS.get(group.actor or "", "edit_note"), "color": "action",
         }
+        if actions := self._group_actions(group, item):
+            item["actions"] = actions
+        return item
+
+    def _group_actions(self, group: VersionGroup, item: dict[str, Any]) -> list[dict[str, Any]]:
         applied = self.artifact.applied
         # Only a run that changed the applied version can be undone, back to what the host held before it.
         before = self.artifact._version_before([v.version for v in group.versions])
-        if self.can_apply and before is not None and applied is not None and applied >= group.first:
-            runs = self.state.runs if self.state is not None else None
-            mine = (
-                set(self.artifact.run_versions(group.run_id, runs)) if group.run_id is not None
-                else {v.version for v in group.versions}
-            )
-            if self.artifact._undo_crosses(before, mine):
-                # Going back would undo later edits made outside the group too; they are undone first.
-                item["secondary"] = " · ".join(filter(None, (item["secondary"], BLOCKED_NOTE)))
-                return item
-            label = "Undo run" if applied <= group.last else "Go back to before this run"
-            item["actions"] = [{"action": "undo_group", "label": label, "icon": "undo", "inline": True}]
-            item["before"] = before
-        return item
+        if not (self.can_apply and before is not None and applied is not None and applied >= group.first):
+            return []
+        runs = self.state.runs if self.state is not None else None
+        mine = (
+            set(self.artifact.run_versions(group.run_id, runs)) if group.run_id is not None
+            else {v.version for v in group.versions}
+        )
+        if self.artifact._undo_crosses(before, mine):
+            # Going back would undo later edits made outside the group too, which must be undone first.
+            item["tooltip"] = " ".join(filter(None, (f"{BLOCKED_NOTE}.", item.get("tooltip"))))
+            return [{"action": "blocked", "label": BLOCKED_NOTE, "icon": "info_outline", "inline": True}]
+        label = "Undo run" if applied <= group.last else "Go back to before this run"
+        item["before"] = before
+        return [{"action": "undo_group", "label": label, "icon": "undo", "inline": True}]
 
     def _group_label(self, group: VersionGroup) -> str:
         run = self.state.runs.get(group.run_id) if self.state is not None and group.run_id else None
@@ -313,11 +381,12 @@ class VersionTimeline(Viewer):
         if self._syncing or event.new is None:
             return
         path = tuple(event.new) if isinstance(event.new, (list, tuple)) else (event.new,)
-        if len(path) != 2:
-            return
         items = self._list.items
-        rows = items[path[0]]["items"] if path[0] < len(items) else []
-        version = rows[path[1]].get("version") if path[1] < len(rows) else None
+        item = items[path[0]] if path and path[0] < len(items) else None
+        if item is not None and len(path) == 2:
+            rows = item.get("items", [])
+            item = rows[path[1]] if path[1] < len(rows) else None
+        version = item.get("version") if item is not None and len(path) <= 2 else None
         if version is not None and self.on_view is not None:
             self.on_view(version)
 
