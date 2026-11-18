@@ -94,6 +94,8 @@ The callable runs synchronously on the event loop, inside the agent run. A store
 
 A sink that raises does not end the agent run: the error is logged with its traceback on the `panel_agents.recording` logger and that record is lost. A model trace recorder then forgets what it wrote, and at the next sync the sink accepts it writes `{"rewind": 0}` and the full history again, so the store heals itself. Pass `on_error="raise"` to either recorder to let sink errors propagate into the run instead.
 
+Once a `Recorder` keeps the events, a long chat session does not need to keep them in memory too: `RunState(max_events=1000)` keeps only the latest, since every streamed delta is an event. Load the recording, not `state.events`, to replay such a session.
+
 A crash in the middle of writing a file can leave its last line incomplete. The loaders ignore such a line, and a recorder attached to the file drops it before appending.
 
 ## Leave out the content

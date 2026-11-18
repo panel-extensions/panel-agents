@@ -12,6 +12,7 @@ import copy
 import datetime as dt
 import json
 import os
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,10 @@ class AuditLog:
     the decision, whether the arguments were edited, the reason and the
     user. Records are also kept in memory on ``records``.
 
+    ``include_existing`` records the decisions among ``state.events``; on
+    a state whose ``max_events`` dropped earlier events it warns that
+    decisions may be missing.
+
     >>> log = AuditLog(state, "approvals.jsonl")
     """
 
@@ -39,17 +44,27 @@ class AuditLog:
         self.records: list[dict[str, Any]] = []
         self._unsubscribers: dict[int, Callable[[], None]] = {}
         if state is not None:
-            self.attach(state, include_existing=include_existing)
+            self._attach(state, include_existing)
 
     def attach(self, state: RunState, include_existing: bool = False):
         """
         Start recording decisions on ``state``. With ``include_existing``,
         decisions already applied (e.g. from a loaded recording) are
-        recorded too.
+        recorded too, and a warning says when ``max_events`` dropped some.
         """
+        self._attach(state, include_existing)
+
+    def _attach(self, state: RunState, include_existing: bool):
         if id(state) in self._unsubscribers:
             return
         if include_existing:
+            if state.dropped_events:
+                warnings.warn(
+                    f"The RunState dropped its {state.dropped_events} earliest events to stay within "
+                    "max_events, so decisions among the dropped events are not in the audit log.",
+                    # Both AuditLog(...) and attach() reach this through _attach, so 3 points at the caller.
+                    stacklevel=3,
+                )
             for event in state.events:
                 if isinstance(event, ev.ApprovalResolved):
                     self._record(state, event)
