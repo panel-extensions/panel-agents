@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 from dataclasses import dataclass
 
 import pytest
@@ -225,28 +226,75 @@ async def test_a_cancelled_request_is_shown_as_failed():
     assert request.status == "failed" and request.ended_at is not None
 
 
-@pytest.mark.skipif(not hasattr(exceptions, "RetryModelRequest"), reason="needs RetryModelRequest")
-async def test_retried_attempts_are_their_own_failed_requests():
-    attempts = []
+def flaky(failures):
+    """lookup_model, failing the first ``failures`` requests."""
+    from .test_model_trace import lookup_model
+
+    count = [0]
 
     def model(messages, info):
-        attempts.append(1)
-        if len(attempts) == 1:
-            raise ConnectionError("overloaded")
-        return ModelResponse([TextPart("done")])
+        count[0] += 1
+        if count[0] <= failures:
+            raise ConnectionError(f"overloaded {count[0]}")
+        return lookup_model(messages, info)
+    return model
 
-    @dataclass
-    class RetryOnce(AbstractCapability):
-        async def on_model_request_error(self, ctx, *, request_context, error):
-            if request_context.attempt == 1:
-                raise exceptions.RetryModelRequest()
-            raise error
 
-    runner = make_runner(Agent(streaming(model), capabilities=[RetryOnce()]))
-    assert await runner.run("Go") == "done"
-    retried, answered = (i for i in runner.state.items if isinstance(i, ModelCallState))
-    assert (retried.status, answered.status) == ("failed", "success")
-    assert "overloaded" in retried.error
+@dataclass
+class Retry(AbstractCapability):
+    async def on_model_request_error(self, ctx, *, request_context, error):
+        if request_context.attempt <= 3:
+            raise exceptions.RetryModelRequest()
+        raise error
+
+
+needs_retry = pytest.mark.skipif(not hasattr(exceptions, "RetryModelRequest"), reason="needs RetryModelRequest")
+
+
+@needs_retry
+async def test_retried_attempts_belong_to_their_request(tmp_path):
+    runner = make_runner(make_agent(flaky(2), capabilities=[Retry()]))
+    events = []
+    runner.state.subscribe(lambda e: events.append(e))
+    before = time.time()
+    with ModelTraceRecorder(runner, tmp_path / "trace.jsonl"):
+        assert await runner.run("What is k1?") == "value is secret-k1"
+
+    state = runner.state
+    # The attempts do not move the request behind the tool call it issued.
+    assert kinds(state) == ["Message", "ModelCall", "ToolCall", "ModelCall", "Message"]
+    first = state.items[1]
+    assert first.status == "success" and first.tool_call_ids == ["call-1"]
+    assert [(a.request_id, a.error) for a in first.attempts] == [
+        (f"{first.request_id}-a1", "ConnectionError: overloaded 1"), (f"{first.request_id}-a2", "ConnectionError: overloaded 2"),
+    ]
+    assert all(before <= a.timestamp - a.duration <= a.timestamp <= first.ended_at for a in first.attempts)
+    assert state.runs[runner.run_id].requests == 4
+    calls = load_model_calls(tmp_path / "trace.jsonl")
+    assert [(c.request_id, c.attempt_of) for c in calls[:2]] == [(a.request_id, first.request_id) for a in first.attempts]
+
+
+@needs_retry
+async def test_attempts_are_appended_without_reordering_the_feed():
+    runner = make_runner(make_agent(flaky(2), capabilities=[Retry()]))
+    snapshots = []
+    runner.state.param.watch(lambda e: snapshots.append((list(e.old), list(e.new))), "items")
+    await runner.run("What is k1?")
+    assert all(new[: len(old)] == old for old, new in snapshots)
+
+
+def test_a_repeated_usage_is_ignored():
+    events = model_run()
+    state = RunState.from_events([*events[:8], events[7], *events[8:]])
+    assert state.runs["r1"].requests == 2 and state.runs["r1"].input_tokens == 2100
+
+
+def test_an_attempt_without_its_request_is_a_request_of_its_own():
+    state = RunState.from_events([
+        ev.RunStarted(run_id="r1"),
+        ev.Usage(request_id="x-a1", attempt_of="x", model="m", error="overloaded", run_id="r1"),
+    ])
+    assert kinds(state) == ["ModelCall"] and state.items[0].status == "failed"
 
 
 # Model calls from a model trace
@@ -322,6 +370,22 @@ async def test_usage_the_trace_does_not_cover_is_kept(tmp_path):
     merged = RunState.from_events(merge_model_calls(old, calls))
     assert [r.requests for r in merged.runs.values()] == [r.requests for r in runner.state.runs.values()]
     assert sum(r.input_tokens for r in merged.runs.values()) == sum(r.input_tokens for r in runner.state.runs.values())
+
+
+@needs_retry
+async def test_merging_keeps_attempts_with_their_request(tmp_path):
+    runner = make_runner(make_agent(flaky(2), capabilities=[Retry()]))
+    with Recorder(runner.state, tmp_path / "events.jsonl"), ModelTraceRecorder(runner, tmp_path / "trace.jsonl"):
+        await runner.run("What is k1?")
+    events = load_events(tmp_path / "events.jsonl")
+    calls = load_model_calls(tmp_path / "trace.jsonl")
+    assert merge_model_calls(events, calls) == events
+
+    merged = RunState.from_events(merge_model_calls(old_recording(events), calls))
+    assert snapshot(merged) == snapshot(runner.state)
+    first = merged.items[1]
+    assert [a.request_id for a in first.attempts] == [a.request_id for a in runner.state.items[1].attempts]
+    assert merged.runs[runner.run_id].requests == 4
 
 
 def test_calls_of_unknown_runs_are_left_out():

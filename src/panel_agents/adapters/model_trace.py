@@ -258,20 +258,29 @@ class ModelRequestSummary:
     request_id: str | None = None
     """The id ``AgentRunner`` gave the request, as on its ``ModelRequestStarted`` and ``Usage`` events."""
     finish_reason: str | None = None
+    attempt_of: str | None = None
+    """For a failed attempt that a retry or fallback recovered from, the request id of its request."""
+
+
+def _attempt_id(request_id: str, attempt: int) -> str:
+    """The request id of the ``attempt``-th failed attempt (from 1) at a request, the same live and in a trace."""
+    return f"{request_id}-a{attempt}"
 
 
 def _summaries(response: ModelResponse) -> list[ModelRequestSummary]:
     summaries = []
-    for attempt in getattr(response, "failed_attempts", None) or []:
+    metadata = (response.metadata or {}).get(_METADATA_KEY, {})
+    parent = metadata.get("request_id")
+    for i, attempt in enumerate(getattr(response, "failed_attempts", None) or [], start=1):
         usage = attempt.usage
         summaries.append(ModelRequestSummary(
+            request_id=_attempt_id(parent, i) if parent else None, attempt_of=parent,
             run_id=response.run_id, model=attempt.model_name, timestamp=attempt.timestamp,
             duration=attempt.duration.total_seconds(), error=attempt.error or "Response rejected",
             input_tokens=usage.input_tokens if usage else 0, output_tokens=usage.output_tokens if usage else 0,
             cached_tokens=usage.cache_read_tokens if usage else 0,
             cost_usd=float(usage.cost) if usage is not None and getattr(usage, "cost", None) is not None else None,
         ))
-    metadata = (response.metadata or {}).get(_METADATA_KEY, {})
     usage = response.usage
     summaries.append(ModelRequestSummary(
         run_id=response.run_id, model=response.model_name, timestamp=response.timestamp,
@@ -328,21 +337,21 @@ def merge_model_calls(events: Iterable[ev.Event], calls: Iterable[ModelRequestSu
     Each call becomes a ``ModelRequestStarted`` and a ``Usage`` event,
     placed in its run where ``AgentRunner`` emits them today, so
     ``RunState.from_events`` on the result shows every request in the
-    timeline with its tool calls, including failed ones. Calls are
-    matched to runs by ``run_id``; calls of runs the recording does not
-    hold are left out, and so are calls whose request id the recording
-    already has. The recording's own ``Usage`` events without a request
-    id are replaced by the calls they report, so run totals are not
-    counted twice.
+    timeline with its tool calls, including failed ones; failed attempts
+    that a retry recovered from are attached to their request. Calls are
+    matched to runs by ``run_id``. Runs the recording does not hold, and
+    runs it already holds model calls for, are left alone. The
+    recording's own ``Usage`` events without a request id are replaced by
+    the calls they report, so run totals are not counted twice.
     """
     events = list(events)
-    known = {e.request_id for e in events if isinstance(e, (ev.Usage, ev.ModelRequestStarted)) and e.request_id}
     positions: dict[str, list[int]] = defaultdict(list)
     for i, event in enumerate(events):
         positions[event.run_id].append(i)
+    complete = {e.run_id for e in events if isinstance(e, ev.ModelRequestStarted)}
     runs: dict[str, list[ModelRequestSummary]] = defaultdict(list)
     for call in calls:
-        if call.run_id in positions and (call.request_id is None or call.request_id not in known):
+        if call.run_id in positions and call.run_id not in complete:
             runs[call.run_id].append(call)
 
     inserts: dict[int, list[ev.Event]] = defaultdict(list)
@@ -352,20 +361,21 @@ def merge_model_calls(events: Iterable[ev.Event], calls: Iterable[ModelRequestSu
         start = next((i for i in indices if isinstance(events[i], ev.RunStarted)), indices[0] - 1)
         end = next((i for i in indices if isinstance(events[i], (ev.RunFinished, ev.RunError))), indices[-1] + 1)
         # Before request ids, the adapter emitted one Usage per successful response, right after its streamed parts.
-        boundaries = [i for i in indices if isinstance(events[i], ev.Usage) and not events[i].request_id]
-        remaining = iter(boundaries)
+        remaining = iter([i for i in indices if isinstance(events[i], ev.Usage) and not events[i].request_id])
         tool_ends = {
             events[i].tool_call_id: i for i in indices if isinstance(events[i], (ev.ToolCallStart, ev.ToolCallArgs, ev.ToolCallEnd))
         }
+        attempts = [c for c in run_calls if c.attempt_of]
+        requests = [c for c in run_calls if not c.attempt_of]
         position = start + 1
-        for k, call in enumerate(run_calls):
+        for k, call in enumerate(requests):
             boundary = next(remaining, None) if call.error is None else None
             if boundary is not None:
                 stop = boundary
                 dropped.add(boundary)
             elif call.error is None and (ends := [tool_ends[t] for _, t in call.tool_calls if t in tool_ends]):
                 stop = max(ends) + 1
-            elif call.error is None and k == len(run_calls) - 1:
+            elif call.error is None and k == len(requests) - 1:
                 stop = end
             else:
                 stop = position
@@ -376,13 +386,9 @@ def merge_model_calls(events: Iterable[ev.Event], calls: Iterable[ModelRequestSu
             inserts[position].append(ev.ModelRequestStarted(
                 request_id=request_id, model=call.model, run_id=run_id, timestamp=started,
             ))
-            inserts[stop].append(ev.Usage(
-                model=call.model, input_tokens=call.input_tokens, output_tokens=call.output_tokens,
-                cached_tokens=call.cached_tokens, cost_usd=call.cost_usd, duration=call.duration,
-                request_id=request_id, tool_call_ids=[t for _, t in call.tool_calls], error=call.error,
-                finish_reason=call.finish_reason, provider_response_id=call.provider_response_id,
-                run_id=run_id, timestamp=ended,
-            ))
+            for attempt in (a for a in attempts if a.attempt_of == call.request_id):
+                inserts[position].append(_usage(attempt, run_id, attempt.request_id, _call_times(attempt, None, started)[1]))
+            inserts[stop].append(_usage(call, run_id, request_id, ended))
             position = stop + 1 if stop == boundary else stop
 
     merged: list[ev.Event] = []
@@ -392,6 +398,16 @@ def merge_model_calls(events: Iterable[ev.Event], calls: Iterable[ModelRequestSu
             merged.append(event)
     merged.extend(inserts.get(len(events), ()))
     return merged
+
+
+def _usage(call: ModelRequestSummary, run_id: str, request_id: str | None, timestamp: float) -> ev.Usage:
+    return ev.Usage(
+        model=call.model, input_tokens=call.input_tokens, output_tokens=call.output_tokens,
+        cached_tokens=call.cached_tokens, cost_usd=call.cost_usd, duration=call.duration,
+        request_id=request_id, tool_call_ids=[t for _, t in call.tool_calls], error=call.error,
+        finish_reason=call.finish_reason, provider_response_id=call.provider_response_id,
+        attempt_of=call.attempt_of, run_id=run_id, timestamp=timestamp,
+    )
 
 
 def _call_times(call: ModelRequestSummary, usage: ev.Usage | None, nearby: float) -> tuple[float, float]:

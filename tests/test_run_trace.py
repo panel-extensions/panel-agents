@@ -12,7 +12,7 @@ def card_rows(trace):
     """(card type, depth) of each row with a time bar, i.e. each step."""
     rows = []
     for item, depth in trace._nested():
-        view, bar = trace._cache[id(item)]
+        view, bar = trace._rows_by_key[(id(item), depth)]
         assert view in trace._rows.objects
         if bar is not None:
             rows.append((type(trace._cards[id(item)]).__name__, depth))
@@ -61,6 +61,43 @@ def test_trace_follows_a_run_in_progress_and_can_switch_runs():
     assert trace._rows.objects == [] and not trace._totals.visible
 
 
+def watcher_count(obj):
+    return sum(len(w) for names in obj.param.watchers.values() for w in names.values())
+
+
+def test_trace_keeps_its_rows_when_other_runs_start():
+    state = RunState(flush_interval=0)
+    state.apply_many(model_run()[:3])
+    trace = RunTrace(state, run_id="r1")
+    rows = list(trace._rows.objects)
+    card = trace._cards[id(state.items[0])]
+    card.collapsed = False
+    watchers = watcher_count(state.items[0])
+    for i in range(5):
+        state.apply(ev.RunStarted(run_id=f"s{i}", parent_run_id="r1"))
+        state.apply(ev.ModelRequestStarted(request_id=f"s{i}-q", model="m", run_id=f"s{i}"))
+    assert all(a is b for a, b in zip(trace._rows.objects, rows, strict=True))
+    assert trace._cards[id(state.items[0])] is card and not card.collapsed
+    assert watcher_count(state.items[0]) == watchers
+    trace.run_id = "s0"
+    trace.run_id = "r1"
+    assert trace._cards[id(state.items[0])] is card
+    assert watcher_count(state.items[0]) == watchers
+
+
+def test_trace_moves_a_tool_call_when_its_request_is_known():
+    events = old_recording(model_run())
+    state = RunState(flush_interval=0)
+    trace = RunTrace(state, run_id="r1")
+    # Until the first bare Usage arrives the tool call has no request above it.
+    state.apply_many(events[:6])
+    assert card_rows(trace) == [("ToolCallCard", 0)]
+    state.apply_many(events[6:])
+    assert card_rows(trace) == [("ModelCallCard", 0), ("ToolCallCard", 1), ("ModelCallCard", 0)]
+    (body,) = [row.objects[0] for row in trace._rows.objects if hasattr(row, "objects") and len(row.objects) == 2][1:2]
+    assert body.margin[3] == 24
+
+
 def test_model_call_card_lists_the_details():
     state = RunState.from_events(model_run())
     card = ModelCallCard(state.model_calls["q1"], state=state, show_tool_count=True)
@@ -70,6 +107,18 @@ def test_model_call_card_lists_the_details():
     for text in ("1,000 tokens, 800 cached", "tool_call", "lookup · t1", "resp-1", "q1", "r1"):
         assert text in details
     assert card._step.status == "success" and not card._error.visible
+
+
+def test_model_call_card_lists_retried_attempts():
+    state = RunState.from_events([
+        ev.RunStarted(run_id="r1"),
+        ev.ModelRequestStarted(request_id="q1", model="m", run_id="r1"),
+        ev.Usage(request_id="q1-a1", attempt_of="q1", model="m", error="overloaded", duration=0.25, run_id="r1"),
+        ev.Usage(request_id="q1", model="m", input_tokens=5, run_id="r1"),
+    ])
+    card = ModelCallCard(state.model_calls["q1"])
+    assert "1 retry" in card._header.object and "Attempt 1 failed: overloaded" in card._header.object
+    assert "<dt>attempt 1</dt><dd>overloaded (250ms)</dd>" in card._details.object
 
 
 def test_model_call_card_shows_a_failure():
@@ -119,7 +168,7 @@ def test_chat_folds_model_calls_with_the_tool_calls_and_shows_run_totals():
     assert not first.visible
     answer = chat.view_for(state.messages["m2"])
     (footer,) = answer.footer_objects
-    assert usage_summary(state.runs["r1"]) == "2 requests · 2.1k in · 50 out · $0.0030 · 2.0s"
+    assert usage_summary(state.runs["r1"]) == "2 requests · 2.1k in · 50 out · $0.0030 · 2.0s total"
     assert usage_summary(state.runs["r1"]) in footer.object
     chat.show_usage = False
     assert answer.footer_objects == []
@@ -144,7 +193,7 @@ def test_a_lone_request_shows_while_running_and_folds_into_the_usage_line():
     assert request.visible
     state.apply(ev.RunFinished(run_id="r1", timestamp=2.0))
     assert not request.visible
-    assert "1 request · 10 in · 2 out · 1.0s" in chat.view_for(state.messages["r1-m"]).footer_objects[0].object
+    assert "1 request · 10 in · 2 out · 1.0s total" in chat.view_for(state.messages["r1-m"]).footer_objects[0].object
     chat.show_usage = False
     assert request.visible
 
