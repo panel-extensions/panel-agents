@@ -12,6 +12,7 @@ import copy
 import threading
 import time
 import uuid
+from collections import deque
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -296,10 +297,18 @@ class RunState(param.Parameterized):
         Minimum seconds between UI updates while streaming deltas.
         Deltas arriving faster are coalesced. Zero disables coalescing.""")
 
+    max_events = param.Integer(default=None, allow_None=True, bounds=(1, None), doc="""
+        Number of the latest events ``events`` keeps in memory, or None to
+        keep them all. A long session's events otherwise grow without
+        limit. Dropping events does not change the state, but ``events``
+        then no longer replays to it, so keep the full log with a
+        ``Recorder`` (or ``HistoryRecorder``) attached from the start.""")
+
     def __init__(self, **params):
         params.setdefault("artifacts", ArtifactStore())
         super().__init__(**params)
-        self._events: list[ev.Event] = []
+        self._events: deque[ev.Event] = deque(maxlen=self.max_events)
+        self._dropped = 0
         self._subscribers: list[Callable[[ev.Event], Any]] = []
         self._buffers: dict[tuple[type, str], list[str]] = {}
         self._last_flush = 0.0
@@ -318,7 +327,23 @@ class RunState(param.Parameterized):
 
     @property
     def events(self) -> list[ev.Event]:
+        """The applied events, or the latest ``max_events`` of them."""
         return list(self._events)
+
+    @property
+    def dropped_events(self) -> int:
+        """
+        How many of the earliest events ``max_events`` dropped since the
+        state was created or reset; while it is above zero, ``events`` does
+        not replay to this state.
+        """
+        return self._dropped
+
+    @param.depends("max_events", watch=True)
+    def _resize_events(self):
+        events = self._events
+        self._events = deque(events, maxlen=self.max_events)
+        self._dropped += len(events) - len(self._events)
 
     def subscribe(self, callback: Callable[[ev.Event], Any]) -> Callable[[], None]:
         """Call ``callback`` with every applied event; returns an unsubscribe function."""
@@ -327,6 +352,7 @@ class RunState(param.Parameterized):
 
     def reset(self):
         self._events.clear()
+        self._dropped = 0
         self._buffers.clear()
         self._response_marks.clear()
         self.artifacts = ArtifactStore()
@@ -346,7 +372,10 @@ class RunState(param.Parameterized):
         self.flush()
 
     def apply(self, event: ev.Event, notify: bool = True):
-        self._events.append(event)
+        events = self._events
+        if events.maxlen is not None and len(events) == events.maxlen:
+            self._dropped += 1
+        events.append(event)
         if isinstance(event, _DELTA_EVENTS):
             key = (type(event), event.tool_call_id if isinstance(event, ev.ToolCallArgs) else event.message_id)
             self._buffers.setdefault(key, []).append(event.delta)

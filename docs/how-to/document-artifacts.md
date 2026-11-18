@@ -151,6 +151,8 @@ recorder = HistoryRecorder(state, path, artifact_ids=["dashboard"])
 
 `load_history` applies the stored events without notifying the state's subscribers, so a recorder already attached does not write them again and an `AgentRunner` does not tell the model about versions it saw in an earlier session. Use `RunState.apply_many(events, notify=False)` the same way for events stored elsewhere. To store the history in a database, pass a callable sink and give `load_history` the stored records in order.
 
+A `RunState` keeps every event it applied in `state.events`, which grows without limit in a long editing session. Once a recorder keeps the log, cap what stays in memory with `RunState(max_events=1000)`. The state is built as events arrive, so dropping old ones changes nothing you see, and undo and redo still work; only `state.events` stops being a full log once `state.dropped_events` is above zero, so replay the recording rather than `state.events`.
+
 ## Describe changes semantically
 
 The compare tab picks a diff strategy by artifact kind. Text kinds get a line diff and tables a cell diff. For structured documents, register a strategy that returns a `StructuredDiff`, a list of `Change(op, path, old, new, label)` records. `diff_structured` computes the changes between two nested dict and list values. A change's `path` is a tuple of the keys and list positions leading to it, such as `("nodes", "sales", "config")`, so keys containing dots stay unambiguous, and `path_str` renders it for display. A strategy can relabel the changes in the document's own terms:
