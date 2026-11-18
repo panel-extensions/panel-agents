@@ -61,7 +61,7 @@ def test_timeline_in_the_drawer(page, dark):
     page.get_by_text("What is paid revenue by region?").click()
     expect(page.get_by_text("Add node paid_by_region")).to_be_visible()
     page.get_by_text("Add node paid_by_region").click()
-    expect(page.get_by_role("button", name="Version history")).to_contain_text("v1")
+    expect(page.get_by_role("button", name="Version history, v1 shown")).to_have_attribute("aria-pressed", "true")
     expect(page.get_by_role("button", name="Revert to v1")).to_be_visible()
     assert state.artifacts["dash"].applied == 6 and applied == []
 

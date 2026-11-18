@@ -580,7 +580,7 @@ class ArtifactView(Viewer):
             self._metadata.object = {}
             return
         current = min(max(self.artifact.current or 1, 1), len(self.versions))
-        self._history_button.label = f"v{current}"
+        self._history_button.param.update(label=f"v{current}", description=f"Version history, v{current} shown")
         self._preview.objects = [self._render_version(current - 1)]
         self._update_metadata(current - 1)
         ext = _DOWNLOAD_EXTENSIONS.get(self.artifact.kind, "txt")
