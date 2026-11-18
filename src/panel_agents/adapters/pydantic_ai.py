@@ -68,6 +68,7 @@ from .model_trace import (
     fingerprint,
     load_messages,
     load_model_calls,
+    merge_model_calls,
 )
 
 _log = logging.getLogger(__name__)
@@ -86,6 +87,7 @@ __all__ = [
     "fingerprint",
     "load_messages",
     "load_model_calls",
+    "merge_model_calls",
     "publish_artifact",
 ]
 
@@ -107,6 +109,12 @@ class _ArtifactEvent(CustomEvent, name="panel_agents.artifact"):
 
 
 @dataclass(kw_only=True)
+class _ModelRequestEvent(CapabilityEvent, namespace="panel_agents"):
+    request_id: str
+    model: str | None = None
+
+
+@dataclass(kw_only=True)
 class _UsageEvent(CapabilityEvent, namespace="panel_agents"):
     model: str | None = None
     input_tokens: int = 0
@@ -114,6 +122,11 @@ class _UsageEvent(CapabilityEvent, namespace="panel_agents"):
     cached_tokens: int = 0
     cost_usd: float | None = None
     duration: float | None = None
+    request_id: str | None = None
+    tool_call_ids: list[str] = field(default_factory=list)
+    error: str | None = None
+    finish_reason: str | None = None
+    provider_response_id: str | None = None
 
 
 async def publish_artifact(
@@ -289,23 +302,35 @@ class _RunCapability(AbstractCapability[Any]):
         self.messages = ctx.messages
         self.request = {
             "model": request_context.model.model_name, "started": time.perf_counter(),
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(), "request_id": uuid.uuid4().hex,
         }
         self.runner._trace(ctx.messages)
+        await ctx.emit(_ModelRequestEvent(request_id=self.request["request_id"], model=self.request["model"]))
         return request_context
 
     async def after_model_request(self, ctx: RunContext[Any], *, request_context: Any, response: ModelResponse) -> ModelResponse:
         request, self.request = self.request, None
         duration = time.perf_counter() - request["started"] if request else None
+        request_id = request["request_id"] if request else uuid.uuid4().hex
         stamp = {
             "duration": duration, "fingerprint": fingerprint(request_context.model_request_parameters, ctx.messages),
-            "request_id": uuid.uuid4().hex,
+            "request_id": request_id,
         }
         response = replace(response, metadata={**(response.metadata or {}), _METADATA_KEY: stamp})
+        for attempt in getattr(response, "failed_attempts", None) or []:
+            usage = attempt.usage
+            await ctx.emit(_UsageEvent(
+                model=attempt.model_name, input_tokens=usage.input_tokens if usage else 0,
+                output_tokens=usage.output_tokens if usage else 0, cached_tokens=usage.cache_read_tokens if usage else 0,
+                duration=attempt.duration.total_seconds(), request_id=uuid.uuid4().hex,
+                error=_shorten(attempt.error or "Response rejected", 300),
+            ))
         usage = response.usage
         await ctx.emit(_UsageEvent(
             model=response.model_name, input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
             cached_tokens=usage.cache_read_tokens, cost_usd=_response_cost(response), duration=duration,
+            request_id=request_id, tool_call_ids=[p.tool_call_id for p in response.parts if isinstance(p, ToolCallPart)],
+            finish_reason=response.finish_reason, provider_response_id=response.provider_response_id,
         ))
         return response
 
@@ -326,7 +351,7 @@ class _RunCapability(AbstractCapability[Any]):
         if _METADATA_KEY not in (response.metadata or {}):
             response.metadata = {
                 **(response.metadata or {}),
-                _METADATA_KEY: {"duration": request["duration"], "request_id": uuid.uuid4().hex},
+                _METADATA_KEY: {"duration": request["duration"], "request_id": request["request_id"]},
             }
 
     async def handle_deferred_tool_calls(self, ctx: RunContext[Any], *, requests: DeferredToolRequests) -> DeferredToolResults | None:
@@ -486,10 +511,14 @@ class _PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
             yield ev.Custom(name=event.name, value=event.to_payload())
 
     async def handle_capability_event(self, event: CapabilityEvent) -> AsyncIterator[ev.Event]:
-        if isinstance(event, _UsageEvent):
+        if isinstance(event, _ModelRequestEvent):
+            yield ev.ModelRequestStarted(request_id=event.request_id, model=event.model)
+        elif isinstance(event, _UsageEvent):
             yield ev.Usage(
                 model=event.model, input_tokens=event.input_tokens, output_tokens=event.output_tokens,
                 cached_tokens=event.cached_tokens, cost_usd=event.cost_usd, duration=event.duration,
+                request_id=event.request_id, tool_call_ids=list(event.tool_call_ids), error=event.error,
+                finish_reason=event.finish_reason, provider_response_id=event.provider_response_id,
             )
 
 
@@ -555,6 +584,7 @@ class AgentRunner(param.Parameterized):
         self._waiters: dict[str, asyncio.Future[ev.ApprovalResolved]] = {}
         self._early: dict[str, ev.ApprovalResolved] = {}
         self._token: CancellationToken | None = None
+        self._capability: _RunCapability | None = None
         self._trace_listeners: list[ModelTraceRecorder] = []
         self._unsubscribe = self.state.subscribe(self._on_event)
         self.state._decision_check = self._refusal
@@ -664,7 +694,7 @@ class AgentRunner(param.Parameterized):
             model_prompt = "\n".join(f"[{note}]" for note in self._notes) + "\n\n" + prompt
             self._notes.clear()
         run_kwargs = {**self.run_kwargs, **kwargs, "run_id": run_id}
-        capability = _RunCapability(runner=self)
+        capability = self._capability = _RunCapability(runner=self)
         capabilities = [*run_kwargs.pop("capabilities", []), capability]
         try:
             with _scope(run_id=run_id, actor="agent"):
@@ -684,6 +714,7 @@ class AgentRunner(param.Parameterized):
             self._close(stream, ev.RunError(run_id=run_id, message=_error_message(e), code=type(e).__name__))
         finally:
             self._token = None
+            self._capability = None
             self._early.clear()
             with param.edit_constant(self):
                 self.running = False
@@ -702,6 +733,12 @@ class AgentRunner(param.Parameterized):
                 self.state.apply(ev.ApprovalResolved(
                     tool_call_id=request.tool_call_id, approved=False, reason=error.message, run_id=stream.run_id,
                 ))
+        request = self._capability.failed_request() if self._capability is not None else None
+        if request is not None and request["request_id"] in self.state.model_calls:
+            self.state.apply(ev.Usage(
+                model=request["model"], duration=request["duration"], request_id=request["request_id"],
+                error=error.message, run_id=stream.run_id,
+            ))
         self.state.apply(error)
 
     def _trace(self, messages: list[Any]):

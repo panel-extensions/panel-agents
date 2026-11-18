@@ -27,7 +27,7 @@ from pydantic_ai.models.function import (
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.tools import DeferredToolRequests, DeferredToolResults
 
-from panel_agents import Recorder, RunState, load_state
+from panel_agents import MessageState, Recorder, RunState, load_state
 from panel_agents import events as ev
 from panel_agents.adapters.pydantic_ai import AgentRunner, artifact_return, publish_artifact
 
@@ -76,7 +76,8 @@ async def test_text_streaming():
 
     assert result == "Hello, world!"
     state = runner.state
-    user, reply = state.items
+    user, request, reply = state.items
+    assert (request.status, request.model) == ("success", "function::stream")
     assert (user.role, user.content) == ("user", "Hi")
     assert (reply.role, reply.content, reply.finished) == ("assistant", "Hello, world!", True)
     assert [e.delta for e in of_type(state, ev.TextMessageContent) if e.message_id == reply.message_id] == ["Hello", ", ", "world", "!"]
@@ -95,7 +96,7 @@ async def test_thinking_is_streamed_as_its_own_message():
     runner = make_runner(Agent(FunctionModel(stream_function=stream)))
     await runner.run("Hi")
 
-    thinking, reply = runner.state.items[1:]
+    thinking, reply = runner.state.items[2:]
     assert (thinking.kind, thinking.content, thinking.finished) == ("thinking", "Let me think.", True)
     assert (reply.kind, reply.content) == ("text", "Done.")
     assert len(of_type(runner.state, ev.ThinkingStart)) == 1
@@ -127,7 +128,9 @@ async def test_tool_call_args_stream_as_json_deltas():
     assert (call.status, call.result) == ("success", [{"a": 1}, {"a": 2}])
     message = state.messages[call.parent_message_id]
     assert message.content == "Querying."
-    assert [type(i).__name__ for i in state.items] == ["MessageState", "MessageState", "ToolCallState", "MessageState"]
+    assert [type(i).__name__ for i in state.items] == [
+        "MessageState", "ModelCallState", "MessageState", "ToolCallState", "ModelCallState", "MessageState",
+    ]
 
 
 async def test_tool_call_mapping_with_test_model():
@@ -234,7 +237,7 @@ async def test_multi_turn_keeps_history():
     assert await runner.run("first") == "first"
     assert await runner.run("second") == "first | second"
     assert len(runner.state.runs) == 2
-    assert [m.content for m in runner.state.items] == ["first", "first", "second", "first | second"]
+    assert [m.content for m in runner.state.items if isinstance(m, MessageState)] == ["first", "first", "second", "first | second"]
 
     runner.clear()
     assert await runner.run("third") == "third"

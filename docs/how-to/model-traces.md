@@ -17,14 +17,14 @@ The file starts with a format line, `{"panel_agents_model_trace": 1, "include_co
 
 The trace records the persistent message history, the one `AgentRunner.messages` holds. Changes a capability makes only to the request it sends, without changing the history, are not in it. When the history is rewritten rather than extended, for example by a history processor that drops old messages, by `runner.clear()` or because a run failed, the recorder writes a `{"rewind": n}` record that keeps the first `n` messages, followed by the history from there on. The file therefore stays append-only, and loading it always gives the history the runner holds. The recorder notices a message that was replaced or removed, but not an older message object a capability changes in place; rewrite history by replacing messages, as history processors do.
 
-Every response carries two values that pydantic-ai does not record, under `metadata["panel_agents"]`: the wall-clock `duration` of the request in seconds and a `fingerprint` of the instructions and tools the model was offered. `AgentRunner` also passes its run id to pydantic-ai, so the `run_id` on each message is the one on the events of the conversation recording. The `Usage` event of each response has the same `duration`.
+Every response carries values that pydantic-ai does not record, under `metadata["panel_agents"]`: the wall-clock `duration` of the request in seconds, a `fingerprint` of the instructions and tools the model was offered and the `request_id`. `AgentRunner` also passes its run id to pydantic-ai, so the `run_id` on each message is the one on the events of the conversation recording. The `ModelRequestStarted` and `Usage` events of each request have the same `request_id`, and the `Usage` event the same `duration`.
 
 ## Failed and retried requests
 
 pydantic-ai lists attempts that failed before a later attempt succeeded, for example with a `ModelFallback` capability, on the response under `failed_attempts`. A run that fails outright, for example because the provider refused the request, leaves no response that joins the conversation. The trace records what the run sent, then a line naming the run, the error and the request that was in flight, then a rewind, since `AgentRunner` does not keep the messages of a failed run:
 
 ```json
-{"failed_run": "run-3f2a9c", "error": "ModelHTTPError: status_code: 429, ...", "request": {"model": "gpt-4.1", "timestamp": "...", "duration": 0.41}}
+{"failed_run": "run-3f2a9c", "error": "ModelHTTPError: status_code: 429, ...", "request": {"model": "gpt-4.1", "timestamp": "...", "request_id": "...", "duration": 0.41}}
 ```
 
 Retries that the provider's HTTP client makes on its own are invisible to pydantic-ai and so to the trace.
@@ -40,7 +40,21 @@ for call in load_model_calls("runs/model-trace.jsonl"):
     print(call.run_id, call.model, call.duration, call.input_tokens, call.output_tokens, call.cost_usd, call.tool_calls, call.error)
 ```
 
-`tool_calls` lists the `(tool_name, tool_call_id)` of every tool the response called; the id matches the `tool_call_id` of the `TOOL_CALL_*` events in the conversation recording. A response cut off by `runner.cancel()` has the error `"Interrupted"`.
+`tool_calls` lists the `(tool_name, tool_call_id)` of every tool the response called; the id matches the `tool_call_id` of the `TOOL_CALL_*` events in the conversation recording, and `request_id` the one on its `ModelRequestStarted` and `Usage` events. A response cut off by `runner.cancel()` has the error `"Interrupted"`.
+
+## Show model calls of an older recording
+
+Conversation recordings hold a `ModelRequestStarted` and a `Usage` event for each model request, which `AgentChat` and `RunTrace` show as model calls (see [model calls and run traces](model-calls.md)). Recordings made before then have a bare `Usage` event per response, which shows the requests without the tool calls they issued, their request ids or the requests that failed. `merge_model_calls` adds them from the model trace of the same session:
+
+```python
+from panel_agents import RunState, load_events
+from panel_agents.adapters.pydantic_ai import load_model_calls, merge_model_calls
+
+events = merge_model_calls(load_events("runs/events.jsonl"), load_model_calls("runs/model-trace.jsonl"))
+state = RunState.from_events(events)
+```
+
+Each call is matched to its run by `run_id` and placed where `AgentRunner` emits it today: before the text and tool calls of its response, which the bare `Usage` events of the recording mark, or, without them, the `tool_call_id`s of the calls it issued. The bare `Usage` events are replaced, so the totals of a run are not counted twice. Calls of runs the recording does not hold are left out, and so are calls whose request id the recording already has, so merging into a newer recording changes nothing. The result is a list of events like any other: record it with `dump_events` to keep the merged session. To show it in a chat that is already open, `state.reset()` and `state.apply_many(events)`.
 
 ## Continue a conversation
 

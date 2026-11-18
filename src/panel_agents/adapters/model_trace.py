@@ -31,7 +31,8 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
-from collections.abc import Sequence
+from collections import defaultdict
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 from typing import Any
 
@@ -45,6 +46,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_core import to_jsonable_python
 
+from .. import events as ev
 from ..recording import _describe, _JsonLinesSink, _read_records, _Sink, _Source
 
 __all__ = [
@@ -54,6 +56,7 @@ __all__ = [
     "fingerprint",
     "load_messages",
     "load_model_calls",
+    "merge_model_calls",
 ]
 
 FORMAT_VERSION = 1
@@ -252,6 +255,9 @@ class ModelRequestSummary:
     error: str | None = None
     """Why the request failed, ``"Interrupted"`` for a response cut off by a cancelled run, None if it succeeded."""
     provider_response_id: str | None = None
+    request_id: str | None = None
+    """The id ``AgentRunner`` gave the request, as on its ``ModelRequestStarted`` and ``Usage`` events."""
+    finish_reason: str | None = None
 
 
 def _summaries(response: ModelResponse) -> list[ModelRequestSummary]:
@@ -274,6 +280,7 @@ def _summaries(response: ModelResponse) -> list[ModelRequestSummary]:
         input_tokens=usage.input_tokens, output_tokens=usage.output_tokens, cached_tokens=usage.cache_read_tokens,
         cost_usd=_response_cost(response), provider_response_id=response.provider_response_id,
         error=_INTERRUPTED if getattr(response, "state", None) == "interrupted" else None,
+        request_id=metadata.get("request_id"), finish_reason=response.finish_reason,
     ))
     return summaries
 
@@ -308,9 +315,91 @@ def load_model_calls(source: _Source) -> list[ModelRequestSummary]:
             summaries.append(ModelRequestSummary(
                 run_id=entry[_FAILED_KEY], model=request.get("model"),
                 timestamp=datetime.fromisoformat(request["timestamp"]) if request.get("timestamp") else None,
-                duration=request.get("duration"), error=entry.get("error"),
+                duration=request.get("duration"), error=entry.get("error"), request_id=request.get("request_id"),
             ))
     return summaries
+
+
+def merge_model_calls(events: Iterable[ev.Event], calls: Iterable[ModelRequestSummary]) -> list[ev.Event]:
+    """
+    Add the model calls of a model trace to the events of a conversation
+    recording, e.g. ``merge_model_calls(load_events(path), load_model_calls(trace))``.
+
+    Each call becomes a ``ModelRequestStarted`` and a ``Usage`` event,
+    placed in its run where ``AgentRunner`` emits them today, so
+    ``RunState.from_events`` on the result shows every request in the
+    timeline with its tool calls, including failed ones. Calls are
+    matched to runs by ``run_id``; calls of runs the recording does not
+    hold are left out, and so are calls whose request id the recording
+    already has. The recording's own ``Usage`` events without a request
+    id are replaced by the calls they report, so run totals are not
+    counted twice.
+    """
+    events = list(events)
+    known = {e.request_id for e in events if isinstance(e, (ev.Usage, ev.ModelRequestStarted)) and e.request_id}
+    positions: dict[str, list[int]] = defaultdict(list)
+    for i, event in enumerate(events):
+        positions[event.run_id].append(i)
+    runs: dict[str, list[ModelRequestSummary]] = defaultdict(list)
+    for call in calls:
+        if call.run_id in positions and (call.request_id is None or call.request_id not in known):
+            runs[call.run_id].append(call)
+
+    inserts: dict[int, list[ev.Event]] = defaultdict(list)
+    dropped: set[int] = set()
+    for run_id, run_calls in runs.items():
+        indices = positions[run_id]
+        start = next((i for i in indices if isinstance(events[i], ev.RunStarted)), indices[0] - 1)
+        end = next((i for i in indices if isinstance(events[i], (ev.RunFinished, ev.RunError))), indices[-1] + 1)
+        # Before request ids, the adapter emitted one Usage per successful response, right after its streamed parts.
+        boundaries = [i for i in indices if isinstance(events[i], ev.Usage) and not events[i].request_id]
+        remaining = iter(boundaries)
+        tool_ends = {
+            events[i].tool_call_id: i for i in indices if isinstance(events[i], (ev.ToolCallStart, ev.ToolCallArgs, ev.ToolCallEnd))
+        }
+        position = start + 1
+        for k, call in enumerate(run_calls):
+            boundary = next(remaining, None) if call.error is None else None
+            if boundary is not None:
+                stop = boundary
+                dropped.add(boundary)
+            elif call.error is None and (ends := [tool_ends[t] for _, t in call.tool_calls if t in tool_ends]):
+                stop = max(ends) + 1
+            elif call.error is None and k == len(run_calls) - 1:
+                stop = end
+            else:
+                stop = position
+            position, stop = min(position, end), min(max(stop, position), end)
+            nearby = events[min(position, len(events) - 1)].timestamp
+            started, ended = _call_times(call, events[boundary] if boundary is not None else None, nearby)
+            request_id = call.request_id or f"{run_id}:{k}"
+            inserts[position].append(ev.ModelRequestStarted(
+                request_id=request_id, model=call.model, run_id=run_id, timestamp=started,
+            ))
+            inserts[stop].append(ev.Usage(
+                model=call.model, input_tokens=call.input_tokens, output_tokens=call.output_tokens,
+                cached_tokens=call.cached_tokens, cost_usd=call.cost_usd, duration=call.duration,
+                request_id=request_id, tool_call_ids=[t for _, t in call.tool_calls], error=call.error,
+                finish_reason=call.finish_reason, provider_response_id=call.provider_response_id,
+                run_id=run_id, timestamp=ended,
+            ))
+            position = stop + 1 if stop == boundary else stop
+
+    merged: list[ev.Event] = []
+    for i, event in enumerate(events):
+        merged.extend(inserts.get(i, ()))
+        if i not in dropped:
+            merged.append(event)
+    merged.extend(inserts.get(len(events), ()))
+    return merged
+
+
+def _call_times(call: ModelRequestSummary, usage: ev.Usage | None, nearby: float) -> tuple[float, float]:
+    duration = call.duration or 0.0
+    if usage is not None:
+        return usage.timestamp - duration, usage.timestamp
+    started = call.timestamp.timestamp() if call.timestamp is not None else nearby
+    return started, started + duration
 
 
 class ModelTraceRecorder:

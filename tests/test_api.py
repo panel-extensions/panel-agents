@@ -8,8 +8,9 @@ PUBLIC = {
     "panel_agents": [
         "Action", "ActionRegistry", "AgentChat", "AgentDrawer", "ApprovalCard", "ApprovalPolicy", "ApprovalQueue",
         "ApprovalRequest", "ApprovalRule", "Artifact", "ArtifactPane", "ArtifactStore", "ArtifactVersion", "ArtifactView",
-        "AuditLog", "MessageState", "Recorder", "RunInfo", "RunState", "ToolCallCard", "ToolCallState", "current_run_id",
-        "current_tool_call_id", "dump_events", "events", "load_events", "load_state", "register_diff", "register_renderer",
+        "AuditLog", "MessageState", "ModelCallCard", "ModelCallState", "Recorder", "RunInfo", "RunState", "RunTrace",
+        "ToolCallCard", "ToolCallState", "current_run_id", "current_tool_call_id", "dump_events", "events", "load_events",
+        "load_state", "register_diff", "register_renderer",
     ],
     "panel_agents.actions": ["Action", "ActionRegistry"],
     "panel_agents.artifacts": [
@@ -19,27 +20,28 @@ PUBLIC = {
     "panel_agents.audit": ["AuditLog"],
     "panel_agents.context": ["current_run_id", "current_tool_call_id"],
     "panel_agents.components": [
-        "AgentChat", "AgentDrawer", "ApprovalCard", "ApprovalQueue", "ArtifactPane", "ArtifactView", "ToolCallCard",
-        "approval_factory", "register_renderer", "render",
+        "AgentChat", "AgentDrawer", "ApprovalCard", "ApprovalQueue", "ArtifactPane", "ArtifactView", "ModelCallCard",
+        "RunTrace", "ToolCallCard", "approval_factory", "register_renderer", "render",
     ],
     "panel_agents.events": [
         "ApprovalRequested", "ApprovalResolved", "ArtifactApplied", "ArtifactPublished", "Custom", "Event",
-        "GuardrailFired", "RunError", "RunFinished", "RunStarted", "StateDelta", "StateSnapshot", "StepFinished",
+        "GuardrailFired", "ModelRequestStarted", "RunError", "RunFinished", "RunStarted", "StateDelta", "StateSnapshot", "StepFinished",
         "StepStarted", "TextMessageContent", "TextMessageEnd", "TextMessageStart", "ThinkingContent", "ThinkingEnd",
         "ThinkingStart", "ToolCallArgs", "ToolCallEnd", "ToolCallResult", "ToolCallStart", "Usage",
     ],
     "panel_agents.policy": ["ApprovalPolicy", "ApprovalRule"],
     "panel_agents.security": ["inert_markdown", "set_trusted_image_origins", "trusted_image_origins", "untrusted_markdown"],
     "panel_agents.recording": ["Codec", "FORMAT_VERSION", "Recorder", "dump_events", "load_events", "load_state", "register_codec"],
-    "panel_agents.state": ["ApprovalRequest", "MessageState", "RunInfo", "RunState", "ToolCallState"],
+    "panel_agents.state": ["ApprovalRequest", "MessageState", "ModelCallState", "RunInfo", "RunState", "ToolCallState"],
     "panel_agents.adapters.pydantic_ai": [
         "ActionToolset", "AgentRunner", "Cassette", "CassetteError", "Divergence", "ModelRequestSummary",
         "ModelTraceRecorder", "RecordedFailure", "artifact_return", "fingerprint", "load_messages", "load_model_calls",
-        "publish_artifact",
+        "merge_model_calls", "publish_artifact",
     ],
     "panel_agents.adapters.cassette": ["Cassette", "CassetteError", "Divergence", "RecordedFailure"],
     "panel_agents.adapters.model_trace": [
         "FORMAT_VERSION", "ModelRequestSummary", "ModelTraceRecorder", "fingerprint", "load_messages", "load_model_calls",
+        "merge_model_calls",
     ],
     "panel_agents.mcp": ["create_server"],
 }
