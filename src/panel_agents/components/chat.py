@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import datetime as dt
 import inspect
+from html import escape
 from typing import Any
 
 import panel as pn
@@ -14,9 +15,10 @@ import param
 from panel.viewable import Viewer
 
 from ..security import _escape_markdown, untrusted_markdown
-from ..state import MessageState, RunState, ToolCallState
+from ..state import MessageState, ModelCallState, RunState, ToolCallState
 from .approval import ApprovalCard
 from .approval import approval_factory as default_approval_factory
+from .model_call import USAGE_CSS, ModelCallCard, usage_summary, usage_tooltip
 from .tool_call import ToolCallCard, _format_duration
 
 _THINKING_CSS = """
@@ -30,9 +32,10 @@ class AgentChat(Viewer):
     Renders the ``items`` of a ``RunState`` as a chat feed.
 
     User and assistant messages become chat messages whose content
-    streams in place, thinking becomes a collapsed step, tool calls
-    become ``ToolCallCard``s and a failed run an error alert, all in
-    timeline order. Submitted text is
+    streams in place, thinking becomes a collapsed step, model requests
+    become ``ModelCallCard``s, tool calls ``ToolCallCard``s and a failed
+    run an error alert, all in timeline order. A finished run's usage
+    totals are shown under its last message. Submitted text is
     passed to ``runner.run`` (e.g. an ``AgentRunner``, which records the
     user message itself) or to a plain ``callback``. With ``readonly=True`` no input is shown, e.g. to replay a recording.
     """
@@ -83,9 +86,20 @@ class AgentChat(Viewer):
 
     group_tool_calls = param.Boolean(default=True, doc="""
         Whether consecutive tool calls of a run that finished without
-        trouble fold into one row, "3 steps · 2.1s", that expands to show
-        them. Calls that failed, were denied, wait for approval or
-        published an artifact are always shown.""")
+        trouble, and the model requests between them, fold into one row,
+        "3 steps · 2.1s", that expands to show them. Calls that failed,
+        were denied, wait for approval or published an artifact are always
+        shown.""")
+
+    show_model_calls = param.Boolean(default=True, doc="""
+        Whether model requests are shown as steps. Like tool calls, the
+        requests of a run fold into its step group once they succeed; a
+        request with no step group to fold into is left out once its run
+        finished, when ``show_usage`` reports the run's totals.""")
+
+    show_usage = param.Boolean(default=True, doc="""
+        Whether a finished run's model requests, tokens, cost and wall
+        time are shown in a line under its last message.""")
 
     feed_params = param.Dict(default={}, doc="""
         Additional parameters passed to the underlying pmui ChatFeed or ChatInterface.""")
@@ -121,7 +135,11 @@ class AgentChat(Viewer):
         self._messages: dict[int, pmui.ChatMessage] = {}
         self._groups: dict[int, _StepGroup] = {}
         self._watchers: list[tuple[param.Parameterized, Any]] = []
+        self._footers: dict[str, pmui.ChatMessage] = {}
+        self._run_watchers: dict[str, tuple[param.Parameterized, Any]] = {}
         self.state.param.watch(self._update_items, "items")
+        self.state.param.watch(self._watch_runs, "runs")
+        self._watch_runs()
         self.state.param.watch(self._update_running, "running")
         self._update_items()
         self._update_running()
@@ -133,7 +151,7 @@ class AgentChat(Viewer):
     def feed(self) -> pmui.ChatFeed:
         return self._feed
 
-    def view_for(self, item: MessageState | ToolCallState) -> Any:
+    def view_for(self, item: MessageState | ModelCallState | ToolCallState) -> Any:
         """The component rendering a timeline item."""
         return self._views[id(item)]
 
@@ -199,6 +217,7 @@ class AgentChat(Viewer):
         self._views = {}
         self._messages = {}
         self._groups = {}
+        self._footers = {}
         self._feed.clear()
 
     def _watch(self, obj, callback, names):
@@ -232,6 +251,12 @@ class AgentChat(Viewer):
             self._watch(self, lambda e, c=card, i=item: setattr(c, "label", self.tool_labels.get(i.tool_name)), "tool_labels")
             self._watch(item, self._regroup, "status")
             return pmui.ChatMessage(card, **self._message_params(self._agent_name(item.run_id), item.started_at, compact=True))
+        if isinstance(item, ModelCallState):
+            card = ModelCallCard(item, state=self.state)
+            self._views[id(item)] = card
+            self._watch(item, self._regroup, "status")
+            params = self._message_params(self._agent_name(item.run_id), item.started_at, compact=True)
+            return pmui.ChatMessage(card, visible=self.show_model_calls, **params)
         if not isinstance(item, MessageState):
             return None
         if item.kind == "thinking":
@@ -285,7 +310,9 @@ class AgentChat(Viewer):
         self._watch(item, update, ["content", "finished"])
         return message
 
-    def _foldable(self, item: ToolCallState) -> bool:
+    def _foldable(self, item: ToolCallState | ModelCallState) -> bool:
+        if isinstance(item, ModelCallState):
+            return item.status == "success"
         if item.status != "success":
             return False
         if item.approval is not None and item.approval.status != "approved":
@@ -297,13 +324,15 @@ class AgentChat(Viewer):
         message = self._messages.get(id(item))
         return message is not None and message.visible
 
-    @param.depends("group_tool_calls", watch=True)
+    @param.depends("group_tool_calls", "show_model_calls", "show_usage", watch=True)
     def _regroup(self, *_):
-        """Fold runs of two or more untroubled tool calls of one run into a step group."""
-        runs: list[list[ToolCallState]] = []
-        current: list[ToolCallState] = []
+        """Fold runs of two or more untroubled tool and model calls of one run into a step group."""
+        runs: list[list[ToolCallState | ModelCallState]] = []
+        current: list[ToolCallState | ModelCallState] = []
         for item in self._rendered:
-            if isinstance(item, ToolCallState):
+            if isinstance(item, ModelCallState) and not self.show_model_calls:
+                continue
+            if isinstance(item, (ToolCallState, ModelCallState)):
                 if self.group_tool_calls and self._foldable(item) and (not current or current[-1].run_id == item.run_id):
                     current.append(item)
                     continue
@@ -332,8 +361,60 @@ class AgentChat(Viewer):
                     objects.insert(objects.index(first), group.message)
                     changed = True
             group.update([self._messages[id(m)] for m in members], members)
+        grouped = {id(m) for members in wanted.values() for m in members}
+        for item in self._rendered:
+            if isinstance(item, ModelCallState) and id(item) not in grouped:
+                self._messages[id(item)].visible = self._show_lone_model_call(item)
         if changed:
             self._feed.objects = objects
+        self._update_usage()
+
+    def _show_lone_model_call(self, item: ModelCallState) -> bool:
+        if not self.show_model_calls:
+            return False
+        run = self.state.runs.get(item.run_id)
+        # The usage line reports a finished run's requests, so one with no step group to fold into is left out.
+        return not (self.show_usage and self._foldable(item) and run is not None and run.status != "running")
+
+    def _watch_runs(self, *_):
+        for run_id, run in self.state.runs.items():
+            if run_id not in self._run_watchers:
+                self._run_watchers[run_id] = (run, run.param.watch(self._regroup, ["status", "usage"]))
+        for run_id in [r for r in self._run_watchers if r not in self.state.runs]:
+            run, watcher = self._run_watchers.pop(run_id)
+            run.param.unwatch(watcher)
+
+    def _update_usage(self):
+        """Show each finished run's usage totals under the last message of the run that is shown."""
+        objects = self._feed.objects
+        owners = {id(self._messages[id(item)]): item for item in self._rendered if id(item) in self._messages}
+        groups = {id(group.message): group.calls[0] for group in self._groups.values() if group.calls}
+        last: dict[str, pmui.ChatMessage] = {}
+        for message in objects:
+            item = owners.get(id(message)) or groups.get(id(message))
+            if item is None or not message.visible or (isinstance(item, MessageState) and item.role == "user"):
+                continue
+            last[item.run_id] = message
+        wanted = {}
+        if self.show_usage:
+            for run_id, message in last.items():
+                run = self.state.runs.get(run_id)
+                if run is not None and run.status != "running" and run.usage and run.parent_run_id is None:
+                    wanted[run_id] = message
+        for run_id, message in list(self._footers.items()):
+            if wanted.get(run_id) is not message:
+                message.footer_objects = []
+                del self._footers[run_id]
+        for run_id, message in wanted.items():
+            run = self.state.runs[run_id]
+            footer = (
+                f'<div class="usage" title="{escape(usage_tooltip(run), quote=True)}">{escape(usage_summary(run))}</div>'
+            )
+            panes = message.footer_objects
+            if panes and getattr(panes[0], "object", None) == footer:
+                continue
+            message.footer_objects = [pn.pane.HTML(footer, margin=(0, 10), stylesheets=[USAGE_CSS], css_classes=["run-usage"])]
+            self._footers[run_id] = message
 
     def _approval_factory(self):
         factory, can_approve = self.approval_factory, self.can_approve
@@ -364,9 +445,9 @@ class _StepGroup:
             on_click=lambda e: self.toggle(),
         )
         self.message = pmui.ChatMessage(self.button, **chat._message_params(user, None, compact=True))
-        self.calls: list[ToolCallState] = []
+        self.calls: list[ToolCallState | ModelCallState] = []
 
-    def update(self, members: list[pmui.ChatMessage], calls: list[ToolCallState]):
+    def update(self, members: list[pmui.ChatMessage], calls: list[ToolCallState | ModelCallState]):
         self.members, self.calls = members, calls
         self._sync()
 
@@ -379,12 +460,20 @@ class _StepGroup:
             message.visible = True
 
     def _sync(self):
-        n = len(self.calls)
-        total = sum(c.duration or 0 for c in self.calls)
+        # A group's steps are its tool calls; the model requests in it are counted by the run's usage line.
+        n = sum(isinstance(c, ToolCallState) for c in self.calls) or len(self.calls)
+        if any(isinstance(c, ModelCallState) for c in self.calls):
+            # Tool calls stream within the model request that issues them, so durations overlap; the wall time is the span.
+            starts = [c.started_at for c in self.calls if c.started_at is not None]
+            ends = [c.ended_at for c in self.calls if c.ended_at is not None]
+            total = max(ends) - min(starts) if starts and ends else 0
+        else:
+            total = sum(c.duration or 0 for c in self.calls)
         duration = _format_duration(total) if total >= 0.05 else ""
-        spoken = f"{n} steps" + (f", {duration}" if duration else "")
+        steps = f"{n} step" if n == 1 else f"{n} steps"
+        spoken = steps + (f", {duration}" if duration else "")
         self.button.param.update(
-            label=f"{n} steps" + (f" · {duration}" if duration else ""),
+            label=steps + (f" · {duration}" if duration else ""),
             icon="expand_less" if self.expanded else "expand_more",
             # The tooltip is the button's accessible name.
             description=f"{spoken}, {'collapse' if self.expanded else 'expand'}",

@@ -138,6 +138,49 @@ class ToolCallState(param.Parameterized):
         return self.ended_at - self.started_at
 
 
+class ModelCallState(param.Parameterized):
+    """One request to the model and its response."""
+
+    request_id = param.String(constant=True)
+
+    model = param.String(default=None, allow_None=True)
+
+    status = param.Selector(default="running", objects=["running", "success", "failed"])
+
+    input_tokens = param.Integer(default=0, doc="Input tokens, including those read from the cache.")
+
+    output_tokens = param.Integer(default=0)
+
+    cached_tokens = param.Integer(default=0, doc="Input tokens read from the provider's cache.")
+
+    cost_usd = param.Number(default=None, allow_None=True)
+
+    tool_call_ids = param.List(default=[], item_type=str, doc="The tool calls the response issued.")
+
+    error = param.String(default=None, allow_None=True)
+
+    finish_reason = param.String(default=None, allow_None=True)
+
+    provider_response_id = param.String(default=None, allow_None=True)
+
+    started_at = param.Number(default=None, allow_None=True)
+
+    ended_at = param.Number(default=None, allow_None=True)
+
+    elapsed = param.Number(default=None, allow_None=True, doc="""
+        Seconds the request took as the adapter measured it, if known.""")
+
+    run_id = param.String(default=None, allow_None=True)
+
+    @property
+    def duration(self) -> float | None:
+        if self.elapsed is not None:
+            return self.elapsed
+        if self.started_at is None or self.ended_at is None:
+            return None
+        return self.ended_at - self.started_at
+
+
 class RunInfo(param.Parameterized):
 
     run_id = param.String(constant=True)
@@ -175,6 +218,26 @@ class RunInfo(param.Parameterized):
         return sum(u.output_tokens for u in self.usage)
 
     @property
+    def cached_tokens(self) -> int:
+        return sum(u.cached_tokens for u in self.usage)
+
+    @property
+    def requests(self) -> int:
+        """Number of model requests, failed ones included."""
+        return len(self.usage)
+
+    @property
+    def model_duration(self) -> float | None:
+        """Seconds spent waiting for the model, summed over the requests that report a duration."""
+        durations = [u.duration for u in self.usage if u.duration is not None]
+        return sum(durations) if durations else None
+
+    @property
+    def models(self) -> list[str]:
+        """The models the run requested, in order of first use."""
+        return list(dict.fromkeys(u.model for u in self.usage if u.model))
+
+    @property
     def cost_usd(self) -> float | None:
         costs = [u.cost_usd for u in self.usage if u.cost_usd is not None]
         return sum(costs) if costs else None
@@ -199,8 +262,10 @@ class RunState(param.Parameterized):
     """
 
     items = param.List(default=[], doc="""
-        Messages and tool calls in the order they started, the
-        timeline a chat view renders.""")
+        Messages, model calls and tool calls in the order they started,
+        the timeline a chat view renders.""")
+
+    model_calls = param.Dict(default={}, doc="Mapping of request id to ModelCallState.")
 
     messages = param.Dict(default={}, doc="Mapping of message id to MessageState.")
 
@@ -232,6 +297,8 @@ class RunState(param.Parameterized):
         # Set by an adapter enforcing an approval policy: (request, user, args, approved) -> refusal message or None.
         self._decision_check: Callable[[ApprovalRequest, str | None, dict[str, Any] | None, bool], str | None] | None = None
         self._decision_lock = threading.Lock()
+        # Per run, the last item before the response now streaming: where a Usage event without a ModelRequestStarted places its call.
+        self._response_marks: dict[str | None, Any] = {}
 
     @classmethod
     def from_events(cls, events: Iterable[ev.Event], **params) -> RunState:
@@ -252,9 +319,10 @@ class RunState(param.Parameterized):
     def reset(self):
         self._events.clear()
         self._buffers.clear()
+        self._response_marks.clear()
         self.artifacts = ArtifactStore()
         self.param.update(
-            items=[], messages={}, tool_calls={}, runs={}, approvals={},
+            items=[], messages={}, tool_calls={}, model_calls={}, runs={}, approvals={},
             pending_approvals=[], agent_state={}, running=False,
         )
 
@@ -422,6 +490,7 @@ class RunState(param.Parameterized):
             agent_name=event.agent_name, input=event.input, started_at=event.timestamp,
         )
         self.runs = {**self.runs, event.run_id: run}
+        self._response_marks[event.run_id] = self.items[-1] if self.items else None
         self._update_running()
 
     def _on_run_finished(self, event: ev.RunFinished):
@@ -444,6 +513,9 @@ class RunState(param.Parameterized):
         for call in self.tool_calls.values():
             if call.run_id == event.run_id and call.status in ("pending", "running"):
                 call.param.update(status="failed", error=call.error or event.message, ended_at=event.timestamp)
+        for request in self.model_calls.values():
+            if request.run_id == event.run_id and request.status == "running":
+                request.param.update(status="failed", error=event.message, ended_at=event.timestamp)
         self._update_running()
 
     def _on_step_started(self, event: ev.StepStarted):
@@ -558,9 +630,46 @@ class RunState(param.Parameterized):
             else:
                 call.param.update(status="denied", error=event.reason, ended_at=event.timestamp)
 
+    def _on_model_request_started(self, event: ev.ModelRequestStarted):
+        if event.request_id in self.model_calls:
+            return
+        request = ModelCallState(
+            request_id=event.request_id, model=event.model, run_id=event.run_id, started_at=event.timestamp,
+        )
+        self.model_calls = {**self.model_calls, event.request_id: request}
+        self._add_item(request)
+
     def _on_usage(self, event: ev.Usage):
         if run := self.runs.get(event.run_id):
             run.usage = [*run.usage, event]
+        request = self.model_calls.get(event.request_id) if event.request_id else None
+        if request is None:
+            request = self._insert_model_call(event)
+        request.param.update(
+            model=event.model or request.model, status="failed" if event.error else "success",
+            input_tokens=event.input_tokens, output_tokens=event.output_tokens, cached_tokens=event.cached_tokens,
+            cost_usd=event.cost_usd, tool_call_ids=list(event.tool_call_ids), error=event.error,
+            finish_reason=event.finish_reason, provider_response_id=event.provider_response_id,
+            ended_at=event.timestamp, elapsed=event.duration,
+        )
+        if event.run_id in self._response_marks:
+            self._response_marks[event.run_id] = self.items[-1] if self.items else None
+
+    def _insert_model_call(self, event: ev.Usage) -> ModelCallState:
+        # The response's text and tool calls are in the timeline already, so the call goes before them.
+        started = event.timestamp - event.duration if event.duration is not None else event.timestamp
+        request = ModelCallState(
+            request_id=event.request_id or _new_id("req-"), model=event.model, run_id=event.run_id, started_at=started,
+        )
+        self.model_calls = {**self.model_calls, request.request_id: request}
+        items = list(self.items)
+        index = len(items)
+        if event.run_id in self._response_marks:
+            mark = self._response_marks[event.run_id]
+            index = 0 if mark is None else next((i + 1 for i in range(len(items) - 1, -1, -1) if items[i] is mark), index)
+        items.insert(index, request)
+        self.items = items
+        return request
 
     def _on_guardrail_fired(self, event: ev.GuardrailFired):
         if run := self.runs.get(event.run_id):
@@ -619,6 +728,7 @@ def _apply_json_patch(document: dict[str, Any], patch: list[dict[str, Any]]) -> 
 __all__ = [
     "ApprovalRequest",
     "MessageState",
+    "ModelCallState",
     "RunInfo",
     "RunState",
     "ToolCallState",

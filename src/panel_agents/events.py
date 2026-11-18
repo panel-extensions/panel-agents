@@ -262,7 +262,27 @@ class ApprovalResolved(Event):
 
 
 @dataclass(kw_only=True)
+class ModelRequestStarted(Event):
+    """
+    A request to the model began. Its ``Usage`` event, with the same
+    ``request_id``, completes it once the response is in.
+    """
+
+    type: ClassVar[str] = "MODEL_REQUEST_STARTED"
+
+    request_id: str
+    model: str | None = None
+
+
+@dataclass(kw_only=True)
 class Usage(Event):
+    """
+    The outcome of one model request: its tokens, cost and duration.
+
+    Events without a ``request_id``, as written before model requests were
+    announced by ``ModelRequestStarted``, still describe one request each.
+    """
+
     type: ClassVar[str] = "USAGE"
 
     model: str | None = None
@@ -272,6 +292,13 @@ class Usage(Event):
     cost_usd: float | None = None
     duration: float | None = None
     message_id: str | None = None
+    request_id: str | None = None
+    tool_call_ids: list[str] = field(default_factory=list)
+    """The tool calls the response issued."""
+    error: str | None = None
+    """Why the request failed, None if it succeeded."""
+    finish_reason: str | None = None
+    provider_response_id: str | None = None
 
 
 @dataclass(kw_only=True)
@@ -285,6 +312,8 @@ class GuardrailFired(Event):
     message_id: str | None = None
 
 
-_KIT_EVENTS = (ArtifactPublished, ArtifactApplied, ApprovalRequested, ApprovalResolved, Usage, GuardrailFired)
+_KIT_EVENTS = (
+    ArtifactPublished, ArtifactApplied, ApprovalRequested, ApprovalResolved, ModelRequestStarted, Usage, GuardrailFired,
+)
 
 __all__ = [name for name, obj in list(globals().items()) if isinstance(obj, type) and issubclass(obj, Event)]

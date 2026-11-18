@@ -15,7 +15,8 @@ def test_record_and_replay_reproduces_state(tmp_path):
         state.apply_many(run_events())
     replayed = load_state(path)
     assert [type(e) for e in replayed.events] == [type(e) for e in state.events]
-    assert replayed.items[0].content == state.items[0].content
+    assert replayed.items[1].content == state.items[1].content
+    assert replayed.items[0].input_tokens == state.items[0].input_tokens == 10
     assert replayed.tool_calls["t1"].args == {"sql": "SELECT 1"}
     assert replayed.runs["run-1"].cost_usd == 0.01
 

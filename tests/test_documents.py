@@ -298,7 +298,7 @@ async def test_model_hears_about_applies_and_host_edits():
     assert "'ann' applied version 1 of the artifact 'Report' ('doc')" in prompts[0]
     assert "The app published version 3 of the artifact 'Report' ('doc') and now holds it." in prompts[0]
     assert prompts[0].endswith("What changed?")
-    assert [m.content for m in state.items if m.role == "user"] == ["What changed?"]
+    assert [m.content for m in state.messages.values() if m.role == "user"] == ["What changed?"]
     await runner.run("Again")
     assert prompts[1] == "Again"
 

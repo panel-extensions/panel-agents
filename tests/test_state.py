@@ -24,7 +24,9 @@ def run_events(run_id="run-1"):
 
 def test_message_and_tool_call_lifecycle():
     state = RunState.from_events(run_events())
-    message, call = state.items
+    # A Usage event without a request id places its model call before the response it reports.
+    request, message, call = state.items
+    assert (request.model, request.status, request.input_tokens) == ("m", "success", 10)
     assert message.content == "Let me check."
     assert message.finished
     assert call.status == "success"
