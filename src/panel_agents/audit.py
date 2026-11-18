@@ -44,7 +44,7 @@ class AuditLog:
         self.records: list[dict[str, Any]] = []
         self._unsubscribers: dict[int, Callable[[], None]] = {}
         if state is not None:
-            self.attach(state, include_existing=include_existing)
+            self._attach(state, include_existing)
 
     def attach(self, state: RunState, include_existing: bool = False):
         """
@@ -52,14 +52,18 @@ class AuditLog:
         decisions already applied (e.g. from a loaded recording) are
         recorded too, and a warning says when ``max_events`` dropped some.
         """
+        self._attach(state, include_existing)
+
+    def _attach(self, state: RunState, include_existing: bool):
         if id(state) in self._unsubscribers:
             return
         if include_existing:
             if state.dropped_events:
                 warnings.warn(
-                    f"The RunState dropped its {state.dropped_events} earliest events (max_events="
-                    f"{state.max_events}), so decisions made before them are not in the audit log.",
-                    stacklevel=2,
+                    f"The RunState dropped its {state.dropped_events} earliest events to stay within "
+                    "max_events, so decisions among the dropped events are not in the audit log.",
+                    # Both AuditLog(...) and attach() reach this through _attach, so 3 points at the caller.
+                    stacklevel=3,
                 )
             for event in state.events:
                 if isinstance(event, ev.ApprovalResolved):
