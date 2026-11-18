@@ -547,9 +547,38 @@ class RunState(param.Parameterized):
         artifact = self.artifacts[artifact_id]
         if not 1 <= version <= len(artifact.versions):
             raise ValueError(f"{artifact_id!r} has no version {version}.")
+        if artifact.versions[version - 1].dropped:
+            raise ValueError(f"Version {version} of {artifact_id!r} was dropped and cannot be applied.")
         if action not in (None, "undo", "redo"):
             raise ValueError(f"action must be 'undo', 'redo' or None, not {action!r}.")
         self.apply(ev.ArtifactApplied(artifact_id=artifact_id, version=version, user=user, action=action))
+
+    def drop_artifact_versions(self, artifact_id: str, before: int) -> list[int]:
+        """
+        Drop the values of the versions of a document artifact numbered
+        below ``before``, except the applied one, to bound the memory a
+        long editing session takes, and return the numbers dropped.
+
+        A dropped version keeps its number, run, actor, user, tool call,
+        metadata and time, so version numbers never shift, but its
+        ``value`` becomes None and ``dropped`` True. It leaves the undo and
+        redo history: undo stops at the oldest version kept, an
+        ``undo_run`` or ``redo_run`` whose target was dropped has nothing
+        to do, and applying it raises ``ValueError``. Recorded as an
+        ``ArtifactVersionsDropped`` event, so a replay drops the same
+        versions. Raises ``ValueError`` if ``before`` is below 1.
+        """
+        if before < 1:
+            raise ValueError(f"before must be at least 1, not {before}.")
+        artifact = self.artifacts[artifact_id]
+        numbers = [
+            v.version for v in artifact.versions[: before - 1]
+            if not v.dropped and v.version != artifact.applied
+        ]
+        if not numbers:
+            return []
+        self.apply(ev.ArtifactVersionsDropped(artifact_id=artifact_id, before=before))
+        return numbers
 
     def undo(
         self, artifact_id: str, *, user: str | None = None, on_apply: _OnApply | None = None,
@@ -749,6 +778,10 @@ class RunState(param.Parameterized):
     def _on_artifact_applied(self, event: ev.ArtifactApplied):
         if event.artifact_id in self.artifacts:
             self.artifacts.mark_applied(event.artifact_id, event.version, action=event.action)
+
+    def _on_artifact_versions_dropped(self, event: ev.ArtifactVersionsDropped):
+        if event.artifact_id in self.artifacts:
+            self.artifacts.drop_versions(event.artifact_id, event.before)
 
     def _on_approval_requested(self, event: ev.ApprovalRequested):
         request = ApprovalRequest(
