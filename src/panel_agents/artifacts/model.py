@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import param
@@ -18,6 +18,21 @@ def infer_kind(value: Any) -> str:
     if isinstance(value, (dict, list)):
         return "json"
     return "object"
+
+
+def root_run_id(runs: Mapping[str, Any] | None, run_id: str | None) -> str | None:
+    """
+    The top-level run that ``run_id`` belongs to, following each run's
+    ``parent_run_id`` through ``runs``, e.g. ``RunState.runs``.
+    """
+    seen = set()
+    while runs is not None and run_id is not None and run_id not in seen:
+        seen.add(run_id)
+        run = runs.get(run_id)
+        if run is None or run.parent_run_id is None:
+            break
+        run_id = run.parent_run_id
+    return run_id
 
 
 class ArtifactVersion(param.Parameterized):
@@ -73,17 +88,26 @@ class Artifact(param.Parameterized):
         version would apply, or None if there is nothing to undo. Every
         change to the applied version can be undone: publishing an applied
         version, and applying an earlier or later one by hand. See
-        ``ArtifactView.undo``.""")
+        ``RunState.undo``.""")
 
     redo_version = param.Integer(default=None, allow_None=True, constant=True, doc="""
         Number of the version redoing the last undo would apply, or None
-        if there is nothing to redo. Publishing an applied version ends redo.""")
+        if there is nothing to redo. Publishing an applied version, or
+        applying a version other than by undo or redo, ends redo;
+        publishing a version that is not applied, a proposal, does not.""")
+
+    redo_run_version = param.Integer(default=None, allow_None=True, constant=True, doc="""
+        Number of the version redoing the whole last undo would apply,
+        e.g. the version an undone run had left the host document at, or
+        None if there is nothing to redo. See ``RunState.redo_run``.""")
 
     def __init__(self, **params):
         super().__init__(**params)
         # Previously applied version numbers; derived from the order versions were published and applied.
         self._undo: list[int] = []
         self._redo: list[int] = []
+        # ``_redo`` split into the steps each undo pushed, oldest first, so a whole undo can be redone at once.
+        self._redo_steps: list[list[int]] = []
         # For each version published as applied, the version the host held before it.
         self._applied_before: dict[int, int | None] = {}
 
@@ -91,28 +115,56 @@ class Artifact(param.Parameterized):
         return {
             "undo_version": self._undo[-1] if self._undo else None,
             "redo_version": self._redo[-1] if self._redo else None,
+            "redo_run_version": self._redo_steps[-1][0] if self._redo_steps else None,
         }
+
+    def _clear_redo(self):
+        self._redo.clear()
+        self._redo_steps.clear()
 
     def _move_applied(self, number: int, action: str | None = None) -> dict[str, Any]:
         """
         Update the undo and redo stacks for applying ``number`` and return
-        the parameter changes. An undo or redo may skip several steps, as
-        undoing a whole run does; any other apply is a change of its own,
-        which can be undone and ends redo.
+        the parameter changes, which also show the applied version.
+
+        The undo stack, the applied version and the reversed redo stack
+        form one timeline holding each version at most once, so undo and
+        redo to a version are never ambiguous. An undo or redo moves along
+        it and may skip several steps, as undoing a whole run does. Any
+        other apply is a change of its own: it ends redo and moves the
+        version to the end of the timeline, so undoing a revert returns to
+        where the revert started.
         """
         applied = self.applied
         if applied is None or number == applied:
-            return {"applied": number}
+            return {"applied": number, "current": number}
         stacks = {"undo": (self._undo, self._redo), "redo": (self._redo, self._undo)}.get(action)
         if stacks is not None and number in stacks[0]:
             source, target = stacks
-            target.append(applied)
+            moved = [applied]
             while (step := source.pop()) != number:
-                target.append(step)
+                moved.append(step)
+            target.extend(moved)
+            if action == "undo":
+                self._redo_steps.append(moved)
+            else:
+                self._trim_redo_steps()
         else:
             self._undo.append(applied)
-            self._redo.clear()
-        return {"applied": number, **self._stacks()}
+            if number in self._undo:
+                self._undo.remove(number)
+            self._clear_redo()
+        return {"applied": number, "current": number, **self._stacks()}
+
+    def _trim_redo_steps(self):
+        excess = sum(map(len, self._redo_steps)) - len(self._redo)
+        while excess > 0:
+            step = self._redo_steps[-1]
+            cut = min(excess, len(step))
+            del step[len(step) - cut:]
+            excess -= cut
+            if not step:
+                self._redo_steps.pop()
 
     def _version_before(self, versions: list[int]) -> int | None:
         """
@@ -122,6 +174,57 @@ class Artifact(param.Parameterized):
         """
         changed = sorted(v for v in versions if v in self._applied_before)
         return self._applied_before[changed[0]] if changed else None
+
+    def run_versions(self, run_id: str, runs: Mapping[str, Any] | None = None) -> list[int]:
+        """
+        Numbers of the versions published in ``run_id``. With ``runs``,
+        e.g. ``RunState.runs``, both ids are resolved to their top-level
+        run, so the versions of child runs count as part of it.
+        """
+        root = root_run_id(runs, run_id)
+        return [v.version for v in self.versions if root_run_id(runs, v.run_id) == root]
+
+    def undo_run_target(self, run_id: str | None = None, runs: Mapping[str, Any] | None = None) -> int | None:
+        """
+        Number of the version undoing the run ``run_id`` would apply: the
+        one the host held before the run first changed the applied
+        version. ``run_id`` defaults to the run of the applied version and
+        ``runs`` works as for ``run_versions``. None if the run is undone
+        already, i.e. that version is applied or can only be reached by
+        redo. Raises ``ValueError`` if the run never changed the applied
+        version, e.g. because it only proposed versions.
+        """
+        if run_id is None:
+            applied = self.applied_version
+            run_id = applied.run_id if applied is not None else None
+            if run_id is None:
+                raise ValueError("The applied version was not published in a run.")
+        run_id = root_run_id(runs, run_id)
+        numbers = self.run_versions(run_id, runs)
+        if not numbers:
+            raise ValueError(f"No version of {self.artifact_id!r} was published in run {run_id!r}.")
+        before = self._version_before(numbers)
+        if before is None:
+            raise ValueError(f"Run {run_id!r} did not change the applied version of {self.artifact_id!r} from an earlier one.")
+        return before if before in self._undo else None
+
+    def redo_run_target(self, run_id: str | None = None, runs: Mapping[str, Any] | None = None) -> int | None:
+        """
+        Number of the version redoing a whole undo would apply, or None if
+        there is nothing to redo. Without ``run_id`` this is the last undo,
+        ``redo_run_version``. With it, it is the earliest undo still
+        redoable that undid a version of that run (resolved through
+        ``runs`` as for ``run_versions``), so that afterwards none of the
+        run's versions is left to redo; undos after it are redone too,
+        since redo is linear.
+        """
+        if run_id is None:
+            return self.redo_run_version
+        numbers = set(self.run_versions(run_id, runs))
+        for step in self._redo_steps:
+            if numbers.intersection(step):
+                return step[0]
+        return None
 
     @property
     def is_document(self) -> bool:
@@ -172,7 +275,7 @@ class Artifact(param.Parameterized):
             self._applied_before[version.version] = self.applied
             if self.applied is not None:
                 self._undo.append(self.applied)
-            self._redo.clear()
+            self._clear_redo()
             update["applied"] = version.version
         update.update(self._stacks())
         with param.edit_constant(self):
@@ -329,8 +432,8 @@ class ArtifactStore(param.Parameterized):
     def mark_applied(self, artifact_id: str, version: int, action: str | None = None):
         """
         Record that the host document now holds ``version`` (counting
-        from 1) of an artifact; ``action`` is ``"undo"`` or ``"redo"`` when
-        it was applied by undoing or redoing.
+        from 1) of an artifact and show it as ``current``; ``action`` is
+        ``"undo"`` or ``"redo"`` when it was applied by undoing or redoing.
         """
         artifact = self.artifacts[artifact_id]
         if not 1 <= version <= len(artifact.versions):
@@ -345,4 +448,5 @@ __all__ = [
     "ArtifactStore",
     "ArtifactVersion",
     "infer_kind",
+    "root_run_id",
 ]

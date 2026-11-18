@@ -13,7 +13,7 @@ import panel_material_ui as pmui
 import param
 from panel.viewable import Viewer
 
-from ..artifacts.model import Artifact, ArtifactVersion
+from ..artifacts.model import Artifact, ArtifactVersion, root_run_id
 from ..state import RunState
 
 _ACTOR_ICONS = {"agent": "smart_toy", "user": "person"}
@@ -58,18 +58,6 @@ class VersionGroup:
         return self.versions[-1].version
 
 
-def root_run_id(state: RunState | None, run_id: str | None) -> str | None:
-    """The top-level run that ``run_id`` belongs to, following ``parent_run_id`` through ``state.runs``."""
-    seen = set()
-    while state is not None and run_id is not None and run_id not in seen:
-        seen.add(run_id)
-        run = state.runs.get(run_id)
-        if run is None or run.parent_run_id is None:
-            break
-        run_id = run.parent_run_id
-    return run_id
-
-
 def group_versions(versions: list[ArtifactVersion], state: RunState | None = None) -> list[VersionGroup]:
     """
     Group versions in publication order. A group is a run of consecutive
@@ -79,8 +67,9 @@ def group_versions(versions: list[ArtifactVersion], state: RunState | None = Non
     split that run into two groups around them.
     """
     groups: list[VersionGroup] = []
+    runs = state.runs if state is not None else None
     for version in versions:
-        run_id = root_run_id(state, version.run_id)
+        run_id = root_run_id(runs, version.run_id)
         group = groups[-1] if groups else None
         if group is not None and (
             (run_id is not None and run_id == group.run_id)

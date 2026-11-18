@@ -17,6 +17,7 @@ from .model import (
     ArtifactStore,
     ArtifactVersion,
     infer_kind,
+    root_run_id,
 )
 
 __all__ = [
@@ -36,4 +37,5 @@ __all__ = [
     "diff_values",
     "infer_kind",
     "register_diff",
+    "root_run_id",
 ]

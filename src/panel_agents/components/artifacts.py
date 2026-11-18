@@ -29,7 +29,7 @@ from ..artifacts.model import Artifact, ArtifactStore, ArtifactVersion
 from ..security import _escape_markdown, _plain_typography
 from ..state import RunState
 from ._diff import DiffViewer
-from ._timeline import VersionTimeline, root_run_id
+from ._timeline import VersionTimeline
 from .renderers import render
 
 _KIND_ICONS = {
@@ -439,48 +439,44 @@ class ArtifactView(Viewer):
 
     async def undo(self) -> bool:
         """
-        Undo the last change to the applied version of a document: apply
-        the version that was applied before it, through ``on_apply``.
-        Undoing a revert returns to the version applied before the revert.
-        Returns whether the version was applied.
+        Undo the last change to the applied version of a document through
+        ``on_apply``, as ``RunState.undo`` does. Returns whether the
+        version was applied.
         """
         return await self._step(self.artifact.undo_version if self.artifact else None, "undo")
 
     async def redo(self) -> bool:
         """
-        Apply again the version the last undo moved away from. Redo is
-        possible until a new version is published. Returns whether the
+        Apply again the version the last undo moved away from through
+        ``on_apply``, as ``RunState.redo`` does. Returns whether the
         version was applied.
         """
         return await self._step(self.artifact.redo_version if self.artifact else None, "redo")
 
     async def undo_run(self, run_id: str | None = None) -> bool:
         """
-        Undo a whole run: apply the version the host held before the run
-        first changed the applied version (``run_id`` defaults to the run
-        of the applied version). A child run counts as part of its
-        top-level run in ``state``. Versions applied after that, by the run
-        or anyone else, are undone with it, and ``redo`` steps forward
-        through them again. Raises ``ValueError`` if the run never changed
-        the applied version, e.g. because it only proposed versions.
-        Returns whether the version was applied.
+        Undo a whole run through ``on_apply``, as ``RunState.undo_run``
+        does, resolving child runs through ``state``. Raises
+        ``ValueError`` if the run never changed the applied version.
+        Returns whether the version was applied, so False if the run is
+        undone already.
         """
         artifact = self.artifact
         if artifact is None:
             raise ValueError("ArtifactView.undo_run needs an artifact.")
-        if run_id is None:
-            applied = artifact.applied_version
-            run_id = applied.run_id if applied is not None else None
-            if run_id is None:
-                raise ValueError("The applied version was not published in a run.")
-        run_id = root_run_id(self.state, run_id)
-        numbers = [v.version for v in self.versions if root_run_id(self.state, v.run_id) == run_id]
-        if not numbers:
-            raise ValueError(f"No version of {artifact.artifact_id!r} was published in run {run_id!r}.")
-        before = artifact._version_before(numbers)
-        if before is None:
-            raise ValueError(f"Run {run_id!r} did not change the applied version of {artifact.artifact_id!r} from an earlier one.")
-        return await self._step(before, "undo")
+        return await self._step(artifact.undo_run_target(run_id, self._runs), "undo")
+
+    async def redo_run(self, run_id: str | None = None) -> bool:
+        """
+        Redo a whole undo, e.g. an ``undo_run``, through ``on_apply``, as
+        ``RunState.redo_run`` does. Returns whether the version was applied.
+        """
+        artifact = self.artifact
+        return await self._step(artifact.redo_run_target(run_id, self._runs) if artifact else None, "redo")
+
+    @property
+    def _runs(self) -> dict | None:
+        return self.state.runs if self.state is not None else None
 
     async def _step(self, number: int | None, action: str | None = None) -> bool:
         if number is None:
