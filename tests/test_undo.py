@@ -80,7 +80,7 @@ def test_redo_run_redoes_a_run_undone_as_a_whole():
     assert state.artifacts["doc"].redo_version is None
 
 
-def test_redo_run_by_id_is_not_redone_over_someone_elses_undone_edit():
+def test_redo_run_by_id_is_not_redone_over_a_later_undone_edit():
     state = make_state()
     artifact = state.artifacts["doc"]
     state.undo_run("doc", "r2")
@@ -335,7 +335,7 @@ def _timeline(artifact):
 
 
 @pytest.mark.parametrize("seed", range(150))
-def test_whole_run_steps_never_cross_someone_elses_version(seed):
+def test_whole_run_steps_never_cross_a_version_outside_the_run(seed):
     rnd = random.Random(seed)
     state = RunState(flush_interval=0)
     publish(state, "base")

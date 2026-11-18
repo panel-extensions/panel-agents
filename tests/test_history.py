@@ -79,6 +79,8 @@ def test_version_labels_come_from_metadata():
 
 
 def test_timeline_lists_runs_newest_first():
+    from panel_agents.components._timeline import BLOCKED_NOTE
+
     state = make_state()
     view, _ = make_view(state)
     items = view._timeline._list.items
@@ -96,7 +98,8 @@ def test_timeline_lists_runs_newest_first():
     assert rows(view)[0]["secondary"].endswith("applied") and "actions" not in rows(view)[0]
     assert rows(view)[1]["actions"][0]["action"] == "restore"
     assert items[0]["actions"][0]["label"] == "Undo run" and items[0]["before"] == 4
-    assert items[1]["actions"][0]["label"] == "Go back to before this run"
+    # Going back to before ann's edit would undo the later run too, so it is not offered.
+    assert "actions" not in items[1] and items[1]["secondary"].endswith(BLOCKED_NOTE)
     assert "actions" not in items[2]
 
 
@@ -162,7 +165,7 @@ async def test_undo_run_goes_back_before_the_run_and_redo_steps_through_it():
         await view.undo_run("missing")
 
 
-async def test_a_run_is_not_undone_over_someone_elses_later_edit():
+async def test_a_run_is_not_undone_over_a_later_edit():
     state = RunState(flush_interval=0)
     publish(state, "base")
     publish(state, "add_node", run_id="r1", actor="agent")
@@ -179,7 +182,7 @@ async def test_a_run_is_not_undone_over_someone_elses_later_edit():
 
 
 def test_the_history_shows_why_a_run_cannot_be_undone():
-    from panel_agents.components._timeline import VersionTimeline
+    from panel_agents.components._timeline import BLOCKED_NOTE, VersionTimeline
 
     state = RunState(flush_interval=0)
     publish(state, "base")
@@ -190,9 +193,25 @@ def test_the_history_shows_why_a_run_cannot_be_undone():
     state.apply(ev.RunFinished(run_id="r1"))
     timeline = VersionTimeline(artifact=state.artifacts["doc"], state=state, can_apply=True)
     headers = {item["label"]: item for item in timeline._list.items}
-    (action,) = headers["Build it"]["actions"]
-    assert action["label"] == "Edits by others came after this run"
-    assert "before" not in headers["Build it"]
+    # No action that would do nothing: the reason is in the group's secondary text.
+    assert "actions" not in headers["Build it"] and "before" not in headers["Build it"]
+    assert headers["Build it"]["secondary"].endswith(BLOCKED_NOTE)
+
+
+def test_a_group_without_a_run_is_not_undone_over_a_later_run():
+    from panel_agents.components._timeline import BLOCKED_NOTE, VersionTimeline
+
+    state = RunState(flush_interval=0)
+    publish(state, "base")
+    agent_run(state, "rx", "First", "add_node")
+    publish(state, "move_tile", user="ann")
+    agent_run(state, "ra", "Second", "place_tile")
+    timeline = VersionTimeline(artifact=state.artifacts["doc"], state=state, can_apply=True, user="bob")
+    headers = {item["label"]: item for item in timeline._list.items}
+    assert "actions" not in headers["ann edited"]
+    assert headers["ann edited"]["secondary"].endswith(BLOCKED_NOTE)
+    (action,) = headers["Second"]["actions"]
+    assert action["label"] == "Undo run"
 
 
 async def test_undo_after_a_revert_returns_to_where_the_revert_started():

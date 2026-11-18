@@ -628,9 +628,9 @@ class RunState(param.Parameterized):
         as part of its top-level run. ``redo`` steps forward through the
         run's versions again and ``redo_run`` redoes them all. Returns None
         without calling ``on_apply`` if the run is undone already, or if a
-        version made by another run or actor came after the run's first
-        change (``Artifact.undo_run_blocked``), since undoing the run would
-        take that version back too; ``undo`` still steps back one version
+        version made outside the run came after the run's first change
+        (``Artifact.undo_run_blocked``), since undoing the run would take
+        that version back too; ``undo`` still steps back one version
         at a time. Raises ``ValueError`` if the run never changed the
         applied version. Other arguments and result as for ``undo``.
         """
@@ -647,7 +647,7 @@ class RunState(param.Parameterized):
         event with ``action="redo"``. Without ``run_id`` this redoes the
         last undo; with it, the latest undo still redoable that undid a
         version of that run, and any undos after it, or None if those
-        would also redo a version made by another run or actor. Redo ends
+        would also redo a version made outside the run. Redo ends
         as for ``redo``. Other arguments and result as for ``undo``.
         """
         artifact = self.artifacts[artifact_id]
