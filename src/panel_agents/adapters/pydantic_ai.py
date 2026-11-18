@@ -58,7 +58,7 @@ from .. import events as ev
 from ..actions import Action, ActionRegistry
 from ..policy import ApprovalPolicy
 from ..recording import _dump_event
-from .cassette import Cassette, CassetteError, Divergence
+from .cassette import Cassette, CassetteError, Divergence, RecordedFailure
 from .model_trace import (
     _METADATA_KEY,
     ModelRequestSummary,
@@ -80,6 +80,7 @@ __all__ = [
     "Divergence",
     "ModelRequestSummary",
     "ModelTraceRecorder",
+    "RecordedFailure",
     "artifact_return",
     "fingerprint",
     "load_messages",
@@ -321,7 +322,10 @@ class _RunCapability(AbstractCapability[Any]):
         if request is None or not isinstance(response, ModelResponse) or getattr(response, "state", None) != "interrupted":
             return
         if _METADATA_KEY not in (response.metadata or {}):
-            response.metadata = {**(response.metadata or {}), _METADATA_KEY: {"duration": request["duration"]}}
+            response.metadata = {
+                **(response.metadata or {}),
+                _METADATA_KEY: {"duration": request["duration"], "request_id": uuid.uuid4().hex},
+            }
 
     async def handle_deferred_tool_calls(self, ctx: RunContext[Any], *, requests: DeferredToolRequests) -> DeferredToolResults | None:
         # External calls (CallDeferred) are left unresolved so the run ends with them as its output.

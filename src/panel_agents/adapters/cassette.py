@@ -21,7 +21,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import os
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Iterable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -40,9 +40,10 @@ from pydantic_ai.models import CompletedStreamedResponse, ModelRequestParameters
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_core import to_jsonable_python
 
-from .model_trace import _METADATA_KEY, _read, fingerprint, load_messages
+from ..recording import _describe
+from .model_trace import _FAILED_KEY, _METADATA_KEY, _REWIND_KEY, _conversation, _read, fingerprint
 
-__all__ = ["Cassette", "CassetteError", "Divergence"]
+__all__ = ["Cassette", "CassetteError", "Divergence", "RecordedFailure"]
 
 # Output validator retries are RetryPromptParts without a tool in older pydantic-ai releases.
 _RetryFeedbackPart = getattr(_messages, "RetryFeedbackPart", None)
@@ -81,6 +82,91 @@ class Divergence:
     def __str__(self) -> str:
         what = f"{self.kind} of {self.tool_name!r} ({self.tool_call_id})" if self.tool_call_id else self.kind
         return f"request {self.request}: {what} differs, recorded {self.expected!r}, got {self.actual!r}"
+
+
+class RecordedFailure(RuntimeError):
+    """
+    A recorded model request that failed, raised again where playback
+    reaches it. Its message is the error as the trace holds it, prefixed
+    with the exception type, e.g. ``"RuntimeError: provider refused"``.
+    It is not a ``CassetteError``: the playback reproduced the recording.
+    """
+
+
+@dataclass(frozen=True)
+class _Failure:
+    error: str
+
+
+def _call_key(response: ModelResponse) -> Any:
+    # A history processor may rewrite a response that was already recorded, so it is matched as load_model_calls does.
+    stamp = (response.metadata or {}).get(_METADATA_KEY) or {}
+    return stamp.get("request_id") or (response.run_id, response.timestamp, response.model_name, response.provider_response_id)
+
+
+def _sent(messages: list[ModelMessage], leftovers: set[int]) -> list[ModelRequest]:
+    """
+    The requests at the end of a history, after its last response: what the
+    next model request sent. Cut-off responses in *leftovers* (by ``id``)
+    were never answered, so they do not end the search.
+    """
+    sent: list[ModelRequest] = []
+    for message in reversed(messages):
+        if isinstance(message, ModelResponse):
+            if id(message) in leftovers:
+                continue
+            break
+        sent.insert(0, message)
+    return sent
+
+
+def _recorded_calls(trace: Any) -> list[tuple[ModelResponse | _Failure, list[ModelRequest]]] | None:
+    """
+    Every model call a trace recorded, once each and in order: the response
+    as first written, or the failure of a request that failed, with the
+    requests it sent. Those are the requests after the last response in the
+    history as it stood when the call was first written, rewinds applied:
+    the recorder writes the history at the start of every model request,
+    after a history processor has run. Copies of a response that a rewind
+    made the trace write again are not new calls. A cut-off response that a
+    failed request left behind is replaced by the failure that follows it.
+    None for a trace whose responses carry no request id, written before
+    ``AgentRunner`` stamped one.
+    """
+    entries = trace.entries
+    if not any(
+        isinstance(e, ModelResponse) and ((e.metadata or {}).get(_METADATA_KEY) or {}).get("request_id") for e in entries
+    ):
+        return None
+    calls: list[tuple[ModelResponse | _Failure, list[ModelRequest]]] = []
+    messages: list[ModelMessage] = []
+    seen: set[Any] = set()
+    leftovers: set[int] = set()
+    for index, entry in enumerate(entries):
+        if isinstance(entry, dict):
+            if _REWIND_KEY in entry:
+                del messages[entry[_REWIND_KEY]:]
+            elif _FAILED_KEY in entry and entry.get("request"):
+                calls.append((_Failure(entry.get("error") or "The recorded request failed."), _sent(messages, leftovers)))
+            continue
+        if isinstance(entry, ModelResponse) and (key := _call_key(entry)) not in seen:
+            seen.add(key)
+            if getattr(entry, "state", None) == "interrupted" and _failure_follows(entries, index):
+                leftovers.add(id(entry))
+            else:
+                calls.append((entry, _sent(messages, leftovers)))
+        messages.append(entry)
+    return calls
+
+
+def _failure_follows(entries: list[Any], index: int) -> bool:
+    """Whether the run of a cut-off response at *index* failed with a request in flight, before any later call."""
+    for entry in entries[index + 1:]:
+        if isinstance(entry, ModelResponse):
+            return False
+        if isinstance(entry, dict) and _FAILED_KEY in entry:
+            return bool(entry.get("request"))
+    return False
 
 
 def _normalize(value: Any) -> Any:
@@ -155,21 +241,48 @@ class Cassette(FunctionModel):
             call_id: part for message in self.messages for call_id, part in _tool_parts(message).items()
         }
 
+    def _replay_calls(self, calls: list[tuple[ModelResponse | _Failure, list[ModelRequest]]]):
+        self._responses = [response for response, _ in calls]
+        self._requests = [list(requests) for _, requests in calls]
+        self._returns = {
+            call_id: part for requests in self._requests for message in requests
+            for call_id, part in _tool_parts(message).items()
+        }
+
     @classmethod
-    def from_trace(cls, path: str | os.PathLike, **kwargs) -> Cassette:
-        """Load the conversation of a model trace written by ``ModelTraceRecorder``."""
-        if not _read(path).include_content:
-            raise ValueError(f"{path} was recorded with include_content=False and has nothing to play back.")
-        return cls(load_messages(path), **kwargs)
+    def from_trace(cls, source: str | os.PathLike | Iterable[dict[str, Any]], **kwargs) -> Cassette:
+        """
+        Play back every model call a trace written by ``ModelTraceRecorder``
+        recorded, once each and in the order they were made, each with its
+        response as first written and compared with the requests as first
+        sent. That holds when the recorded agent rewrote its history, e.g.
+        with a history processor that shortens earlier tool results,
+        rewrites earlier responses or keeps only the last messages, and
+        after ``AgentRunner.clear()``. ``messages`` is the history the trace
+        ends with.
+
+        A request that failed, e.g. because the provider refused it, raises
+        ``RecordedFailure`` with the recorded error where playback reaches
+        it, so the run fails as it did; a tool that raised does so again on
+        its own. A trace whose responses carry no request id, written by an
+        earlier panel-agents, is played as the history it ends with.
+        """
+        trace = _read(source if isinstance(source, (str, os.PathLike)) else list(source))
+        if not trace.include_content:
+            raise ValueError(f"{_describe(source)} was recorded with include_content=False and has nothing to play back.")
+        cassette = cls(_conversation(trace)[0], **kwargs)
+        if (calls := _recorded_calls(trace)) is not None:
+            cassette._replay_calls(calls)
+        return cassette
 
     @property
     def responses(self) -> list[ModelResponse]:
-        """The recorded responses, in the order they are played."""
-        return list(self._responses)
+        """The recorded responses, in the order they are played; a recorded failure is not one."""
+        return [response for response in self._responses if isinstance(response, ModelResponse)]
 
     @property
     def remaining(self) -> int:
-        """How many recorded responses have not been played yet."""
+        """How many recorded calls, responses and failures, have not been played yet."""
         return len(self._responses) - self.played
 
     def _diverge(self, divergence: Divergence):
@@ -187,6 +300,9 @@ class Cassette(FunctionModel):
                     f"(fingerprint {expected}, now {actual}); record it again, or pass check_fingerprint=False."
                 )
             self._diverge(Divergence(number, "fingerprint", expected, actual))
+        self._compare_requests(number, messages)
+
+    def _compare_requests(self, number: int, messages: list[ModelMessage]):
         request = messages[-1] if messages else None
         recorded_requests = self._requests[number - 1]
         for kind, extract in (("prompt", _prompts), ("retry", _retries)):
@@ -210,9 +326,13 @@ class Cassette(FunctionModel):
                 f"and the agent made another."
             )
         number = self.played + 1
+        recorded = self._responses[number - 1]
+        if isinstance(recorded, _Failure):
+            self._compare_requests(number, messages)
+            self.played = number
+            raise RecordedFailure(recorded.error)
         # Compared before the model prepares them, as AgentRunner fingerprints them when recording.
         self._compare(number, messages, params)
-        recorded = self._responses[number - 1]
         offered = {tool.name for tool in [*params.function_tools, *params.output_tools]}
         for part in recorded.parts:
             if isinstance(part, ToolCallPart) and part.tool_name not in offered:
