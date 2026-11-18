@@ -29,6 +29,19 @@ def test_trace_nests_tool_calls_under_the_request_that_issued_them():
         assert text in totals
 
 
+def test_trace_forgets_the_cards_of_a_reset_state():
+    state = RunState.from_events(model_run())
+    trace = RunTrace(state, run_id="r1")
+    old = dict(trace._cards)
+    state.reset()
+    assert trace._cards == {} and trace._rows_by_key == {}
+    state.apply_many(model_run())
+    assert card_rows(trace) == [("ModelCallCard", 0), ("ToolCallCard", 1), ("ModelCallCard", 0)]
+    assert not any(card is old.get(key) for key, card in trace._cards.items())
+    calls = [*state.model_calls.values(), *state.tool_calls.values()]
+    assert all(any(card.call is c for c in calls) for card in trace._cards.values() if hasattr(card, "call"))
+
+
 def test_trace_nests_by_position_when_requests_do_not_name_their_tool_calls():
     state = RunState.from_events(old_recording(model_run()))
     trace = RunTrace(state, run_id="r1")
@@ -146,7 +159,9 @@ def test_format_cost():
 
 
 def messages_of(chat, kind):
-    return [chat._messages[id(i)] for i in chat.state.items if type(i).__name__ == kind]
+    # Hidden steps are built on demand, which view_for does.
+    items = [i for i in chat.state.items if type(i).__name__ == kind]
+    return [chat._messages[id(i)] for i in items if chat.view_for(i) is not None]
 
 
 def test_chat_folds_model_calls_with_the_tool_calls_and_shows_run_totals():

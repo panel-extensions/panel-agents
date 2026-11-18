@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import time
+import weakref
+from collections.abc import Callable
 from typing import Any
 
 import param
@@ -187,6 +189,30 @@ class ArtifactStore(param.Parameterized):
     active = param.String(default=None, allow_None=True, doc="""
         Id of the artifact currently in focus.""")
 
+    def __init__(self, **params):
+        super().__init__(**params)
+        self._call_watchers: dict[str, list[weakref.WeakMethod]] = {}
+        self._reindex()
+        self.param.watch(self._artifacts_changed, "artifacts")
+
+    def _reindex(self):
+        # Tool call id -> artifact id -> latest version that call published.
+        self._by_call: dict[str, dict[str, ArtifactVersion]] = {}
+        self._publishers: dict[str, dict[str, None]] = {}
+        self._order: dict[str, int] = {}
+        self._indexed = self.artifacts
+        for artifact in self.artifacts.values():
+            for version in artifact.versions:
+                self._index(artifact.artifact_id, version)
+
+    def _artifacts_changed(self, *_):
+        # publish() keeps the index up to date; artifacts replaced from outside are indexed again.
+        if self.artifacts is self._indexed:
+            return
+        self._reindex()
+        for call_id in list(self._call_watchers):
+            self._notify(call_id)
+
     def __getitem__(self, artifact_id: str) -> Artifact:
         return self.artifacts[artifact_id]
 
@@ -227,6 +253,7 @@ class ArtifactStore(param.Parameterized):
             if title:
                 artifact.title = title
             artifact.add_version(value, tool_call_id, metadata, created_at, applied, **who)
+            self._index(artifact_id, artifact.versions[-1])
             self.param.trigger("artifacts")
         else:
             artifact = Artifact(
@@ -235,9 +262,67 @@ class ArtifactStore(param.Parameterized):
                 title=title or artifact_id,
             )
             artifact.add_version(value, tool_call_id, metadata, created_at, applied, **who)
-            self.artifacts = {**self.artifacts, artifact_id: artifact}
+            artifacts = {**self.artifacts, artifact_id: artifact}
+            self._index(artifact_id, artifact.versions[-1])
+            self._indexed = artifacts
+            self.artifacts = artifacts
         self.active = artifact_id
+        for call_id in list(self._publishers.get(artifact_id, ())):
+            self._notify(call_id)
         return artifact
+
+    def published_by(self, tool_call_id: str) -> list[tuple[Artifact, ArtifactVersion]]:
+        """
+        Artifacts a tool call published, in publication order, each paired
+        with the latest version that call published. Looking a call up
+        does not scan the versions, so it stays cheap however many there
+        are. Versions are attributed to calls as ``publish`` adds them or
+        when ``artifacts`` is replaced; ``Artifact.add_version`` called
+        directly does not update the lookup.
+        """
+        found = self._by_call.get(tool_call_id)
+        if not found:
+            return []
+        ids = sorted(found, key=lambda aid: self._order.get(aid, 0)) if len(found) > 1 else list(found)
+        published = []
+        for aid in ids:
+            artifact, version = self.artifacts.get(aid), found[aid]
+            # Artifacts changed in place outside publish() may no longer hold the version.
+            if artifact is not None and version in artifact.versions[version.version - 1:version.version]:
+                published.append((artifact, version))
+        return published
+
+    def _index(self, artifact_id: str, version: ArtifactVersion):
+        self._order.setdefault(artifact_id, len(self._order))
+        if version.tool_call_id is None:
+            return
+        self._by_call.setdefault(version.tool_call_id, {})[artifact_id] = version
+        self._publishers.setdefault(artifact_id, {})[version.tool_call_id] = None
+
+    def _watch_call(self, tool_call_id: str, callback: Callable[[], Any]) -> Callable[[], None]:
+        """
+        Call the bound method ``callback`` whenever an artifact the tool
+        call published gets a new version, from any call, or the artifacts
+        are replaced. Only a weak reference is kept, so the store does not
+        keep a card alive; cards unwatch when released.
+        """
+        ref = weakref.WeakMethod(callback)
+        self._call_watchers.setdefault(tool_call_id, []).append(ref)
+
+        def unwatch():
+            refs = self._call_watchers.get(tool_call_id, [])
+            if ref in refs:
+                refs.remove(ref)
+        return unwatch
+
+    def _notify(self, tool_call_id: str):
+        refs = self._call_watchers.get(tool_call_id)
+        if not refs:
+            return
+        for ref in list(refs):
+            if (callback := ref()) is not None:
+                callback()
+        refs[:] = [ref for ref in refs if ref() is not None]
 
     def mark_applied(self, artifact_id: str, version: int, action: str | None = None):
         """

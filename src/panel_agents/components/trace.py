@@ -116,6 +116,8 @@ class RunTrace(Viewer):
         # Cards are kept per item and rows per item and depth, so expanded cards survive other runs and switching back.
         self._cards: dict[int, Any] = {}
         self._rows_by_key: dict[tuple[int, int], tuple[Any, pn.pane.HTML | None]] = {}
+        # The item behind each cached id, as ids are reused once an item is gone, e.g. after a reset.
+        self._cached: dict[int, Any] = {}
         self._shown: list[tuple[Any, int]] | None = None
         self._watched_run: tuple[Any, Any] | None = None
         self.state.param.watch(self._update_rows, "items")
@@ -174,7 +176,20 @@ class RunTrace(Viewer):
             rows += [(child, 1) for child in children.get(id(item), [])]
         return rows
 
+    def _forget(self, alive: set[int]):
+        for key in [k for k in self._cached if k not in alive]:
+            del self._cached[key]
+            self._cards.pop(key, None)
+            for row_key in [r for r in self._rows_by_key if r[0] == key]:
+                del self._rows_by_key[row_key]
+
+    def _own(self, item: Any):
+        if self._cached.get(id(item)) is not item:
+            self._forget(set(self._cached) - {id(item)})
+            self._cached[id(item)] = item
+
     def _card(self, item: Any) -> Any:
+        self._own(item)
         card = self._cards.get(id(item))
         if card is not None:
             return card
@@ -197,6 +212,7 @@ class RunTrace(Viewer):
         return card
 
     def _row(self, item: Any, depth: int) -> tuple[Any, pn.pane.HTML | None]:
+        self._own(item)
         key = (id(item), depth)
         if key not in self._rows_by_key:
             card = self._card(item)
@@ -216,6 +232,8 @@ class RunTrace(Viewer):
             appended = len(new) >= len(old) and all(a is b for a, b in zip(old, new, strict=False))
             if appended and all(i.run_id != self.run_id for i in new[len(old):]):
                 return
+            if not appended:
+                self._forget({id(i) for i in new if self._cached.get(id(i)) is i})
         rows = self._nested()
         if self._shown is None or [(id(i), d) for i, d in rows] != [(id(i), d) for i, d in self._shown]:
             self._rows.objects = [self._row(item, depth)[0] for item, depth in rows]
