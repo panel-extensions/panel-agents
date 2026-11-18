@@ -20,7 +20,7 @@ import panel_material_ui as pmui
 import param
 from panel.viewable import Viewer
 
-from .._labels import APPROVAL_LABELS, _gerund, _lower, approval_labels, check_labels
+from .._labels import APPROVAL_LABELS, Labels, _lower, _uses_default_verbs, approval_labels
 from ..security import _escape_markdown, _plain_typography, inert_markdown
 from ..state import ApprovalRequest, RunState
 from ._schema_form import SchemaForm, infer_schema, resolve_schema
@@ -222,13 +222,14 @@ class ApprovalCard(Viewer):
         Explanation shown when can_approve rejects the current user.
         Defaults to a sentence using the action labels.""")
 
-    labels = param.Dict(default=None, allow_None=True, doc="""
-        Wording of the actions and outcomes, e.g. {"approve": "Approve",
-        "deny": "Remove"} for a plan step. Keys: approve, deny, approved,
-        denied, edit, approve_edited, approved_edited, approve_all and
-        deny_all; missing ones are derived from approve and deny. Labels
-        on the request, declared with ApprovalRule(labels=...), take
-        precedence.""")
+    labels = Labels(default=None, allow_None=True, doc="""
+        Wording of the actions and outcomes, e.g. {"deny": "Remove",
+        "denied": "Removed"} for a plan step. Keys: approve, deny,
+        approved, denied, edit, approve_edited, approved_edited,
+        approve_all and deny_all. A changed approve or deny needs its
+        past tense too; the "with edits" and "all" wording is derived
+        from them. Labels on the request, declared with
+        ApprovalRule(labels=...), take precedence.""")
 
     require_reason = param.Selector(default="never", objects=["never", "deny", "edit", "always"], doc="""
         When a reason must be given: never, when denying, when approving
@@ -249,7 +250,6 @@ class ApprovalCard(Viewer):
             params["request"] = request
         if state is not None:
             params["state"] = state
-        check_labels(params.get("labels"))
         super().__init__(**params)
         self._form: SchemaForm | None = None
         self._args_pane = pn.pane.HTML(_args_html(self.request.args), stylesheets=[_STYLESHEET], sizing_mode="stretch_width", margin=(0, 4))
@@ -376,15 +376,15 @@ class ApprovalCard(Viewer):
         self._update_controls()
 
     @param.depends("labels", watch=True)
-    def _check_labels(self):
-        check_labels(self.labels)
+    def _on_labels(self):
         self._update_controls()
         self._on_status()
 
     def _policy_text(self, labels: dict[str, str]) -> str:
         if self.policy_message is not None:
             return self.policy_message
-        return f"You are not permitted to {_lower(labels['approve'])} or {_lower(labels['deny'])} this tool call."
+        verbs = f"{_lower(labels['approve'])} or {_lower(labels['deny'])}"
+        return f"You are not permitted to {_escape_markdown(verbs)} this tool call."
 
     @param.depends("require_reason", "can_approve", "user", "policy_message", "error", watch=True)
     def _update_controls(self):
@@ -392,7 +392,10 @@ class ApprovalCard(Viewer):
         labels = self.resolved_labels
         self._approve.label = labels["approve_edited"] if edited else labels["approve"]
         self._deny.label = labels["deny"]
-        self._edit_toggle.param.update(label=labels["edit"], description=f"Edit the arguments before {_lower(_gerund(labels['approve']))}")
+        self._edit_toggle.param.update(
+            label=labels["edit"],
+            description="Edit the arguments before approving" if _uses_default_verbs(labels) else "Edit the arguments first",
+        )
         permitted = self.permitted
         self._approve.disabled = self._deny.disabled = not permitted
         self._edit_toggle.disabled = not permitted
@@ -428,7 +431,7 @@ class ApprovalCard(Viewer):
             return "A reason is required for this decision."
         self._reason.error_state = False
         if approved and self.editing and self._form is not None and self._form.validate():
-            return f"Fix the highlighted arguments before {_lower(_gerund(self.resolved_labels['approve']))}."
+            return "Fix the highlighted arguments before approving." if _uses_default_verbs(self.resolved_labels) else "Fix the highlighted arguments first."
         if approved and self.is_edited and not self._allows(self.edited_args):
             return f"You are not permitted to {_lower(self.resolved_labels['approve'])} the call with these arguments."
         return None
@@ -517,7 +520,7 @@ class ApprovalQueue(Viewer):
     card_factory = param.Callable(default=None, allow_None=True, doc="""
         Optional callable(request, state, **params) returning an ApprovalCard.""")
 
-    labels = param.Dict(default=None, allow_None=True, doc="""
+    labels = Labels(default=None, allow_None=True, doc="""
         Action labels passed to each card, see ApprovalCard.labels. The
         batch buttons use them too, unless every pending request carries
         the same labels of its own.""")
@@ -527,7 +530,6 @@ class ApprovalQueue(Viewer):
     def __init__(self, state: RunState | None = None, **params):
         if state is not None:
             params["state"] = state
-        check_labels(params.get("labels"))
         super().__init__(**params)
         self._cards: dict[str, ApprovalCard] = {}
         self._ordered: list[ApprovalCard] = []
@@ -559,7 +561,9 @@ class ApprovalQueue(Viewer):
         return list(self._ordered)
 
     def _make_card(self, request: ApprovalRequest) -> ApprovalCard:
-        params = dict(can_approve=self.can_approve, require_reason=self.require_reason, user=self.user, labels=self.labels)
+        params = dict(can_approve=self.can_approve, require_reason=self.require_reason, user=self.user)
+        if self.labels is not None:
+            params["labels"] = self.labels
         if self.card_factory is not None:
             return self.card_factory(request, self.state, **params)
         return ApprovalCard(request=request, state=self.state, **params)
@@ -598,9 +602,11 @@ class ApprovalQueue(Viewer):
 
     @param.depends("can_approve", "require_reason", "user", "labels", watch=True)
     def _propagate(self):
-        check_labels(self.labels)
         for card in self._cards.values():
-            card.param.update(can_approve=self.can_approve, require_reason=self.require_reason, user=self.user, labels=self.labels)
+            params = dict(can_approve=self.can_approve, require_reason=self.require_reason, user=self.user)
+            if "labels" in card.param:
+                params["labels"] = self.labels
+            card.param.update(**params)
         self._update_batch_labels()
 
     @param.depends("message", watch=True)

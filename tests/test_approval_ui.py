@@ -51,7 +51,7 @@ def _labelled_state():
     state = RunState(flush_interval=0)
     state.apply_many([
         ev.RunStarted(run_id="r"),
-        ev.ApprovalRequested(tool_call_id="step-2", tool_name="plan_step", run_id="r", args={"question": "Revenue by region"}, labels={"approve": "Approve", "deny": "Remove"}),
+        ev.ApprovalRequested(tool_call_id="step-2", tool_name="plan_step", run_id="r", args={"question": "Revenue by region"}, labels={"deny": "Remove", "denied": "Removed"}),
         ev.ApprovalRequested(tool_call_id="call-1", tool_name="run_query", run_id="r", args={"sql": "DELETE FROM sales"}),
     ])
     return state
@@ -79,7 +79,7 @@ def test_plan_step_and_default_labels(page):
 
 def test_plan_labels_on_batch_actions(page):
     state = RunState(flush_interval=0)
-    plan = {"approve": "Approve", "deny": "Remove"}
+    plan = {"deny": "Remove", "denied": "Removed"}
     state.apply_many([
         ev.RunStarted(run_id="r"),
         *(ev.ApprovalRequested(tool_call_id=f"s{i}", tool_name="plan_step", run_id="r", args={"question": f"Step {i}"}, labels=plan) for i in (1, 2)),
