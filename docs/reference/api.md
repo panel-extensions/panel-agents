@@ -50,7 +50,7 @@ The artifact model above, plus the diff API: `diff(old, new, kind=None, **option
 
 ## `panel_agents.components`
 
-The components above, plus `render(value, kind=None, **options)`, which renders a value with the registered renderers, and `approval_factory(request, state)`, the default `AgentChat.approval_factory`. `panel_agents.components.approval.approval_labels(*layers)` returns the full action wording (`approve`, `deny`, `approved`, `denied`, `edit`, `approve_edited`, `approved_edited`, `approve_all`, `deny_all`), resolving each layer over the previous one, so a layer that changes `deny` also resets `deny_all`, and `APPROVAL_LABELS` lists the keys.
+The components above, plus `render(value, kind=None, **options)`, which renders a value with the registered renderers, and `approval_factory(request, state)`, the default `AgentChat.approval_factory`. `panel_agents.components.approval.approval_labels(*layers)` returns the full action wording (`approve`, `deny`, `approved`, `denied`, `edit`, `approve_edited`, `approved_edited`, `approve_all`, `deny_all`), resolving each layer over the previous one, so a layer that sets `deny` also resets `deny_all`, one that sets `approve` resets `approve_all` and both "with edits" labels, and one that sets only `approved` resets `approved_edited`, and `APPROVAL_LABELS` lists the keys.
 
 ## `panel_agents.recording`
 

@@ -1,3 +1,7 @@
+import copy
+import pickle
+from types import MappingProxyType
+
 import pytest
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
@@ -82,6 +86,28 @@ def test_default_card_wording_is_unchanged():
     assert card._policy.object == "You are not permitted to approve or deny this tool call."
 
 
+def test_default_validation_refusal_is_unchanged():
+    state = RunState(flush_interval=0)
+    state.apply_many([
+        ev.RunStarted(run_id="r"),
+        ev.ApprovalRequested(
+            tool_call_id="t1", tool_name="run_query", run_id="r", args={"limit": 10},
+            schema={"type": "object", "properties": {"limit": {"type": "integer", "maximum": 100}}},
+        ),
+    ])
+    card = ApprovalCard(request=state.approvals["t1"], state=state)
+    card.editing = True
+    card.form.field("limit").value = 5000
+    assert not card.approve()
+    assert card.error == "Fix the highlighted arguments before approving."
+
+
+def test_default_batch_message_is_unchanged():
+    queue = ApprovalQueue(make_state(None, None), require_reason="deny")
+    assert queue.deny_all() == 0
+    assert queue.message == "0 of 2 denied; 2 need attention."
+
+
 def test_card_labels():
     state = make_state(None)
     card = ApprovalCard(request=state.approvals["t1"], state=state, labels=PLAN, require_reason="deny")
@@ -92,6 +118,8 @@ def test_card_labels():
     card.can_approve = None
     card.labels = {"deny": "Drop", "denied": "Dropped"}
     assert card._deny.label == "Drop"
+    assert card._edit_toggle.description == "Edit the arguments before approving"
+    card.labels = {"approve": "Run", "approved": "Ran"}
     assert card._edit_toggle.description == "Edit the arguments first"
 
 
@@ -99,7 +127,10 @@ def test_policy_message_escapes_labels():
     state = make_state(None)
     card = ApprovalCard(request=state.approvals["t1"], state=state, labels={"deny": "Drop *now*", "denied": "Dropped"})
     card.can_approve = lambda request, user: False
-    assert "drop \\*now\\*" in card._policy.object
+    assert card._policy.object == "You are not permitted to approve or drop \\*now\\* this tool call."
+    assert not card.approve()
+    assert card.error == "You are not permitted to approve or drop *now* this tool call."
+    assert "drop \\*now\\*" in card._error.object and "\\\\" not in card._error.object
 
 
 def test_card_approve_with_edits_label():
@@ -124,6 +155,35 @@ def test_rule_labels_are_read_only():
     rule = ApprovalRule("plan_step", labels=PLAN)
     with pytest.raises(TypeError):
         rule.labels["deny"] = "Drop"
+    with pytest.raises(TypeError):
+        rule.labels.update(deny="Drop")
+
+
+def test_labelled_policy_copies_and_pickles():
+    policy = ApprovalPolicy([ApprovalRule("plan_step", labels=PLAN)])
+    for copied in (copy.deepcopy(policy), pickle.loads(pickle.dumps(policy))):
+        assert copied.rules[0].labels == PLAN
+        with pytest.raises(TypeError):
+            copied.rules[0].labels["deny"] = "Drop"
+
+
+def test_card_accepts_rule_labels():
+    state = make_state(None)
+    rule = ApprovalRule("plan_step", labels=PLAN)
+    card = ApprovalCard(request=state.approvals["t1"], state=state, labels=rule.labels)
+    assert type(card.labels) is dict
+    assert card._deny.label == "Remove"
+    card.labels = MappingProxyType({"deny": "Skip", "denied": "Skipped"})
+    assert type(card.labels) is dict and card._deny.label == "Skip"
+
+
+def test_approved_only_layer_keeps_explicit_batch_label():
+    labels = approval_labels({"approve_all": "Run every step"}, {"approved": "Accepted"})
+    assert (labels["approve_all"], labels["approved_edited"]) == ("Run every step", "Accepted with edits")
+
+
+def test_verbs_compare_without_whitespace():
+    assert approval_labels({"deny": "Deny "})["denied"] == "Denied"
 
 
 def test_card_factory_gets_labels_only_when_set():

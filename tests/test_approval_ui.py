@@ -122,3 +122,16 @@ def test_form_and_reason_inputs_share_edges(page, dark):
     approve = page.get_by_role("button", name="Approve", exact=True).bounding_box()
     edit = toggle.bounding_box()
     assert abs((edit["x"] + edit["width"]) - (approve["x"] + approve["width"])) <= 1
+
+
+def test_disabled_edit_toggle_has_no_border(page):
+    state = RunState(flush_interval=0)
+    state.apply_many([
+        ev.RunStarted(run_id="r"),
+        ev.ApprovalRequested(tool_call_id="s1", tool_name="plan_step", run_id="r", args={"question": "Revenue by region?"}, schema=Step.model_json_schema()),
+    ])
+    serve_component(page, ApprovalQueue(state, user="bob", can_approve=lambda request, user: False))
+
+    toggle = page.get_by_role("button", name="Edit")
+    expect(toggle).to_be_disabled()
+    assert toggle.evaluate("e => getComputedStyle(e).borderTopWidth") == "0px"

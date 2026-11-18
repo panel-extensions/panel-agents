@@ -20,7 +20,7 @@ import panel_material_ui as pmui
 import param
 from panel.viewable import Viewer
 
-from .._labels import APPROVAL_LABELS, Labels, _lower, _uses_default_verbs, approval_labels
+from .._labels import APPROVAL_LABELS, Labels, _is_default, _lower, approval_labels
 from ..security import _escape_markdown, _plain_typography, inert_markdown
 from ..state import ApprovalRequest, RunState
 from ._schema_form import SchemaForm, infer_schema, resolve_schema
@@ -106,6 +106,7 @@ _TEXT_TOGGLE_SX = {
     "textTransform": "none",
     "color": "primary.main",
     "&.Mui-selected, &.Mui-selected:hover": {"color": "primary.main", "backgroundColor": "action.selected"},
+    "&.Mui-disabled": {"border": 0},
 }
 
 
@@ -398,11 +399,12 @@ class ApprovalCard(Viewer):
         self._update_controls()
         self._on_status()
 
-    def _policy_text(self, labels: dict[str, str]) -> str:
+    def _policy_text(self, labels: dict[str, str], markdown: bool = False) -> str:
+        """The policy message; ``markdown`` escapes the labels for the alert, while errors are escaped as a whole."""
         if self.policy_message is not None:
             return self.policy_message
         verbs = f"{_lower(labels['approve'])} or {_lower(labels['deny'])}"
-        return f"You are not permitted to {_escape_markdown(verbs)} this tool call."
+        return f"You are not permitted to {_escape_markdown(verbs) if markdown else verbs} this tool call."
 
     @param.depends("require_reason", "can_approve", "user", "policy_message", "error", watch=True)
     def _update_controls(self):
@@ -412,13 +414,13 @@ class ApprovalCard(Viewer):
         self._deny.label = labels["deny"]
         self._edit_toggle.param.update(
             label=labels["edit"],
-            description="Edit the arguments before approving" if _uses_default_verbs(labels) else "Edit the arguments first",
+            description="Edit the arguments before approving" if _is_default(labels, "approve") else "Edit the arguments first",
         )
         permitted = self.permitted
         self._approve.disabled = self._deny.disabled = not permitted
         self._edit_toggle.disabled = not permitted
         self._reason.disabled = not permitted
-        self._policy.param.update(object=self._policy_text(labels), visible=not permitted)
+        self._policy.param.update(object=self._policy_text(labels, markdown=True), visible=not permitted)
         self._error.param.update(object=_escape_markdown(self.error), visible=bool(self.error))
         approve_edited = _lower(labels["approve_edited"])
         hint = {
@@ -449,7 +451,7 @@ class ApprovalCard(Viewer):
             return "A reason is required for this decision."
         self._reason.error_state = False
         if approved and self.editing and self._form is not None and self._form.validate():
-            return "Fix the highlighted arguments before approving." if _uses_default_verbs(self.resolved_labels) else "Fix the highlighted arguments first."
+            return "Fix the highlighted arguments before approving." if _is_default(self.resolved_labels, "approve") else "Fix the highlighted arguments first."
         if approved and self.is_edited and not self._allows(self.edited_args):
             return f"You are not permitted to {_lower(self.resolved_labels['approve'])} the call with these arguments."
         return None
