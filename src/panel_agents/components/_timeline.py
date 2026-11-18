@@ -148,6 +148,7 @@ class VersionTimeline(Viewer):
         self._list.param.watch(self._on_expanded, "expanded")
         self._list.on_action("restore", self._on_restore_action)
         self._list.on_action("undo_group", self._on_undo_action)
+        self._list.on_action("undo_blocked", lambda item: None)
         self._list.on_click(self._on_click)
         self._watchers: list = []
         self._bound = None
@@ -264,6 +265,14 @@ class VersionTimeline(Viewer):
         # Only a run that changed the applied version can be undone, back to what the host held before it.
         before = self.artifact._version_before([v.version for v in group.versions])
         if self.can_apply and before is not None and applied is not None and applied >= group.first:
+            runs = self.state.runs if self.state is not None else None
+            if group.run_id is not None and self.artifact.undo_run_blocked(group.run_id, runs):
+                # A whole run is not undone over someone else's later edits.
+                item["actions"] = [{
+                    "action": "undo_blocked", "label": "Edits by others came after this run",
+                    "icon": "block", "inline": True,
+                }]
+                return item
             label = "Undo run" if applied <= group.last else "Go back to before this run"
             item["actions"] = [{"action": "undo_group", "label": label, "icon": "undo", "inline": True}]
             item["before"] = before

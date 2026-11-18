@@ -196,8 +196,10 @@ class Artifact(param.Parameterized):
         version. ``run_id`` defaults to the run of the applied version and
         ``runs`` works as for ``run_versions``. None if the run is undone
         already, i.e. that version is applied or can only be reached by
-        redo. Raises ``ValueError`` if the run never changed the applied
-        version, e.g. because it only proposed versions.
+        redo, or if a version made by another run or actor came after the
+        run's first change, which undoing the run would take back too (see
+        ``undo_run_blocked``). Raises ``ValueError`` if the run never
+        changed the applied version, e.g. because it only proposed versions.
         """
         if run_id is None:
             applied = self.applied_version
@@ -211,7 +213,35 @@ class Artifact(param.Parameterized):
         before = self._version_before(numbers)
         if before is None:
             raise ValueError(f"Run {run_id!r} did not change the applied version of {self.artifact_id!r} from an earlier one.")
-        return before if before in self._undo else None
+        if before not in self._undo or self._others_in(self._undo[self._undo.index(before) + 1:] + [self.applied], run_id, runs):
+            return None
+        return before
+
+    def undo_run_blocked(self, run_id: str | None = None, runs: Mapping[str, Any] | None = None) -> bool:
+        """
+        Whether undoing the run ``run_id`` is refused because a version made
+        by another run or actor came after the run's first change: undoing
+        the run would take that version back too. ``run_id`` and ``runs``
+        work as for ``undo_run_target``; False if the run cannot be undone
+        for another reason.
+        """
+        if run_id is None:
+            applied = self.applied_version
+            run_id = applied.run_id if applied is not None else None
+        if run_id is None:
+            return False
+        run_id = root_run_id(runs, run_id)
+        before = self._version_before(self.run_versions(run_id, runs))
+        if before is None or before not in self._undo:
+            return False
+        return self._others_in(self._undo[self._undo.index(before) + 1:] + [self.applied], run_id, runs)
+
+    def _others_in(self, numbers: list[int | None], run_id: str, runs: Mapping[str, Any] | None) -> bool:
+        """Whether any of the versions ``numbers`` was made outside the top-level run ``run_id``."""
+        return any(
+            number is not None and root_run_id(runs, self.versions[number - 1].run_id) != run_id
+            for number in numbers
+        )
 
     def redo_run_target(self, run_id: str | None = None, runs: Mapping[str, Any] | None = None) -> int | None:
         """
@@ -221,14 +251,18 @@ class Artifact(param.Parameterized):
         redoable that undid a version of that run (resolved through
         ``runs`` as for ``run_versions``), so that afterwards none of the
         run's versions is left to redo; undos after it are redone too,
-        since redo is linear.
+        since redo is linear, so it is None if that would also redo a
+        version made by another run or actor.
         """
         if run_id is None:
             return self.redo_run_version
+        run_id = root_run_id(runs, run_id)
         numbers = set(self.run_versions(run_id, runs))
-        for step in self._redo_steps:
+        for i, step in enumerate(self._redo_steps):
             if numbers.intersection(step):
-                return step[0]
+                # Redo is linear, so this redoes every later undo too; not over another run's versions.
+                redone = [n for later in self._redo_steps[i:] for n in later]
+                return None if self._others_in(redone, run_id, runs) else step[0]
         return None
 
     @property

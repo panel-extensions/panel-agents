@@ -162,17 +162,37 @@ async def test_undo_run_goes_back_before_the_run_and_redo_steps_through_it():
         await view.undo_run("missing")
 
 
-async def test_undoing_a_run_also_undoes_edits_made_after_it_started():
+async def test_a_run_is_not_undone_over_someone_elses_later_edit():
     state = RunState(flush_interval=0)
     publish(state, "base")
     publish(state, "add_node", run_id="r1", actor="agent")
     publish(state, "move_tile", user="ann")
     publish(state, "place_tile", run_id="r1", actor="agent")
+    artifact = state.artifacts["doc"]
     view, applied = make_view(state)
-    assert await view.undo_run("r1")
-    assert state.artifacts["doc"].applied == 1
-    assert [await view.redo() for _ in range(3)] == [True] * 3
-    assert applied == [1, 2, 3, 4]
+    assert artifact.undo_run_blocked("r1", state.runs)
+    assert artifact.undo_run_target("r1", state.runs) is None
+    assert await view.undo_run("r1") is False and applied == []
+    # Undo still steps back one version at a time, keeping ann's edit until it is reached.
+    assert await view.undo() and artifact.applied == 3
+    assert await view.undo() and artifact.applied == 2
+
+
+def test_the_history_shows_why_a_run_cannot_be_undone():
+    from panel_agents.components._timeline import VersionTimeline
+
+    state = RunState(flush_interval=0)
+    publish(state, "base")
+    state.apply(ev.RunStarted(run_id="r1", agent_name="assistant", input="Build it"))
+    publish(state, "add_node", run_id="r1", actor="agent")
+    publish(state, "move_tile", user="ann")
+    publish(state, "place_tile", run_id="r1", actor="agent")
+    state.apply(ev.RunFinished(run_id="r1"))
+    timeline = VersionTimeline(artifact=state.artifacts["doc"], state=state, can_apply=True)
+    headers = {item["label"]: item for item in timeline._list.items}
+    (action,) = headers["Build it"]["actions"]
+    assert action["label"] == "Edits by others came after this run"
+    assert "before" not in headers["Build it"]
 
 
 async def test_undo_after_a_revert_returns_to_where_the_revert_started():

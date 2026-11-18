@@ -70,26 +70,27 @@ def test_redo_run_finishes_a_partly_redone_run():
     assert state.artifacts["doc"].redo_version is None
 
 
-def test_redo_run_also_redoes_edits_undone_with_the_run():
+def test_redo_run_redoes_a_run_undone_as_a_whole():
     state = RunState(flush_interval=0)
     publish(state, "base")
     publish(state, "add_node", run_id="r1", actor="agent")
-    publish(state, "move_tile", user="ann")
     publish(state, "place_tile", run_id="r1", actor="agent")
     assert state.undo_run("doc", "r1").version == 1
-    assert state.redo_run("doc", "r1").version == 4
+    assert state.redo_run("doc", "r1").version == 3
     assert state.artifacts["doc"].redo_version is None
 
 
-def test_redo_run_by_id_redoes_later_undos_too():
+def test_redo_run_by_id_is_not_redone_over_someone_elses_undone_edit():
     state = make_state()
     artifact = state.artifacts["doc"]
     state.undo_run("doc", "r2")
     state.undo("doc")
     assert artifact.redo_run_version == 4
-    assert artifact.redo_run_target("r2", state.runs) == 6
+    # Redoing r2 would redo ann's version 4 too, since redo is linear.
+    assert artifact.redo_run_target("r2", state.runs) is None
     assert artifact.redo_run_target("r1", state.runs) is None
-    assert state.redo_run("doc", "r2").version == 6
+    assert state.redo_run("doc", "r2") is None
+    assert state.redo("doc").version == 4 and state.redo_run("doc", "r2").version == 6
     assert artifact.redo_version is None
 
 
@@ -327,3 +328,51 @@ def test_undo_does_not_step_back_to_a_version_applied_again_later():
     state.apply_artifact_version("doc", 1)
     assert [state.undo("doc").version, state.undo("doc").version, state.undo("doc")] == [3, 2, None]
     assert [state.redo("doc").version, state.redo("doc").version] == [3, 1]
+
+
+def _timeline(artifact):
+    return [*artifact._undo, artifact.applied, *artifact._redo[::-1]]
+
+
+@pytest.mark.parametrize("seed", range(150))
+def test_whole_run_steps_never_cross_someone_elses_version(seed):
+    rnd = random.Random(seed)
+    state = RunState(flush_interval=0)
+    publish(state, "base")
+    runs = []
+    for i in range(30):
+        artifact = state.artifacts["doc"]
+        op = rnd.choice(["run", "run", "user", "undo", "redo", "undo_run", "redo_run", "drop"])
+        if op == "run":
+            run_id = f"r{i}"
+            runs.append(run_id)
+            state.apply(ev.RunStarted(run_id=run_id, agent_name="a"))
+            for _ in range(rnd.randint(1, 3)):
+                publish(state, "op", run_id=run_id, actor="agent")
+                if rnd.random() < 0.3:
+                    publish(state, "mine", user="ann")
+            state.apply(ev.RunFinished(run_id=run_id))
+        elif op == "user":
+            publish(state, "mine", user="ann")
+        elif op in ("undo", "redo"):
+            getattr(state, op)("doc")
+        elif op == "drop" and len(artifact.versions) > 3:
+            state.drop_artifact_versions("doc", rnd.randint(1, len(artifact.versions)))
+        elif op in ("undo_run", "redo_run") and runs:
+            run_id = rnd.choice(runs)
+            line = _timeline(artifact)
+            before = artifact.applied
+            try:
+                version = getattr(state, op)("doc", run_id)
+            except ValueError:
+                continue
+            if version is None:
+                continue
+            lo, hi = sorted((line.index(before), line.index(version.version)))
+            # The versions the step undid or redid: after the lower end up to the upper one.
+            crossed = line[lo + 1:hi + 1]
+            assert all(artifact.versions[n - 1].run_id == run_id for n in crossed), (op, run_id, crossed)
+    live = state.artifacts["doc"]
+    replayed = RunState.from_events(state.events).artifacts["doc"]
+    assert _timeline(replayed) == _timeline(live)
+    assert len(set(_timeline(live))) == len(_timeline(live))

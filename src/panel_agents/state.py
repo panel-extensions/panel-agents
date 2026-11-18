@@ -625,12 +625,14 @@ class RunState(param.Parameterized):
         before the run first changed the applied version, recorded as one
         ``ArtifactApplied`` event with ``action="undo"``. ``run_id``
         defaults to the run of the applied version, and a child run counts
-        as part of its top-level run. Versions applied after the run
-        started, by the run or anyone else, are undone with it; ``redo``
-        steps forward through them again and ``redo_run`` redoes them all.
-        Returns None without calling ``on_apply`` if the run is undone
-        already, and raises ``ValueError`` if it never changed the applied
-        version. Other arguments and result as for ``undo``.
+        as part of its top-level run. ``redo`` steps forward through the
+        run's versions again and ``redo_run`` redoes them all. Returns None
+        without calling ``on_apply`` if the run is undone already, or if a
+        version made by another run or actor came after the run's first
+        change (``Artifact.undo_run_blocked``), since undoing the run would
+        take that version back too; ``undo`` still steps back one version
+        at a time. Raises ``ValueError`` if the run never changed the
+        applied version. Other arguments and result as for ``undo``.
         """
         artifact = self.artifacts[artifact_id]
         return self._step(artifact_id, artifact.undo_run_target(run_id, self.runs), "undo", user, on_apply)
@@ -644,8 +646,9 @@ class RunState(param.Parameterized):
         version the host held before it, recorded as one ``ArtifactApplied``
         event with ``action="redo"``. Without ``run_id`` this redoes the
         last undo; with it, the latest undo still redoable that undid a
-        version of that run, and any undos after it. Redo ends as for
-        ``redo``. Other arguments and result as for ``undo``.
+        version of that run, and any undos after it, or None if those
+        would also redo a version made by another run or actor. Redo ends
+        as for ``redo``. Other arguments and result as for ``undo``.
         """
         artifact = self.artifacts[artifact_id]
         return self._step(artifact_id, artifact.redo_run_target(run_id, self.runs), "redo", user, on_apply)
