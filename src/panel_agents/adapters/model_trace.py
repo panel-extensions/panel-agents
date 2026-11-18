@@ -1,18 +1,29 @@
 """
 Record the model calls of an ``AgentRunner`` as JSON Lines and load them back.
 
-The model trace is pydantic-ai's own message history: after a header
+The model trace is pydantic-ai's own message history. After a header
 line, each line is one ``ModelMessage`` in the format of
-``ModelMessagesTypeAdapter``. ``AgentRunner`` stamps every
-``ModelResponse`` with the wall-clock duration of its request and a
-fingerprint of the instructions and tools the model was offered, under
-``metadata["panel_agents"]``. A run that ends without its messages
-joining the conversation, e.g. because the model request failed, is
-followed by a ``failed_run`` line.
+``ModelMessagesTypeAdapter``, or one of two kinds of record:
 
-Load the history with ``load_messages``, e.g. to continue the
-conversation with ``runner.messages = load_messages(path)``, and a
-per-request summary with ``load_model_calls``.
+- ``{"rewind": n}`` says the history was rewritten, e.g. by a history
+  processor, ``AgentRunner.clear()`` or a failed run whose messages do
+  not join the conversation, and keeps only its first ``n`` messages;
+  the messages that follow continue from there.
+- ``{"failed_run": run_id, "error": ..., "request": ...}`` says a run
+  failed, with the model request that was in flight, if any.
+
+``AgentRunner`` stamps every ``ModelResponse`` with the wall-clock
+duration of its request and a fingerprint of the instructions and tools
+the model was offered, under ``metadata["panel_agents"]``.
+
+``load_messages`` applies the rewinds and returns the history the
+runner holds, e.g. to continue the conversation with
+``runner.messages = load_messages(path)``. ``load_model_calls``
+summarizes every model request that was ever recorded.
+
+Like the event ``Recorder``, ``ModelTraceRecorder`` writes to a file, a
+text stream or a callable receiving each record as a dict, and the
+loaders read a file or an iterable of those dicts.
 """
 
 from __future__ import annotations
@@ -20,11 +31,9 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
-import os
 from collections.abc import Sequence
 from datetime import datetime
-from pathlib import Path
-from typing import IO, Any
+from typing import Any
 
 from pydantic_ai.messages import (
     ModelMessage,
@@ -36,9 +45,11 @@ from pydantic_ai.messages import (
 )
 from pydantic_core import to_jsonable_python
 
+from ..recording import _describe, _JsonLinesSink, _read_records, _Sink, _Source
+
 __all__ = [
     "FORMAT_VERSION",
-    "ModelCall",
+    "ModelRequestSummary",
     "ModelTraceRecorder",
     "fingerprint",
     "load_messages",
@@ -51,9 +62,13 @@ _HEADER_KEY = "panel_agents_model_trace"
 
 _FAILED_KEY = "failed_run"
 
+_REWIND_KEY = "rewind"
+
 _METADATA_KEY = "panel_agents"
 
 _ARTIFACTS_KEY = "panel_agents.artifacts"
+
+_INTERRUPTED = "Interrupted"
 
 
 def fingerprint(model_request_parameters: Any, messages: Sequence[ModelMessage] = ()) -> str:
@@ -87,8 +102,10 @@ def fingerprint(model_request_parameters: Any, messages: Sequence[ModelMessage] 
     return hashlib.sha256(data.encode()).hexdigest()[:16]
 
 
-def _error_text(error: BaseException) -> str:
-    return f"{type(error).__name__}: {error}" if str(error) else type(error).__name__
+def _error_text(error: BaseException, include_content: bool = True) -> str:
+    if not include_content or not str(error):
+        return type(error).__name__
+    return f"{type(error).__name__}: {error}"
 
 
 def _response_cost(response: ModelResponse) -> float | None:
@@ -114,83 +131,111 @@ def _without_artifacts(message: ModelMessage) -> ModelMessage:
     return dataclasses.replace(message, parts=parts)
 
 
-_CONTENT_FIELDS = {"content": "", "args": None, "signature": None, "metadata": None, "provider_details": None}
+_CONTENT_FIELDS = {"args": None, "signature": None, "metadata": None, "provider_details": None}
+
+
+def _redact_part(part: dict[str, Any]) -> dict[str, Any]:
+    part = {k: (_CONTENT_FIELDS[k] if k in _CONTENT_FIELDS else v) for k, v in part.items()}
+    if "content" in part:
+        content = part["content"]
+        if part.get("part_kind") == "file" and isinstance(content, dict):
+            # A file part must hold binary content to validate; its identifier is derived from the data.
+            part["content"] = {**content, "data": "", "identifier": "redacted", "vendor_metadata": None}
+        else:
+            part["content"] = ""
+    return part
 
 
 def _redact(data: dict[str, Any]) -> dict[str, Any]:
-    """Drop the content of a dumped message, keeping its parts, tool names and ids, usage and timing."""
+    """Drop the content of a dumped message, keeping its parts, tool names and ids, outcomes, usage and timing."""
     data = dict(data)
     data["instructions"] = None
     data["provider_details"] = None
     data["history_digest"] = None
     if isinstance(data.get("metadata"), dict):
         data["metadata"] = {k: v for k, v in data["metadata"].items() if k == _METADATA_KEY} or None
-    parts = []
-    for part in data.get("parts", []):
-        # Binary content, e.g. a file part, has no empty form that still validates.
-        if isinstance(part.get("content"), dict):
-            continue
-        parts.append({k: (_CONTENT_FIELDS[k] if k in _CONTENT_FIELDS else v) for k, v in part.items()})
-    data["parts"] = parts
+    if data.get("failed_attempts"):
+        # Error messages can quote the request, so only the exception type is kept.
+        data["failed_attempts"] = [
+            {**attempt, "error": attempt["error"].split(":", 1)[0] if attempt.get("error") else None}
+            for attempt in data["failed_attempts"]
+        ]
+    data["parts"] = [_redact_part(part) for part in data.get("parts", [])]
     return {k: v for k, v in data.items() if k in ("parts", "kind") or v is not None}
 
 
-def _dump_message(message: ModelMessage, include_content: bool) -> str:
+def _message_data(message: ModelMessage, include_content: bool) -> dict[str, Any]:
     (data,) = ModelMessagesTypeAdapter.dump_python([_without_artifacts(message)], mode="json", fallback=repr)
-    if not include_content:
-        data = _redact(data)
-    return json.dumps(data)
+    return data if include_content else _redact(data)
 
 
-def _header(include_content: bool) -> str:
-    return json.dumps({_HEADER_KEY: FORMAT_VERSION, "include_content": include_content})
+def _header(include_content: bool) -> dict[str, Any]:
+    return {_HEADER_KEY: FORMAT_VERSION, "include_content": include_content}
 
 
 @dataclasses.dataclass
 class _Trace:
     include_content: bool = True
+    """False if any part of the trace was recorded without content."""
     entries: list[ModelMessage | dict[str, Any]] = dataclasses.field(default_factory=list)
+    """Messages, failed_run and rewind records, in the order they were written."""
+    data: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+    """The dumped form of the messages in ``entries``, in the same order."""
 
 
-def _read(path: str | os.PathLike) -> _Trace:
+def _read(source: _Source) -> _Trace:
     trace = _Trace()
-    with open(path) as f:
-        for line in f:
-            if not line.strip():
-                continue
-            data = json.loads(line)
-            if _HEADER_KEY in data:
-                version = int(data[_HEADER_KEY])
-                if version > FORMAT_VERSION:
-                    raise ValueError(f"{path} is a version {version} model trace; this panel-agents reads up to version {FORMAT_VERSION}.")
-                trace.include_content = trace.include_content and data.get("include_content", True)
-            elif _FAILED_KEY in data:
-                trace.entries.append(data)
-            else:
-                trace.entries.extend(ModelMessagesTypeAdapter.validate_python([data]))
+    for record in _read_records(source):
+        if _HEADER_KEY in record:
+            version = int(record[_HEADER_KEY])
+            if version > FORMAT_VERSION:
+                raise ValueError(
+                    f"{_describe(source)} is a version {version} model trace; this panel-agents reads up to version {FORMAT_VERSION}."
+                )
+            trace.include_content = trace.include_content and record.get("include_content", True)
+        elif _FAILED_KEY in record or _REWIND_KEY in record:
+            trace.entries.append(record)
+        else:
+            trace.entries.extend(ModelMessagesTypeAdapter.validate_python([record]))
+            trace.data.append(record)
     return trace
 
 
-def load_messages(path: str | os.PathLike, *, include_failed: bool = False) -> list[ModelMessage]:
-    """
-    Read the message history of a model trace as pydantic-ai messages.
+def _conversation(trace: _Trace, include_failed: bool = False) -> tuple[list[ModelMessage], list[dict[str, Any]]]:
+    """The messages a trace ends with once its rewinds are applied, and their dumped form."""
+    messages: list[ModelMessage] = []
+    data: list[dict[str, Any]] = []
+    stored = iter(trace.data)
+    after_failure = False
+    for entry in trace.entries:
+        if isinstance(entry, dict):
+            if _REWIND_KEY in entry and not (include_failed and after_failure):
+                del messages[entry[_REWIND_KEY]:]
+                del data[entry[_REWIND_KEY]:]
+            after_failure = _FAILED_KEY in entry
+        else:
+            messages.append(entry)
+            data.append(next(stored))
+            after_failure = False
+    return messages, data
 
-    Messages of failed runs are left out by default, as ``AgentRunner``
-    leaves them out of the conversation, so assigning the result to
-    ``AgentRunner.messages`` continues the conversation where it was.
-    A trace recorded with ``include_content=False`` loads, but has no
-    content to continue from.
+
+def load_messages(source: _Source, *, include_failed: bool = False) -> list[ModelMessage]:
     """
-    trace = _read(path)
-    failed = set() if include_failed else {entry[_FAILED_KEY] for entry in trace.entries if isinstance(entry, dict)}
-    return [
-        entry for entry in trace.entries
-        if not isinstance(entry, dict) and (entry.run_id is None or entry.run_id not in failed)
-    ]
+    Read the message history of a model trace as pydantic-ai messages,
+    from a JSON Lines file or the records a callable sink received.
+
+    The result is the history the recorded ``AgentRunner`` held, so
+    assigning it to ``AgentRunner.messages`` continues the conversation
+    where it was. With ``include_failed``, the messages of a failed run,
+    which the runner does not keep, are kept. A trace recorded with
+    ``include_content=False`` loads, but has no content to continue from.
+    """
+    return _conversation(_read(source), include_failed)[0]
 
 
 @dataclasses.dataclass
-class ModelCall:
+class ModelRequestSummary:
     """One request to a model, as summarized by ``load_model_calls``."""
 
     run_id: str | None
@@ -205,15 +250,15 @@ class ModelCall:
     cached_tokens: int = 0
     cost_usd: float | None = None
     error: str | None = None
-    """Why the request failed; None if it produced the response."""
+    """Why the request failed, ``"Interrupted"`` for a response cut off by a cancelled run, None if it succeeded."""
     provider_response_id: str | None = None
 
 
-def _calls_of(response: ModelResponse) -> list[ModelCall]:
-    calls = []
+def _summaries(response: ModelResponse) -> list[ModelRequestSummary]:
+    summaries = []
     for attempt in getattr(response, "failed_attempts", None) or []:
         usage = attempt.usage
-        calls.append(ModelCall(
+        summaries.append(ModelRequestSummary(
             run_id=response.run_id, model=attempt.model_name, timestamp=attempt.timestamp,
             duration=attempt.duration.total_seconds(), error=attempt.error or "Response rejected",
             input_tokens=usage.input_tokens if usage else 0, output_tokens=usage.output_tokens if usage else 0,
@@ -222,94 +267,163 @@ def _calls_of(response: ModelResponse) -> list[ModelCall]:
         ))
     metadata = (response.metadata or {}).get(_METADATA_KEY, {})
     usage = response.usage
-    calls.append(ModelCall(
+    summaries.append(ModelRequestSummary(
         run_id=response.run_id, model=response.model_name, timestamp=response.timestamp,
         duration=metadata.get("duration"),
         tool_calls=[(p.tool_name, p.tool_call_id) for p in response.parts if isinstance(p, ToolCallPart)],
         input_tokens=usage.input_tokens, output_tokens=usage.output_tokens, cached_tokens=usage.cache_read_tokens,
         cost_usd=_response_cost(response), provider_response_id=response.provider_response_id,
+        error=_INTERRUPTED if getattr(response, "state", None) == "interrupted" else None,
     ))
-    return calls
+    return summaries
 
 
-def load_model_calls(path: str | os.PathLike) -> list[ModelCall]:
+def load_model_calls(source: _Source) -> list[ModelRequestSummary]:
     """
     Summarize every model request in a model trace, in order: the model,
     run, tool calls, tokens, cost, duration and, for failed requests,
-    the error. Failed attempts that a later attempt recovered from and
-    requests that ended a run come before the response they belong to.
+    the error. Failed attempts that a later attempt recovered from come
+    before the response they belong to, and requests that ended a run
+    follow the run's last response. Responses that a rewind dropped from
+    the history are still counted, once.
     """
-    calls: list[ModelCall] = []
-    for entry in _read(path).entries:
+    summaries: list[ModelRequestSummary] = []
+    seen = set()
+    for entry in _read(source).entries:
         if isinstance(entry, ModelResponse):
-            calls.extend(_calls_of(entry))
+            # A history processor may rewrite a response that was already recorded, so it is matched by request id.
+            stamp = (entry.metadata or {}).get(_METADATA_KEY, {})
+            key = stamp.get("request_id") or (entry.run_id, entry.timestamp, entry.model_name, entry.provider_response_id)
+            if key not in seen:
+                seen.add(key)
+                summaries.extend(_summaries(entry))
         elif isinstance(entry, dict) and (request := entry.get("request")):
-            calls.append(ModelCall(
+            last = summaries[-1] if summaries else None
+            if last is not None and last.run_id == entry[_FAILED_KEY] and last.error == _INTERRUPTED:
+                # The request in flight when the run failed is the interrupted response itself.
+                last.error = entry.get("error") or last.error
+                if last.duration is None:
+                    last.duration = request.get("duration")
+                continue
+            summaries.append(ModelRequestSummary(
                 run_id=entry[_FAILED_KEY], model=request.get("model"),
                 timestamp=datetime.fromisoformat(request["timestamp"]) if request.get("timestamp") else None,
                 duration=request.get("duration"), error=entry.get("error"),
             ))
-    return calls
+    return summaries
 
 
 class ModelTraceRecorder:
     """
-    Append the model calls of an ``AgentRunner`` to a JSON Lines file.
+    Record the message history of an ``AgentRunner``.
 
-    Every message is written as soon as the run produced it, and runs
-    of the same conversation append to the same file. When the file is
-    new, the runner's current history is written first, so a recording
-    started on a resumed conversation is complete on its own. Pass
-    ``include_content=False`` to drop prompts, instructions, text,
-    tool arguments and results, keeping which tools were called, the
-    usage and the timing.
+    ``sink`` is a JSON Lines file to append to, a text stream, or a
+    callable receiving a copy of each record as the JSON-ready dict a line
+    would hold, with redaction already applied. A callable runs
+    synchronously on the event loop, so one that stores records slowly
+    blocks the app and should hand them to a queue or thread.
+
+    The history is synchronized with the file at the start of every model
+    request, before the tools of a response run and when a run ends, so a
+    response is on disk before the tools it called run. Runs of the same
+    conversation append to the same file. When the runner's history no
+    longer extends what the file holds, e.g. after a history processor
+    rewrote it, ``AgentRunner.clear()`` or a run that failed, the
+    recorder writes a ``rewind`` record and the history from there on,
+    so ``load_messages`` always returns what the runner holds.
+
+    Attaching writes the runner's current history: to an existing file
+    only where it differs from the conversation the file ends with, so
+    ``runner.messages = load_messages(path)`` followed by a recorder on
+    the same file only appends. A stream or callable cannot be read back,
+    so the recorder starts it over with a ``rewind`` to 0 and the full
+    history.
+
+    A failing sink is logged with its traceback and the agent run goes
+    on. The recorder then forgets what it wrote and, at the next sync the
+    sink accepts, starts over with a ``rewind`` to 0 and the full history,
+    so the store heals itself. Pass ``on_error="raise"`` to let the error
+    propagate into the run instead.
+
+    Pass ``include_content=False`` to drop prompts, instructions, text,
+    thinking, tool arguments and results and error messages, keeping the
+    parts, tool names, ids and outcomes, the usage and the timing.
 
     Usable as a context manager; ``close`` detaches it from the runner.
     """
 
-    def __init__(self, runner: Any, path: str | os.PathLike | IO[str], *, include_content: bool = True):
+    def __init__(self, runner: Any, sink: _Sink, *, include_content: bool = True, on_error: str = "log"):
         self.runner = runner
         self.include_content = include_content
-        if isinstance(path, (str, os.PathLike)):
-            Path(path).parent.mkdir(parents=True, exist_ok=True)
-            new = not Path(path).exists() or Path(path).stat().st_size == 0
-            if not new and _read(path).include_content != include_content:
-                raise ValueError(f"{path} was recorded with include_content={not include_content}; record to another file.")
-            self._file = open(path, "a")
-            self._owned = True
-        else:
-            self._file = path
-            self._owned = False
-            new = True
-        self._written = 0
-        if new:
-            self._file.write(_header(include_content) + "\n")
-            self._write(list(runner.messages))
+        self._written: list[dict[str, Any]] = []
+        self._objects: list[Any] = []
+        self._restart = False
+        self._sink = _JsonLinesSink(sink, on_error=on_error)
+        if self._sink.path is not None and not self._sink.new:
+            trace = _read(self._sink.path)
+            if trace.include_content != include_content:
+                self._sink.close()
+                raise ValueError(f"{sink} was recorded with include_content={not include_content}; record to another file.")
+            self._written = _conversation(trace)[1]
+            self._objects = [None] * len(self._written)
+        if self._sink.new:
+            self._emit(_header(include_content))
+        # A stream or callable may hold an earlier conversation, or this one; either way it starts over.
+        self._restart = self._sink.path is None
+        self._sync(list(runner.messages))
         runner._trace_listeners.append(self)
 
-    def _write(self, messages: Sequence[ModelMessage]):
-        for message in messages:
-            self._file.write(_dump_message(message, self.include_content) + "\n")
-        self._file.flush()
+    def _emit(self, record: dict[str, Any]) -> bool:
+        if self._sink.write(record):
+            return True
+        # What the sink holds is unknown now, so the next sync writes the whole history again.
+        self._written.clear()
+        self._objects.clear()
+        self._restart = True
+        return False
 
-    def _run_started(self, history: Sequence[ModelMessage]):
-        self._written = len(history)
+    def _sync(self, messages: Sequence[ModelMessage]):
+        if self._restart:
+            if not self._emit({_REWIND_KEY: 0}):
+                return
+            self._restart = False
+        written, objects = self._written, self._objects
+        prefix, limit = 0, min(len(messages), len(written))
+        mismatch = None
+        while prefix < limit:
+            message = messages[prefix]
+            # Only the last message written may still change in place, e.g. an interrupted request repaired by the next run.
+            if objects[prefix] is message and prefix < len(written) - 1:
+                prefix += 1
+                continue
+            data = _message_data(message, self.include_content)
+            if data != written[prefix]:
+                mismatch = data
+                break
+            objects[prefix] = message
+            prefix += 1
+        if prefix < len(written):
+            if not self._emit({_REWIND_KEY: prefix}):
+                return
+            del written[prefix:], objects[prefix:]
+        for message in messages[prefix:]:
+            data = mismatch if mismatch is not None else _message_data(message, self.include_content)
+            mismatch = None
+            if not self._emit(data):
+                return
+            written.append(data)
+            objects.append(message)
 
     def _messages(self, messages: Sequence[ModelMessage]):
-        if len(messages) > self._written:
-            self._write(messages[self._written:])
-            self._written = len(messages)
+        self._sync(messages)
 
     def _run_failed(self, run_id: str, error: BaseException, request: dict[str, Any] | None):
-        record = {_FAILED_KEY: run_id, "error": _error_text(error), "request": request}
-        self._file.write(json.dumps(record) + "\n")
-        self._file.flush()
+        self._emit({_FAILED_KEY: run_id, "error": _error_text(error, self.include_content), "request": request})
 
     def close(self):
         if self in self.runner._trace_listeners:
             self.runner._trace_listeners.remove(self)
-        if self._owned:
-            self._file.close()
+        self._sink.close()
 
     def __enter__(self):
         return self

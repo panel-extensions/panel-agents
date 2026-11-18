@@ -431,3 +431,14 @@ async def test_non_streamed_playback_without_the_run_context_lookup(tmp_path, mo
         vars(cassette_module).update(original)
     assert cassette_module._current_run_context.__module__ == "pydantic_ai._run_context"
     assert cassette_module.CassetteError is CassetteError
+
+
+async def test_cassette_from_the_records_of_a_callable_sink():
+    records = []
+    runner = make_runner(make_agent(streaming(provider, model_name="gpt-4o")), approval_policy=ApprovalPolicy(["chart"]))
+    resolve_on_request(runner.state, approved=True, user="ann")
+    with ModelTraceRecorder(runner, records.append):
+        await runner.run("How much did east sell?")
+    cassette = Cassette.from_trace(records, strict=True)
+    await play(cassette).run("How much did east sell?")
+    assert (cassette.played, cassette.remaining) == (2, 0)

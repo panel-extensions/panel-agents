@@ -19,6 +19,7 @@ import json
 import logging
 import re
 import time
+import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -60,7 +61,7 @@ from ..recording import _dump_event
 from .cassette import Cassette, CassetteError, Divergence
 from .model_trace import (
     _METADATA_KEY,
-    ModelCall,
+    ModelRequestSummary,
     ModelTraceRecorder,
     _response_cost,
     fingerprint,
@@ -77,7 +78,7 @@ __all__ = [
     "Cassette",
     "CassetteError",
     "Divergence",
-    "ModelCall",
+    "ModelRequestSummary",
     "ModelTraceRecorder",
     "artifact_return",
     "fingerprint",
@@ -293,7 +294,10 @@ class _RunCapability(AbstractCapability[Any]):
     async def after_model_request(self, ctx: RunContext[Any], *, request_context: Any, response: ModelResponse) -> ModelResponse:
         request, self.request = self.request, None
         duration = time.perf_counter() - request["started"] if request else None
-        stamp = {"duration": duration, "fingerprint": fingerprint(request_context.model_request_parameters, ctx.messages)}
+        stamp = {
+            "duration": duration, "fingerprint": fingerprint(request_context.model_request_parameters, ctx.messages),
+            "request_id": uuid.uuid4().hex,
+        }
         response = replace(response, metadata={**(response.metadata or {}), _METADATA_KEY: stamp})
         usage = response.usage
         await ctx.emit(_UsageEvent(
@@ -303,12 +307,21 @@ class _RunCapability(AbstractCapability[Any]):
         return response
 
     def failed_request(self) -> dict[str, Any] | None:
-        """The model request that was in flight when the run failed, if any."""
+        """The model request that was in flight when the run ended early, if any."""
         if self.request is None:
             return None
         request = dict(self.request)
         request["duration"] = time.perf_counter() - request.pop("started")
         return request
+
+    def stamp_interrupted(self, messages: list[Any]):
+        # A response cut off by a cancellation never reaches after_model_request, but its duration is known.
+        request = self.failed_request()
+        response = messages[-1] if messages else None
+        if request is None or not isinstance(response, ModelResponse) or getattr(response, "state", None) != "interrupted":
+            return
+        if _METADATA_KEY not in (response.metadata or {}):
+            response.metadata = {**(response.metadata or {}), _METADATA_KEY: {"duration": request["duration"]}}
 
     async def handle_deferred_tool_calls(self, ctx: RunContext[Any], *, requests: DeferredToolRequests) -> DeferredToolResults | None:
         # External calls (CallDeferred) are left unresolved so the run ends with them as its output.
@@ -537,6 +550,11 @@ class AgentRunner(param.Parameterized):
         self._unsubscribe = self.state.subscribe(self._on_event)
         self.state._decision_check = self._refusal
 
+    @param.depends("run_kwargs", watch=True, on_init=True)
+    def _check_run_kwargs(self):
+        if "run_id" in self.run_kwargs:
+            raise ValueError("AgentRunner.run_kwargs cannot hold a run_id, since every run needs its own; pass run_id to run() instead.")
+
     def _validate_args(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
         """
         Validate ``args`` for ``tool_name`` the way the tool will, returning
@@ -611,10 +629,17 @@ class AgentRunner(param.Parameterized):
         deferred_tool_results: DeferredToolResults | None = None,
         **kwargs,
     ) -> Any:
-        """Run the agent on ``prompt`` and return its output."""
+        """
+        Run the agent on ``prompt`` and return its output.
+
+        Keyword arguments are passed to ``Agent.run_stream_events``. A
+        ``run_id`` given here becomes the id of the run in the state as well
+        as in pydantic-ai's messages; by default a new one is generated.
+        """
         if self.running:
             raise RuntimeError("AgentRunner is already running; await the current run or cancel it first.")
-        run_id = _new_id("run-")
+        self._check_run_kwargs()
+        run_id = kwargs.pop("run_id", None) or _new_id("run-")
         with param.edit_constant(self):
             self.param.update(running=True, run_id=run_id, error=None, deferred=None)
         if isinstance(prompt, str) and prompt:
@@ -628,11 +653,9 @@ class AgentRunner(param.Parameterized):
         if self._notes and isinstance(prompt, str):
             model_prompt = "\n".join(f"[{note}]" for note in self._notes) + "\n\n" + prompt
             self._notes.clear()
-        run_kwargs = {"run_id": run_id, **self.run_kwargs, **kwargs}
+        run_kwargs = {**self.run_kwargs, **kwargs, "run_id": run_id}
         capability = _RunCapability(runner=self)
         capabilities = [*run_kwargs.pop("capabilities", []), capability]
-        for listener in self._trace_listeners:
-            listener._run_started(self.messages)
         try:
             async with self.agent.run_stream_events(
                 model_prompt, message_history=self.messages or None, deferred_tool_results=deferred_tool_results,
@@ -680,21 +703,23 @@ class AgentRunner(param.Parameterized):
         request = capability.failed_request()
         for listener in self._trace_listeners:
             listener._run_failed(run_id, error, request)
+        self._trace(self.messages)
 
     def _finish(self, stream: _PanelEventStream, capability: _RunCapability) -> Any:
         result: AgentRunResult | None = stream._result
         if stream.cancelled is not None:
             self.messages = list(stream.cancelled.all_messages())
+            capability.stamp_interrupted(self.messages)
         elif result is not None:
             self.messages = list(result.all_messages())
-        if stream.cancelled is not None or result is not None:
-            self._trace(self.messages)
-        elif stream.error is not None:
-            self._trace_failure(stream.run_id, capability, stream.error)
         with param.edit_constant(self):
             self.error = stream.error
             if result is not None and isinstance(result.output, DeferredToolRequests):
                 self.deferred = result.output
+        if stream.cancelled is not None or result is not None:
+            self._trace(self.messages)
+        elif stream.error is not None:
+            self._trace_failure(stream.run_id, capability, stream.error)
         if stream.error is not None:
             if not isinstance(stream.error, RunCancelled):
                 _log.error("Agent run %s failed", stream.run_id, exc_info=stream.error)
