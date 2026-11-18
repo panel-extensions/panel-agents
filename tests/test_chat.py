@@ -501,7 +501,7 @@ def test_reset_releases_cards_from_the_artifact_store():
     store = state.artifacts
     store.publish("r1-a", 1, tool_call_id="r1-c2")
     assert card._unwatch_artifacts is None
-    assert not store._call_watchers.get("r1-c2")
+    assert "r1-c2" not in store._call_watchers
 
 
 def test_replacing_the_artifacts_keeps_the_chat_working():
