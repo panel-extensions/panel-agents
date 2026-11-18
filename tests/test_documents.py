@@ -386,5 +386,32 @@ def test_version_authors_round_trip(tmp_path):
 
 def test_recordings_without_authors_still_load():
     record = {"type": "ARTIFACT_PUBLISHED", "artifact_id": "doc", "value": 1, "run_id": None, "timestamp": 0.0}
-    version = load_state([record]).artifacts["doc"].latest
-    assert (version.actor, version.user, version.run_id) == (None, None, None)
+    tool = {**record, "tool_call_id": "c1", "run_id": "r1"}
+    versions = load_state([record, tool]).artifacts["doc"].versions
+    assert [(v.actor, v.user, v.run_id) for v in versions] == [(None, None, None), ("agent", None, "r1")]
+
+
+def test_explicit_user_actor_gets_the_session_user(monkeypatch):
+    import panel as pn
+    monkeypatch.setattr(type(pn.state), "user", property(lambda self: "ann"))
+    state = RunState(flush_interval=0)
+    from panel_agents.context import _scope
+    with _scope(run_id="r1", tool_call_id="c1", actor="agent"):
+        version = state.publish_artifact("doc", 1, actor="user").latest
+    assert (version.run_id, version.tool_call_id, version.actor, version.user) == ("r1", None, "user", "ann")
+
+
+def test_nested_user_runs_are_children():
+    state = RunState(flush_interval=0)
+    with state.user_run("Outer", user="ann") as outer, state.user_run("Inner") as inner:
+        state.publish_artifact("doc", 1, applied=True)
+    assert state.runs[inner].parent_run_id == outer and state.runs[inner].agent_name == "ann"
+    assert (state.artifacts["doc"].latest.run_id, state.artifacts["doc"].latest.user) == (inner, "ann")
+
+
+def test_user_run_refuses_an_existing_run_id():
+    state = RunState(flush_interval=0)
+    with state.user_run(run_id="r1"):
+        with pytest.raises(ValueError, match="already exists"), state.user_run(run_id="r1"):
+            pass
+    assert state.runs["r1"].parent_run_id is None

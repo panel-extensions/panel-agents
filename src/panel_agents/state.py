@@ -439,13 +439,14 @@ class RunState(param.Parameterized):
         scope = _current_scope()
         if scope is not None:
             run_id = run_id or scope.run_id
-            tool_call_id = tool_call_id or scope.tool_call_id
-            actor = actor or scope.actor
-            user = user or scope.user
-        else:
-            actor = actor or "user"
-            if actor == "user" and user is None:
-                user = _session_user()
+            # A different actor named explicitly is not the one the scope's tool call or user describe.
+            if actor is None or actor == scope.actor:
+                tool_call_id = tool_call_id or scope.tool_call_id
+                actor = scope.actor
+                user = user or scope.user
+        actor = actor or "user"
+        if actor == "user" and user is None:
+            user = _session_user()
         self.apply(ev.ArtifactPublished(
             artifact_id=artifact_id, value=value, kind=kind, title=title, metadata=metadata or {}, applied=applied,
             run_id=run_id, tool_call_id=tool_call_id, actor=actor, user=user,
@@ -459,20 +460,43 @@ class RunState(param.Parameterized):
 
         Emits ``RunStarted`` with the user as ``agent_name`` and ``input``
         (e.g. a description of the edit) on entry and ``RunFinished`` on
-        exit, and makes ``publish_artifact`` inside the block default to
-        this run, the actor ``"user"`` and ``user``, which defaults to
-        ``pn.state.user``. A user run has no model calls. Meant for a
-        batch of edits made in one go; the state counts as ``running``
-        while the block is open.
+        exit, also when the block raises, and makes ``publish_artifact``
+        inside the block default to this run, the actor ``"user"`` and
+        ``user``, which defaults to ``pn.state.user``. A user run has no
+        model calls.
+
+        Meant for a synchronous batch of edits: a top-level user run
+        makes the state count as ``running`` while the block is open, so
+        do not await inside it. Called from code a run executes, such as
+        a tool, it starts a child run of that run instead
+        (``parent_run_id``), and versions published in it keep the
+        enclosing run's attribution, e.g. the agent and its tool call;
+        ``user`` is ignored inside an agent's run. Raises ``ValueError``
+        if ``run_id`` is already a run of this state.
         """
-        user = user if user is not None else _session_user()
+        scope = _current_scope()
+        if run_id is not None and run_id in self.runs:
+            raise ValueError(f"The run {run_id!r} already exists; a user run needs a new id.")
         run_id = run_id or _new_id("run-")
-        self.apply(ev.RunStarted(run_id=run_id, agent_name=user or "user", input=input))
+        if scope is not None and scope.run_id is not None:
+            parent = self.runs.get(scope.run_id)
+            if scope.actor == "user":
+                user = user if user is not None else scope.user
+                agent_name = user or "user"
+            else:
+                user = scope.user
+                agent_name = (parent.agent_name if parent is not None else None) or scope.actor
+            self.apply(ev.RunStarted(run_id=run_id, parent_run_id=scope.run_id, agent_name=agent_name, input=input))
+            fields = {"tool_call_id": scope.tool_call_id, "actor": scope.actor, "user": user}
+        else:
+            user = user if user is not None else _session_user()
+            self.apply(ev.RunStarted(run_id=run_id, agent_name=user or "user", input=input))
+            fields = {"actor": "user", "user": user}
         try:
-            with _scope(run_id=run_id, actor="user", user=user):
+            with _scope(run_id=run_id, **fields):
                 yield run_id
         finally:
-            # The edits that were published before an error happened stand, so the run still finishes.
+            # The edits that were published before an error happened stand, so the run is recorded as finished.
             self.apply(ev.RunFinished(run_id=run_id))
 
     def apply_artifact_version(self, artifact_id: str, version: int, user: str | None = None):
@@ -591,7 +615,9 @@ class RunState(param.Parameterized):
         self.artifacts.publish(
             event.artifact_id, event.value, kind=event.kind, title=event.title,
             tool_call_id=event.tool_call_id, metadata=event.metadata, created_at=event.timestamp,
-            applied=event.applied, run_id=event.run_id, actor=event.actor, user=event.user,
+            applied=event.applied, run_id=event.run_id, user=event.user,
+            # Recordings made before versions recorded their actor only have the tool call that published them.
+            actor=event.actor or ("agent" if event.tool_call_id else None),
         )
 
     def _on_artifact_applied(self, event: ev.ArtifactApplied):

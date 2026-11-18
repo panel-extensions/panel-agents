@@ -56,7 +56,7 @@ Versions a tool publishes through `publish_artifact(ctx, ...)` or `artifact_retu
 - inside `RunState.user_run`, that run, the actor `"user"` and its user;
 - anywhere else, such as a widget callback, the actor `"user"` and `pn.state.user`, with no run.
 
-Each can be passed explicitly instead, e.g. `state.publish_artifact("dashboard", value, applied=True, actor="import")`. A widget callback that fires while the agent is running is still the user's: the run is only visible to code the run itself calls.
+Each can be passed explicitly instead, e.g. `state.publish_artifact("dashboard", value, applied=True, actor="import")`. An actor other than the current one keeps the run but not its tool call or user, and the actor `"user"` always gets `pn.state.user` unless a user is given. A widget callback that fires while the agent is running is still the user's: the run is only visible to code the run itself calls. An `AgentRunner` tells the model about every version it did not make itself with its next prompt, including a person's edits made while it was running. Recordings made before versions recorded their actor load versions published by a tool call as the agent's.
 
 Free-form `metadata` describes what a version did. A host editing a document one operation at a time can publish a version per operation:
 
@@ -81,7 +81,7 @@ with state.user_run("Arranged the tiles") as run_id:
     place_tile("note", 50)
 ```
 
-It emits `RUN_STARTED` with the user as `agent_name` and the given input, and `RUN_FINISHED` when the block ends (also when it raises, since the edits made before the error stand). A user run has no messages and no model calls. Versions published inside it default to the run, the actor `"user"` and the user, which defaults to `pn.state.user` and can be passed as `user=`. Use it for edits made in one go; the state counts as `running` while the block is open. For edits spread over a longer time, pass the same `run_id` to each `publish_artifact` call instead.
+It emits `RUN_STARTED` with the user as `agent_name` and the given input, and `RUN_FINISHED` when the block ends. A block that raises is still recorded as a finished run, since the edits made before the error stand. A user run has no messages and no model calls. Versions published inside it default to the run, the actor `"user"` and the user, which defaults to `pn.state.user` and can be passed as `user=`. It is meant for a synchronous batch of edits: a top-level user run makes the state count as `running` while the block is open, which disables the chat input, so do not await inside it. For edits spread over a longer time, pass the same `run_id` to each `publish_artifact` call instead. Called from code a run executes, such as a tool, `user_run` starts a child run of that run (`parent_run_id`) and the versions in it keep the enclosing attribution, so an agent's tool that groups its edits this way still publishes them as the agent's, and a `user=` passed there is ignored. A `run_id` that already names a run of the state raises `ValueError`.
 
 ## Run and tool call ids
 
@@ -96,7 +96,9 @@ class Dashboard:
         ...
 ```
 
-`AgentRunner` sets the run id for the whole of `run()` and the tool call id while each tool executes, including sync tools pydantic-ai runs in a worker thread and actions an `ActionToolset` hands to the Panel session. `RunState.user_run` sets the run id of its block. Outside them both return None. They are backed by a context variable, so they follow awaited code and tasks it starts, but not callbacks triggered independently, which is what keeps a user's concurrent edits from being attributed to the agent. From outside the run, `AgentRunner.run_id` is the id of the current or last run, `AgentRunner.running` says whether it is in progress, and `RunState.runs` maps every run id to its `RunInfo`.
+`AgentRunner` sets the run id while it drives the agent, including output functions, and the tool call id while each tool executes. The prompt's user message is recorded before the run id is set and the error recorded when a run is cancelled after it, so neither belongs to code that sees the id. The ids reach sync tools, which pydantic-ai runs through `anyio.to_thread.run_sync`, and actions an `ActionToolset` hands to the Panel session; do not rely on them in threads you start yourself. `RunState.user_run` sets the run id of its block. Outside them both return None.
+
+They are backed by a context variable, so they follow awaited code and the tasks it starts, but not callbacks triggered independently, which keeps a person's concurrent edits from being attributed to the agent. Two consequences follow from that. Code that reacts to the run's own events, such as a `RunState.subscribe` callback or a param watcher that fires while the runner applies an event, runs inside the run and publishes as the agent. A task a tool starts keeps the tool's ids even after the run has ended. From outside the run, `AgentRunner.run_id` is the id of the current or last run, `AgentRunner.running` says whether it is in progress, and `RunState.runs` maps every run id to its `RunInfo`.
 
 ## Describe changes semantically
 

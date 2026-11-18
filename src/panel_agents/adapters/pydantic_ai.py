@@ -657,9 +657,22 @@ class AgentRunner(param.Parameterized):
         if isinstance(event, ev.ArtifactApplied):
             who = f"{_shorten(event.user)!r} " if event.user else "The user "
             self._notes.append(f"{who}applied version {event.version} of the artifact {name}; the app now holds that version.")
-        elif not self.running and artifact is not None:
+        elif artifact is not None and not self._in_current_run(event.run_id):
             held = " and now holds it" if event.applied else ""
             self._notes.append(f"The app published version {len(artifact.versions)} of the artifact {name}{held}.")
+
+    def _in_current_run(self, run_id: str | None) -> bool:
+        # Versions the running agent made itself, also in a child run its tools started, are already known to the model.
+        if not self.running or run_id is None:
+            return False
+        seen = set()
+        while run_id is not None and run_id not in seen:
+            if run_id == self.run_id:
+                return True
+            seen.add(run_id)
+            run = self.state.runs.get(run_id)
+            run_id = run.parent_run_id if run is not None else None
+        return False
 
     async def _wait_for_decision(self, tool_call_id: str) -> ev.ApprovalResolved:
         if tool_call_id in self._early:
