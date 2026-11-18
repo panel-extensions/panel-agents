@@ -33,9 +33,10 @@ PUBLIC = {
     "panel_agents.state": ["ApprovalRequest", "MessageState", "RunInfo", "RunState", "ToolCallState"],
     "panel_agents.adapters.pydantic_ai": [
         "ActionToolset", "AgentRunner", "Cassette", "CassetteError", "Divergence", "ModelRequestSummary",
-        "ModelTraceRecorder", "artifact_return", "fingerprint", "load_messages", "load_model_calls", "publish_artifact",
+        "ModelTraceRecorder", "RecordedFailure", "artifact_return", "fingerprint", "load_messages", "load_model_calls",
+        "publish_artifact",
     ],
-    "panel_agents.adapters.cassette": ["Cassette", "CassetteError", "Divergence"],
+    "panel_agents.adapters.cassette": ["Cassette", "CassetteError", "Divergence", "RecordedFailure"],
     "panel_agents.adapters.model_trace": [
         "FORMAT_VERSION", "ModelRequestSummary", "ModelTraceRecorder", "fingerprint", "load_messages", "load_model_calls",
     ],
