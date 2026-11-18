@@ -385,9 +385,19 @@ class ArtifactView(Viewer):
         latest = len(versions)
         if self.target is None or self.target == previous_latest or self.target > latest:
             self.param.update(target=latest if versions else None, base=self._default_base(latest) if versions else None)
+        elif versions[self.target - 1].dropped:
+            target = self._kept_target()
+            self.param.update(target=target, base=self._default_base(target))
         elif self.base is not None and versions[self.base - 1].dropped:
             self.base = self._default_base(self.target)
         self._on_current()
+
+    def _kept_target(self) -> int:
+        artifact = self.artifact
+        current = artifact.current
+        if current is not None and not self.versions[current - 1].dropped:
+            return current
+        return next(v.version for v in reversed(self.versions) if not v.dropped)
 
     def _default_base(self, target: int) -> int:
         # A new document version is compared with what the host holds, which after a revert is not the previous one.

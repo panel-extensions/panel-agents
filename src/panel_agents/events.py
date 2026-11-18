@@ -242,7 +242,6 @@ class ArtifactApplied(Event):
     be undone."""
 
 
-
 @dataclass(kw_only=True)
 class ArtifactVersionsDropped(Event):
     """The values of a document's older versions were dropped to bound memory."""

@@ -1,5 +1,8 @@
+import gc
 import io
 import json
+import random
+import weakref
 
 import pytest
 
@@ -127,3 +130,104 @@ def test_tool_calls_no_longer_list_their_dropped_versions():
     state.drop_artifact_versions("doc", before=2)
     assert state.artifacts.published_by("c1") == []
     assert [v.version for _, v in state.artifacts.published_by("c2")] == [2]
+
+
+class Value:
+    """A version value that can be watched for being freed."""
+
+
+def _published_values(state, n):
+    values = [Value() for _ in range(n)]
+    for value in values:
+        state.apply(ev.ArtifactPublished(artifact_id="doc", value=value, applied=True))
+    return [weakref.ref(value) for value in values]
+
+
+@pytest.mark.parametrize("max_events, freed", [(None, False), (2, True)])
+def test_values_are_freed_once_the_events_let_go_too(max_events, freed):
+    state = RunState(flush_interval=0, max_events=max_events)
+    refs = _published_values(state, 4)
+    state.drop_artifact_versions("doc", before=4)
+    gc.collect()
+    assert all((ref() is None) is freed for ref in refs[:3])
+    assert refs[3]() is not None
+
+
+def test_only_documents_drop_versions():
+    state = RunState(flush_interval=0)
+    for value in ([1], [2], [3]):
+        state.apply(ev.ArtifactPublished(artifact_id="doc", value=value))
+    with pytest.raises(ValueError, match="not a document"):
+        state.drop_artifact_versions("doc", before=100)
+    assert state.artifacts["doc"].latest.value == [3]
+
+
+def test_a_view_comparing_dropped_versions_moves_to_kept_ones():
+    state = make_state()
+    view = ArtifactView(state.artifacts["doc"], state=state, on_apply=lambda a, v: None)
+    view.param.update(target=2, base=1)
+    state.drop_artifact_versions("doc", before=4)
+    assert not view.versions[view.target - 1].dropped
+    assert not view.versions[view.base - 1].dropped
+    assert view.target == 6 and view.base == 5
+
+
+def _stacks(artifact):
+    return (
+        [v.dropped for v in artifact.versions], artifact.current, artifact.applied, artifact.undo_version,
+        artifact.redo_version, artifact.redo_run_version, list(artifact._undo), list(artifact._redo),
+        [list(step) for step in artifact._redo_steps],
+    )
+
+
+def _publish(state, run_id=None, actor="user", applied=True):
+    count = len(state.artifacts["doc"].versions) if "doc" in state.artifacts else 0
+    state.apply(ev.ArtifactPublished(
+        artifact_id="doc", value=[count], kind="json", applied=applied, run_id=run_id, actor=actor,
+    ))
+
+
+@pytest.mark.parametrize("seed", range(150))
+def test_random_edits_undos_and_drops_keep_the_history_consistent(seed):
+    rnd = random.Random(seed)
+    state = RunState(flush_interval=0)
+    _publish(state)
+    runs = []
+    for i in range(25):
+        artifact = state.artifacts["doc"]
+        op = rnd.choice(["run", "user", "proposal", "undo", "redo", "undo_run", "redo_run", "hand", "drop", "drop"])
+        if op == "run":
+            run_id = f"r{i}"
+            runs.append(run_id)
+            state.apply(ev.RunStarted(run_id=run_id, agent_name="a"))
+            for _ in range(rnd.randint(1, 3)):
+                _publish(state, run_id=run_id, actor="agent", applied=rnd.random() < 0.8)
+            state.apply(ev.RunFinished(run_id=run_id))
+        elif op == "user":
+            _publish(state)
+        elif op == "proposal":
+            _publish(state, applied=False)
+        elif op == "drop":
+            state.drop_artifact_versions("doc", rnd.randint(1, len(artifact.versions) + 2))
+        elif op == "hand":
+            number = rnd.randint(1, len(artifact.versions))
+            if artifact.versions[number - 1].dropped:
+                with pytest.raises(ValueError):
+                    state.apply_artifact_version("doc", number)
+            else:
+                state.apply_artifact_version("doc", number)
+        elif op in ("undo", "redo", "redo_run"):
+            getattr(state, op)("doc")
+        elif op == "undo_run" and runs:
+            try:
+                state.undo_run("doc", rnd.choice(runs))
+            except ValueError:
+                pass
+        dropped = {v.version for v in artifact.versions if v.dropped}
+        assert artifact.applied not in dropped and artifact.current not in dropped
+        assert not {artifact.undo_version, artifact.redo_version, artifact.redo_run_version} & dropped
+        assert not (set(artifact._undo) | set(artifact._redo)) & dropped
+        timeline = [*artifact._undo, artifact.applied, *artifact._redo[::-1]]
+        assert len(timeline) == len(set(timeline))
+    replay = RunState.from_events(state.events)
+    assert _stacks(replay.artifacts["doc"]) == _stacks(state.artifacts["doc"])

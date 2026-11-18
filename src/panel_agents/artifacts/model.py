@@ -258,8 +258,11 @@ class Artifact(param.Parameterized):
         Drop the values of the versions numbered below ``before``, except
         the applied one, and return the numbers dropped. Their numbers and
         authors stay; they leave the undo and redo history, so undo stops
-        at the oldest version kept.
+        at the oldest version kept. Raises ``ValueError`` for an artifact
+        that is not a document, which has no applied version to keep.
         """
+        if self.applied is None:
+            raise ValueError(f"{self.artifact_id!r} is not a document, so it has no versions to drop.")
         numbers = [
             v.version for v in self.versions[: max(before - 1, 0)]
             if not v.dropped and v.version != self.applied

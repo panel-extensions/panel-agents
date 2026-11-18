@@ -556,8 +556,11 @@ class RunState(param.Parameterized):
     def drop_artifact_versions(self, artifact_id: str, before: int) -> list[int]:
         """
         Drop the values of the versions of a document artifact numbered
-        below ``before``, except the applied one, to bound the memory a
-        long editing session takes, and return the numbers dropped.
+        below ``before``, except the applied one, and return the numbers
+        dropped. The artifact lets go of the values, so they are freed once
+        nothing else holds them: ``state.events`` keeps the events that
+        published them unless ``max_events`` trims them, so a long editing
+        session bounds its memory with both.
 
         A dropped version keeps its number, run, actor, user, tool call,
         metadata and time, so version numbers never shift, but its
@@ -566,11 +569,14 @@ class RunState(param.Parameterized):
         ``undo_run`` or ``redo_run`` whose target was dropped has nothing
         to do, and applying it raises ``ValueError``. Recorded as an
         ``ArtifactVersionsDropped`` event, so a replay drops the same
-        versions. Raises ``ValueError`` if ``before`` is below 1.
+        versions. Raises ``ValueError`` if ``before`` is below 1 or the
+        artifact is not a document.
         """
         if before < 1:
             raise ValueError(f"before must be at least 1, not {before}.")
         artifact = self.artifacts[artifact_id]
+        if artifact.applied is None:
+            raise ValueError(f"{artifact_id!r} is not a document, so it has no versions to drop.")
         numbers = [
             v.version for v in artifact.versions[: before - 1]
             if not v.dropped and v.version != artifact.applied
