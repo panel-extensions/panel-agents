@@ -118,16 +118,22 @@ def test_pane_renders(store, document, comm):
     assert pn.panel(pane).get_root(document, comm) is not None
 
 
-def test_view_version_selector(store):
+def rows(view):
+    return [row for group in view._timeline._list.items for row in group["items"]]
+
+
+def test_view_history_selects_versions(store):
     publish_sql(store)
     view = ArtifactView(store["query"])
-    assert list(view._version.options) == [_version_label(v) for v in store["query"].versions]
-    assert view._version.value == 3
-    view._version.value = 1
+    assert rows(view) == []
+    view.history = True
+    assert [row["version"] for row in rows(view)] == [3, 2, 1]
+    assert view._history_button.label == "v3" and view._timeline._list.active == (0, 0)
+    view._timeline._list.active = (0, 2)
     assert store["query"].current == 1
     assert view._preview.objects[0].value == "line 0"
     store["query"].current = 2
-    assert view._version.value == 2
+    assert view._history_button.label == "v2" and view._timeline._list.active == (0, 1)
 
 
 def test_version_label():
@@ -140,11 +146,11 @@ def test_version_label():
 
 def test_view_new_version_selects_latest(store):
     publish_sql(store, 2)
-    view = ArtifactView(store["query"])
-    view._version.value = 1
+    view = ArtifactView(store["query"], history=True)
+    store["query"].current = 1
     publish_sql(store, 3)
-    assert view._version.value == 3
-    assert len(view._version.options) == 3
+    assert view._history_button.label == "v3"
+    assert len(rows(view)) == 3
     assert view._count.object == "3 versions"
 
 
@@ -307,12 +313,12 @@ def test_view_compare_value_fallback(store):
 def test_view_artifact_swap(store):
     publish_sql(store, 2)
     store.publish("other", "z", kind="text", title="Other")
-    view = ArtifactView(store["query"])
+    view = ArtifactView(store["query"], history=True)
     view.artifact = store["other"]
     assert view._title.object == "Other"
-    assert len(view._version.options) == 1
+    assert len(rows(view)) == 1
     publish_sql(store, 3)
-    assert len(view._version.options) == 1
+    assert len(rows(view)) == 1
 
 
 def test_view_hide_header(store):

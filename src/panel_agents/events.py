@@ -236,6 +236,10 @@ class ArtifactApplied(Event):
     version: int
     """The applied ``ArtifactVersion.version``, counting from 1."""
     user: str | None = None
+    action: str | None = None
+    """``"undo"`` or ``"redo"`` when the version was applied by undoing or
+    redoing; None for any other apply, which is a change that can itself
+    be undone."""
 
 
 @dataclass(kw_only=True)

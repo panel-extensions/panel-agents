@@ -35,8 +35,8 @@ def test_artifact_pane_switch_version_and_compare(page, store):
     wait_until(lambda: store.active == "query", page)
     expect(page.locator(".ace_content")).to_contain_text("LIMIT 5")
 
-    page.locator(".select").first.click(force=True)
-    page.locator(".MuiMenuItem-root").nth(0).click()
+    page.get_by_role("button", name="Version history").click()
+    page.get_by_text("Version 1", exact=True).click()
     wait_until(lambda: store["query"].current == 1, page)
     expect(page.locator(".ace_content")).not_to_contain_text("LIMIT")
 

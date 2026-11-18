@@ -335,9 +335,14 @@ class RunState(param.Parameterized):
             pending_approvals=[], agent_state={}, running=False,
         )
 
-    def apply_many(self, events: Iterable[ev.Event]):
+    def apply_many(self, events: Iterable[ev.Event], notify: bool = True):
+        """
+        Apply events in order. With ``notify=False`` subscribers such as a
+        ``Recorder`` or an ``AgentRunner`` are not called, e.g. when
+        restoring events that are already stored.
+        """
         for event in events:
-            self.apply(event, notify=True)
+            self.apply(event, notify=notify)
         self.flush()
 
     def apply(self, event: ev.Event, notify: bool = True):
@@ -499,15 +504,19 @@ class RunState(param.Parameterized):
             # The edits that were published before an error happened stand, so the run is recorded as finished.
             self.apply(ev.RunFinished(run_id=run_id))
 
-    def apply_artifact_version(self, artifact_id: str, version: int, user: str | None = None):
+    def apply_artifact_version(self, artifact_id: str, version: int, user: str | None = None, action: str | None = None):
         """
         Record that a person applied ``version`` (counting from 1) of a
-        document artifact to the host document.
+        document artifact to the host document. ``action`` is ``"undo"``
+        or ``"redo"`` when applying it undoes or redoes changes, see
+        ``Artifact.undo_version``.
         """
         artifact = self.artifacts[artifact_id]
         if not 1 <= version <= len(artifact.versions):
             raise ValueError(f"{artifact_id!r} has no version {version}.")
-        self.apply(ev.ArtifactApplied(artifact_id=artifact_id, version=version, user=user))
+        if action not in (None, "undo", "redo"):
+            raise ValueError(f"action must be 'undo', 'redo' or None, not {action!r}.")
+        self.apply(ev.ArtifactApplied(artifact_id=artifact_id, version=version, user=user, action=action))
 
     # Event handlers
 
@@ -622,7 +631,7 @@ class RunState(param.Parameterized):
 
     def _on_artifact_applied(self, event: ev.ArtifactApplied):
         if event.artifact_id in self.artifacts:
-            self.artifacts.mark_applied(event.artifact_id, event.version)
+            self.artifacts.mark_applied(event.artifact_id, event.version, action=event.action)
 
     def _on_approval_requested(self, event: ev.ApprovalRequested):
         request = ApprovalRequest(

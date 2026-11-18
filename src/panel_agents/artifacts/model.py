@@ -66,6 +66,61 @@ class Artifact(param.Parameterized):
         None unless the artifact is a document. Changed by publishing an
         applied version or by ``RunState.apply_artifact_version``.""")
 
+    undo_version = param.Integer(default=None, allow_None=True, constant=True, doc="""
+        Number of the version undoing the last change to the applied
+        version would apply, or None if there is nothing to undo. Every
+        change to the applied version can be undone: publishing an applied
+        version, and applying an earlier or later one by hand. See
+        ``ArtifactView.undo``.""")
+
+    redo_version = param.Integer(default=None, allow_None=True, constant=True, doc="""
+        Number of the version redoing the last undo would apply, or None
+        if there is nothing to redo. Publishing an applied version ends redo.""")
+
+    def __init__(self, **params):
+        super().__init__(**params)
+        # Previously applied version numbers; derived from the order versions were published and applied.
+        self._undo: list[int] = []
+        self._redo: list[int] = []
+        # For each version published as applied, the version the host held before it.
+        self._applied_before: dict[int, int | None] = {}
+
+    def _stacks(self) -> dict[str, int | None]:
+        return {
+            "undo_version": self._undo[-1] if self._undo else None,
+            "redo_version": self._redo[-1] if self._redo else None,
+        }
+
+    def _move_applied(self, number: int, action: str | None = None) -> dict[str, Any]:
+        """
+        Update the undo and redo stacks for applying ``number`` and return
+        the parameter changes. An undo or redo may skip several steps, as
+        undoing a whole run does; any other apply is a change of its own,
+        which can be undone and ends redo.
+        """
+        applied = self.applied
+        if applied is None or number == applied:
+            return {"applied": number}
+        stacks = {"undo": (self._undo, self._redo), "redo": (self._redo, self._undo)}.get(action)
+        if stacks is not None and number in stacks[0]:
+            source, target = stacks
+            target.append(applied)
+            while (step := source.pop()) != number:
+                target.append(step)
+        else:
+            self._undo.append(applied)
+            self._redo.clear()
+        return {"applied": number, **self._stacks()}
+
+    def _version_before(self, versions: list[int]) -> int | None:
+        """
+        The version the host held before the first of ``versions`` that
+        was published as applied, e.g. to undo a whole run; None if none
+        of them changed the applied version or nothing was applied before.
+        """
+        changed = sorted(v for v in versions if v in self._applied_before)
+        return self._applied_before[changed[0]] if changed else None
+
     @property
     def is_document(self) -> bool:
         """
@@ -112,7 +167,12 @@ class Artifact(param.Parameterized):
         )
         update = {"versions": [*self.versions, version], "current": version.version}
         if applied:
+            self._applied_before[version.version] = self.applied
+            if self.applied is not None:
+                self._undo.append(self.applied)
+            self._redo.clear()
             update["applied"] = version.version
+        update.update(self._stacks())
         with param.edit_constant(self):
             self.param.update(update)
         return version
@@ -179,13 +239,17 @@ class ArtifactStore(param.Parameterized):
         self.active = artifact_id
         return artifact
 
-    def mark_applied(self, artifact_id: str, version: int):
-        """Record that the host document now holds ``version`` (counting from 1) of an artifact."""
+    def mark_applied(self, artifact_id: str, version: int, action: str | None = None):
+        """
+        Record that the host document now holds ``version`` (counting
+        from 1) of an artifact; ``action`` is ``"undo"`` or ``"redo"`` when
+        it was applied by undoing or redoing.
+        """
         artifact = self.artifacts[artifact_id]
         if not 1 <= version <= len(artifact.versions):
             raise ValueError(f"{artifact_id!r} has no version {version}.")
         with param.edit_constant(artifact):
-            artifact.applied = version
+            artifact.param.update(artifact._move_applied(version, action))
         self.param.trigger("artifacts")
 
 

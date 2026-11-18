@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any
 
-from .events import Event
+from .events import ArtifactApplied, ArtifactPublished, Event, RunError, RunFinished, RunStarted
 from .state import RunState
 
 _log = logging.getLogger(__name__)
@@ -321,12 +321,98 @@ class Recorder:
         self.close()
 
 
+class HistoryRecorder(Recorder):
+    """
+    Record the version history of artifacts, e.g. to keep a document's
+    history across sessions.
+
+    Writes the ``ArtifactPublished`` and ``ArtifactApplied`` events of the
+    artifacts in ``artifact_ids`` (default: all) and, for each run that
+    published one of those versions, its ``RunStarted`` before the first
+    such version, after those of the runs it is a child of, and its
+    ``RunFinished`` or ``RunError``, so the history keeps its grouping
+    by run and the runs' inputs. Messages, tool calls
+    and runs that published nothing are left out. ``sink`` and
+    ``on_error`` work as for ``Recorder``; ``load_history`` restores
+    what it wrote.
+    """
+
+    def __init__(
+        self, state: RunState, sink: _Sink, *, artifact_ids: Iterable[str] | None = None, on_error: str = "log",
+    ):
+        self.artifact_ids = None if artifact_ids is None else set(artifact_ids)
+        # Runs already in progress may still publish versions, so their start is kept as if it had just been seen.
+        self._started: dict[str, RunStarted] = {
+            run.run_id: RunStarted(
+                run_id=run.run_id, thread_id=run.thread_id, parent_run_id=run.parent_run_id,
+                agent_name=run.agent_name, input=run.input, timestamp=run.started_at or 0.0,
+            )
+            for run in state.runs.values() if run.status == "running"
+        }
+        self._written: set[str] = set()
+        super().__init__(state, sink, on_error=on_error)
+
+    def _write(self, event: Event):
+        if isinstance(event, RunStarted):
+            self._started[event.run_id] = event
+            return
+        if isinstance(event, (RunFinished, RunError)):
+            self._started.pop(event.run_id, None)
+            if event.run_id in self._written:
+                self._written.discard(event.run_id)
+                super()._write(event)
+            return
+        if not isinstance(event, (ArtifactPublished, ArtifactApplied)):
+            return
+        if self.artifact_ids is not None and event.artifact_id not in self.artifact_ids:
+            return
+        self._write_start(event.run_id)
+        super()._write(event)
+
+    def _write_start(self, run_id: str | None):
+        if (start := self._started.pop(run_id, None)) is None:
+            return
+        # A child run's parent comes first, so the restored history still groups it with its parent.
+        self._write_start(start.parent_run_id)
+        self._written.add(run_id)
+        super()._write(start)
+
+
+def load_history(source: _Source, state: RunState | None = None) -> RunState:
+    """
+    Restore a history written by ``HistoryRecorder`` (or any recording)
+    into ``state``, or into a new ``RunState``, and return the state.
+
+    The events are applied without notifying the state's subscribers, so
+    a recorder attached to it does not write them again and an
+    ``AgentRunner`` does not report them to the model as new versions. A
+    run that the stored session never finished is finished, since it can
+    no longer continue.
+    """
+    state = state if state is not None else RunState(flush_interval=0)
+    events = load_events(source)
+    state.apply_many(events, notify=False)
+    open_runs: dict[str, float] = {}
+    for event in events:
+        if isinstance(event, (RunFinished, RunError)):
+            open_runs.pop(event.run_id, None)
+        elif isinstance(event, RunStarted) or event.run_id in open_runs:
+            open_runs[event.run_id] = event.timestamp
+    for run_id, last in open_runs.items():
+        if (run := state.runs.get(run_id)) is not None and run.status == "running":
+            # Finished at its last stored event, not at load time, so its duration stays meaningful.
+            state.apply(RunFinished(run_id=run_id, timestamp=last), notify=False)
+    return state
+
+
 __all__ = [
     "FORMAT_VERSION",
     "Codec",
+    "HistoryRecorder",
     "Recorder",
     "dump_events",
     "load_events",
+    "load_history",
     "load_state",
     "register_codec",
 ]
