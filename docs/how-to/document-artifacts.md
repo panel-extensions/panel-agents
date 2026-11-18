@@ -112,11 +112,11 @@ A row shows the version's operation, its number and time, and marks the applied 
 - otherwise `metadata["op"]`: the operation's name, e.g. `"place_tile"`;
 - otherwise `"Version 12"`.
 
-Publish both when you have them; the label is shown and `op` stays available to the host. A version made of many changes reads best with a short label such as `"Added 8 components and 7 connections"` and the full list in `metadata["detail"]` (a string or a list of strings), which the row shows as its tooltip.
+Publish both when you have them; the label is shown and `op` stays available to the host. A version made of many changes reads best with a short label such as `"Added 8 components and 7 connections"` and the full list in `metadata["detail"]` (a string or a list of strings), which the row shows in its tooltip after the label.
 
 ## Undo and redo
 
-For a document with an `on_apply` callback the header has Undo and Redo buttons, and the history a restore button on every row that is neither applied nor the one shown (shown on hover or focus), and an undo button on each run that changed the applied version, up to the applied one ("Undo run" and "Go back to before this run"). They all move the applied version through `on_apply` and record an `ARTIFACT_APPLIED` event, so no version is ever changed or removed and a replayed recording shows the same history. The same commands exist in code:
+For a document with an `on_apply` callback the header has Undo and Redo buttons, and the history a restore button on every row that is neither applied nor the one shown (shown on hover or focus, taking no space otherwise), and an undo button on each run that changed the applied version, up to the applied one ("Undo run" and "Go back to before this run"). They all move the applied version through `on_apply` and record an `ARTIFACT_APPLIED` event, so no version is ever changed or removed and a replayed recording shows the same history. The same commands exist in code:
 
 ```python
 await view.undo()            # back to the version applied before the last change

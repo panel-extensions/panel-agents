@@ -190,6 +190,19 @@ _ICON_BUTTON_SX = {
     "& .material-icons, & .MuiIcon-root": {"fontSize": "20px", "lineHeight": 1},
 }
 
+# pmui places button tooltips to the right, where they would cover the next button and
+# catch its clicks, so the header's open below their button and let the pointer through.
+_TOOLTIP_BELOW = """
+:host { position: relative; }
+.MuiTooltip-popper {
+  pointer-events: none !important; inset: 100% auto auto 50% !important; transform: translateX(-50%) !important;
+}
+.MuiTooltip-popper .MuiTooltip-tooltip { margin: 4px 0 0 0 !important; white-space: nowrap; }
+.MuiTooltip-popper .MuiTooltip-arrow { display: none; }
+"""
+
+_TOOLTIP_PASSIVE = ".MuiTooltip-popper { pointer-events: none !important; }"
+
 # A quiet toggle: open shows the theme's selected tint, not a filled button.
 _TOGGLE_SX = {
     **_ICON_BUTTON_SX, "border": 0, "gap": 0,
@@ -270,20 +283,27 @@ class ArtifactView(Viewer):
             sx={"fontWeight": 600, "lineHeight": 1.3, "whiteSpace": "nowrap", "overflow": "hidden", "textOverflow": "ellipsis"},
         )
         self._count = pmui.Typography(variant="caption", color="text.secondary", margin=0, sx={"lineHeight": 1.3})
+        # A 4px gap between 30px buttons, the pitch of the buttons on the history's rows.
+        tooltip = {"description_delay": 300, "stylesheets": [_TOOLTIP_BELOW], "margin": (0, 0, 0, 4)}
         self._undo = pmui.IconButton(
-            icon="undo", description="Undo", size="small", disabled=True, margin=0, on_click=self._on_undo_click,
+            icon="undo", description="Undo", size="small", disabled=True, on_click=self._on_undo_click, **tooltip,
         )
         self._redo = pmui.IconButton(
-            icon="redo", description="Redo", size="small", disabled=True, margin=0, on_click=self._on_redo_click,
+            icon="redo", description="Redo", size="small", disabled=True, on_click=self._on_redo_click, **tooltip,
         )
-        # A ToggleButton exposes its state as aria-pressed.
+        # A ToggleButton exposes its state as aria-pressed, and its description names it, but it
+        # shows no tooltip of its own on hover.
         self._history_button = pmui.Toggle(
             label="", icon="history", icon_size="20px", description="Version history", sx=_TOGGLE_SX, margin=0,
         )
         self._history_button.param.watch(self._on_history_toggle, "value")
+        self._history_tooltip = pmui.Tooltip(
+            self._history_button, title="Version history", placement="bottom", enter_delay=300, margin=(0, 0, 0, 4),
+            stylesheets=[_TOOLTIP_PASSIVE],
+        )
         self._download = pmui.FileDownload(
             label="", icon="download", icon_size="20px", variant="text", color="default", description="Download",
-            callback=self._download_payload, margin=0, embed=False, sx=_ICON_BUTTON_SX,
+            callback=self._download_payload, embed=False, sx=_ICON_BUTTON_SX, **tooltip,
         )
         self._timeline = VersionTimeline(on_view=self._view_version, on_restore=self._step)
         self._history_panel = pmui.Column(
@@ -307,9 +327,9 @@ class ArtifactView(Viewer):
         self._apply_error = pmui.Alert(object="", severity="error", visible=False, closeable=True, sizing_mode="stretch_width", margin=(4, 0))
         self._header = pmui.Row(
             pmui.Column(self._title, self._count, margin=0, sizing_mode="stretch_width", styles={"min-width": "0", "gap": "0"}),
-            self._undo, self._redo, self._history_button, self._download,
+            self._undo, self._redo, self._history_tooltip, self._download,
             sizing_mode="stretch_width", visible=self.param.show_header, margin=(8, 0, 0, 0),
-            styles={"align-items": "center", "gap": "2px", "padding": "0 4px 0 12px", "flex-wrap": "nowrap"},
+            styles={"align-items": "center", "padding": "0 8px 0 12px", "flex-wrap": "nowrap"},
         )
 
         self._preview = pmui.Column(sizing_mode="stretch_width")
@@ -602,7 +622,7 @@ class ArtifactView(Viewer):
             self._metadata.object = {}
             return
         current = min(max(self.artifact.current or 1, 1), len(self.versions))
-        self._history_button.description = f"Version history, v{current} shown"
+        self._history_button.description = self._history_tooltip.title = f"Version history, v{current} shown"
         self._download.description = f"Download v{current}"
         self._preview.objects = [self._render_version(current - 1)]
         self._update_metadata(current - 1)

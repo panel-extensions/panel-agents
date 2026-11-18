@@ -475,3 +475,19 @@ def test_the_viewed_row_leaves_restoring_to_the_apply_button():
     view._timeline._list.active = (0, 1)
     assert state.artifacts["doc"].current == 5 and view._apply_bar.visible
     assert "actions" not in rows(view)[1] and view._timeline._list.active == (0, 1)
+
+
+def test_a_single_rows_tooltip_has_its_summary_detail_and_why_it_cannot_be_undone():
+    from panel_agents.components._timeline import BLOCKED_NOTE
+
+    state = RunState(flush_interval=0)
+    publish(state, "base")
+    state.apply(ev.RunStarted(run_id="r1", input="Build it"))
+    state.apply(ev.ArtifactPublished(artifact_id="doc", value=[2], applied=True, run_id="r1", actor="agent", metadata={
+        "label": "Added 2 components", "detail": "Added a. Added b.",
+    }))
+    state.apply(ev.RunFinished(run_id="r1"))
+    publish(state, "move_tile", user="ann")
+    view, _ = make_view(state, user="bob")
+    row = next(i for i in view._timeline._list.items if i["label"] == "Build it")
+    assert row["tooltip"] == f"{BLOCKED_NOTE}. Added 2 components: Added a. Added b."

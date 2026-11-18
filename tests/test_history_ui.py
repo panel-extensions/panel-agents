@@ -77,12 +77,18 @@ def test_timeline_in_the_drawer(page, dark):
     undo.click()
     wait_until(lambda: state.artifacts["dash"].applied == 5, page)
     expect(redo).to_be_enabled()
-    redo.click()
+    # Undo's tooltip opens below it and lets clicks through, so Redo right after it is reachable.
+    expect(page.get_by_role("tooltip", name="Undo")).to_be_visible()
+    box = redo.bounding_box()
+    page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
     wait_until(lambda: state.artifacts["dash"].applied == 6, page)
 
     # Undoing the run goes back to the version before it; a row restores one version.
+    # A row's actions show when it is hovered.
+    page.locator(".MuiListItemButton-root").filter(has_text="Which regions refund most?").hover()
     page.get_by_role("button", name="Undo run").click()
     wait_until(lambda: state.artifacts["dash"].applied == 3, page)
+    page.locator(".MuiListItemButton-root").filter(has_text="Add node refund_table").hover()
     page.get_by_role("button", name="Restore v5").click()
     wait_until(lambda: state.artifacts["dash"].applied == 5, page)
     assert applied == [5, 6, 3, 5]
@@ -181,7 +187,29 @@ def test_timeline_layout(page, width):
     assert max(b["height"] for b in boxes) - min(b["height"] for b in boxes) <= 1, boxes
     centres = [b["y"] + b["height"] / 2 for b in boxes]
     assert max(centres) - min(centres) <= 1, boxes
-    assert max(b["x"] + b["width"] for b in boxes) <= width + 1000 - width
+    panel = page.locator(".MuiDrawer-paper").last.bounding_box()
+    assert max(b["x"] + b["width"] for b in boxes) <= panel["x"] + panel["width"]
+
+    # The history toggle shows its tooltip on hover, like the other buttons.
+    controls[2].hover()
+    expect(page.get_by_role("tooltip", name="Version history, v7 shown")).to_be_visible()
+    page.mouse.move(0, 0)
+
+    # Trailing buttons sit in columns from the right edge, shared with the header's buttons.
+    columns = {}
+    for row in timeline.locator(".MuiListItemButton-root").all():
+        row.hover()
+        rights = sorted(
+            (b["x"] + b["width"] for b in (button.bounding_box() for button in row.locator(".MuiIconButton-root").all()) if b),
+            reverse=True,
+        )
+        for i, right in enumerate(rights):
+            columns.setdefault(i, []).append(right)
+    columns[0].append(boxes[-1]["x"] + boxes[-1]["width"])
+    columns.setdefault(1, []).append(boxes[-2]["x"] + boxes[-2]["width"])
+    assert len(columns[1]) >= 3
+    for i, rights in columns.items():
+        assert max(rights) - min(rights) <= 1, (i, rights)
 
     # Viewing another version offers to apply it once, in the bar above the list, not again on its row.
     timeline.get_by_text("Add node paid_by_region").click()

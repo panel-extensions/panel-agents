@@ -24,14 +24,15 @@ ROW_LIMIT = 50
 #: Shown on a group that cannot be undone as a whole because later edits came after it.
 BLOCKED_NOTE = "Later edits came after this run; undo them first"
 
-# Every row is two lines of the same height with one line of secondary text, and every
-# icon sits in the same column, so a version and a run of versions line up. A row's
-# actions show on hover or focus only, except on touch screens; the muted note that a
-# run cannot be undone stays visible.
+# Every row is two lines of the same height with one line of secondary text, every
+# leading icon sits in one column and every trailing button is 30px wide, 8px from the
+# right like the view's header buttons, so trailing buttons line up in columns too. A
+# row's actions take no space until it is hovered or focused, except on touch screens;
+# the muted note that a run cannot be undone stays visible and only explains.
 _ROW_ACTION = f'& .MuiListItemButton-root .MuiIconButton-root[title]:not([title="{BLOCKED_NOTE}"])'
 _BLOCKED = f'& .MuiIconButton-root[title="{BLOCKED_NOTE}"]'
 _LIST_SX = {
-    "& .MuiListItemButton-root": {"py": "2px", "minHeight": "48px", "gap": "4px"},
+    "& .MuiListItemButton-root": {"py": "2px", "pr": 1, "minHeight": "48px", "gap": "4px"},
     "& .MuiListItemIcon-root": {"minWidth": "32px", "color": "var(--mui-palette-text-secondary)"},
     "& .MuiListItemIcon-root .MuiIcon-root": {"fontSize": "20px"},
     "& .MuiListItemText-root": {"my": "2px", "minWidth": 0},
@@ -39,16 +40,20 @@ _LIST_SX = {
         "whiteSpace": "nowrap", "overflow": "hidden", "textOverflow": "ellipsis",
     },
     "& .MuiListItemText-secondary": {"fontSize": "0.75rem"},
-    "& .MuiListItemButton-root .MuiIconButton-root": {"ml": 0, "p": "4px", "flex": "none"},
-    "& .MuiListItemButton-root .MuiIconButton-root .MuiIcon-root": {"fontSize": "18px"},
-    _BLOCKED: {"color": "var(--mui-palette-text-disabled)", "cursor": "default", "&:hover": {"bgcolor": "transparent"}},
+    # The list sets the first action's and the caret's margins inline.
+    "& .MuiListItemButton-root .MuiIconButton-root": {
+        "marginLeft": "0 !important", "p": "5px", "width": "30px", "height": "30px", "flex": "none",
+    },
+    "& .MuiListItemButton-root .MuiIconButton-root .MuiIcon-root, & .MuiListItemButton-root .MuiIconButton-root svg": {
+        "fontSize": "20px",
+    },
+    _BLOCKED: {"color": "var(--mui-palette-text-disabled)", "pointerEvents": "none"},
     "@media (hover: hover)": {
-        _ROW_ACTION: {"opacity": 0},
+        _ROW_ACTION: {"display": "none"},
         (
             "& .MuiListItemButton-root:hover .MuiIconButton-root[title], "
-            "& .MuiListItemButton-root:focus-within .MuiIconButton-root[title], "
-            "& .MuiListItemButton-root .MuiIconButton-root[title]:focus-visible"
-        ): {"opacity": 1},
+            "& .MuiListItemButton-root:focus-within .MuiIconButton-root[title]"
+        ): {"display": "inline-flex"},
     },
 }
 
@@ -304,8 +309,10 @@ class VersionTimeline(Viewer):
             "secondary": " · ".join(filter(None, (self._meta(version), summary if summary != label else None))),
             "icon": _ACTOR_ICONS.get(group.actor or "", "edit_note"), "color": "primary" if applied else "action",
         }
-        if detail := version_detail(version):
-            item["tooltip"] = detail
+        # The summary may be cut off in a narrow drawer, so the tooltip has it in full.
+        shown = summary if summary != label else None
+        if tooltip := ": ".join(filter(None, (shown, version_detail(version)))):
+            item["tooltip"] = tooltip
         actions = self._group_actions(group, item)
         if self._restorable(version):
             actions.insert(0, self._restore_action(version))
@@ -337,6 +344,7 @@ class VersionTimeline(Viewer):
         )
         if self.artifact._undo_crosses(before, mine):
             # Going back would undo later edits made outside the group too, which must be undone first.
+            item["tooltip"] = " ".join(filter(None, (f"{BLOCKED_NOTE}.", item.get("tooltip"))))
             return [{"action": "blocked", "label": BLOCKED_NOTE, "icon": "info_outline", "inline": True}]
         label = "Undo run" if applied <= group.last else "Go back to before this run"
         item["before"] = before
