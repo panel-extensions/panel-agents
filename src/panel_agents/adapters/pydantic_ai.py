@@ -656,9 +656,11 @@ class AgentRunner(param.Parameterized):
         # Versions the running agent made itself, also in a child run its tools started, are already known to the model.
         if not self.running or run_id is None:
             return False
-        while run_id is not None:
+        seen = set()
+        while run_id is not None and run_id not in seen:
             if run_id == self.run_id:
                 return True
+            seen.add(run_id)
             run = self.state.runs.get(run_id)
             run_id = run.parent_run_id if run is not None else None
         return False

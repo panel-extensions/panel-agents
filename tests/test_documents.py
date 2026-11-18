@@ -407,3 +407,11 @@ def test_nested_user_runs_are_children():
         state.publish_artifact("doc", 1, applied=True)
     assert state.runs[inner].parent_run_id == outer and state.runs[inner].agent_name == "ann"
     assert (state.artifacts["doc"].latest.run_id, state.artifacts["doc"].latest.user) == (inner, "ann")
+
+
+def test_user_run_refuses_an_existing_run_id():
+    state = RunState(flush_interval=0)
+    with state.user_run(run_id="r1"):
+        with pytest.raises(ValueError, match="already exists"), state.user_run(run_id="r1"):
+            pass
+    assert state.runs["r1"].parent_run_id is None

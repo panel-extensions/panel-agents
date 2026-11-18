@@ -466,6 +466,8 @@ async def test_edits_from_other_callbacks_during_a_run_are_the_users():
 
 
 async def test_the_agents_own_versions_are_not_reported_back_to_it():
+    import contextvars
+
     from panel_agents import current_run_id
 
     state = RunState(flush_interval=0)
@@ -475,19 +477,34 @@ async def test_the_agents_own_versions_are_not_reported_back_to_it():
     @agent.tool_plain
     async def edit() -> str:
         state.publish_artifact("doc", {"a": 1}, applied=True)
-        with state.user_run("Applied the agent's edit") as child:
+        with state.user_run("Applied the agent's edit", user="ann") as child:
             state.publish_artifact("doc", {"a": 2}, applied=True)
-        seen["child"] = child
+            with state.user_run("Nested") as grandchild:
+                state.publish_artifact("doc", {"a": 3}, applied=True)
+        seen["child"], seen["grandchild"] = child, grandchild
+
+        def independent():
+            # A person's batch from an unrelated callback is theirs, and the model hears about it.
+            with state.user_run("Dragged a tile", user="ann"):
+                state.publish_artifact("doc", {"a": 4}, applied=True)
+        asyncio.get_running_loop().call_soon(independent, context=contextvars.Context())
+        await asyncio.sleep(0)
         seen["parent"] = current_run_id()
         return "edited"
 
     runner = AgentRunner(agent, state)
     await runner.run("Edit")
-    assert runner._notes == []
-    child = state.runs[seen["child"]]
+    assert runner._notes == ["The app published version 4 of the artifact 'doc' and now holds it."]
+    child, grandchild = state.runs[seen["child"]], state.runs[seen["grandchild"]]
     assert (child.parent_run_id, child.input, child.status) == (runner.run_id, "Applied the agent's edit", "finished")
-    version = state.artifacts["doc"].latest
-    assert (version.run_id, version.tool_call_id, version.actor, version.user) == (seen["child"], "call-0", "agent", None)
+    assert grandchild.parent_run_id == seen["child"]
+    versions = state.artifacts["doc"].versions
+    assert [(v.run_id, v.tool_call_id, v.actor, v.user) for v in versions[1:3]] == [
+        (seen["child"], "call-0", "agent", None), (seen["grandchild"], "call-0", "agent", None),
+    ]
+    independent = versions[3]
+    assert (independent.tool_call_id, independent.actor, independent.user) == (None, "user", "ann")
+    assert state.runs[independent.run_id].parent_run_id is None
     assert seen["parent"] == runner.run_id and not state.running
 
 

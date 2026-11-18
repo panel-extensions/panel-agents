@@ -456,14 +456,18 @@ class RunState(param.Parameterized):
         ``user``, which defaults to ``pn.state.user``. A user run has no
         model calls.
 
-        Meant for a synchronous batch of edits: the state counts as
-        ``running`` while the block is open, so do not await inside it.
-        Called from code a run executes, such as a tool, it starts a
-        child run of that run instead (``parent_run_id``), and versions
-        published in it keep the enclosing run's attribution, e.g. the
-        agent and its tool call.
+        Meant for a synchronous batch of edits: a top-level user run
+        makes the state count as ``running`` while the block is open, so
+        do not await inside it. Called from code a run executes, such as
+        a tool, it starts a child run of that run instead
+        (``parent_run_id``), and versions published in it keep the
+        enclosing run's attribution, e.g. the agent and its tool call;
+        ``user`` is ignored inside an agent's run. Raises ``ValueError``
+        if ``run_id`` is already a run of this state.
         """
         scope = _current_scope()
+        if run_id is not None and run_id in self.runs:
+            raise ValueError(f"The run {run_id!r} already exists; a user run needs a new id.")
         run_id = run_id or _new_id("run-")
         if scope is not None and scope.run_id is not None:
             parent = self.runs.get(scope.run_id)
@@ -472,7 +476,7 @@ class RunState(param.Parameterized):
                 agent_name = user or "user"
             else:
                 user = scope.user
-                agent_name = parent.agent_name if parent is not None else scope.actor
+                agent_name = (parent.agent_name if parent is not None else None) or scope.actor
             self.apply(ev.RunStarted(run_id=run_id, parent_run_id=scope.run_id, agent_name=agent_name, input=input))
             fields = {"tool_call_id": scope.tool_call_id, "actor": scope.actor, "user": user}
         else:
