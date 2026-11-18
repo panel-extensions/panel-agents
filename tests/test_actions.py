@@ -338,3 +338,26 @@ async def test_pending_calls_fail_when_the_session_ends():
         assert ran == []
     finally:
         other.call_soon_threadsafe(other.stop)
+
+
+async def test_actions_run_in_the_calling_tool_call():
+    from panel_agents import current_run_id, current_tool_call_id
+
+    actions = ActionRegistry()
+    seen = []
+
+    @actions.action
+    def where() -> str:
+        seen.append((current_run_id(), current_tool_call_id()))
+        return "here"
+
+    runner = AgentRunner(Agent(streaming(calling(("where", {}))), toolsets=[ActionToolset(actions)]), RunState(flush_interval=0))
+    await runner.run("Where?")
+    # From another thread the action is handed to the session loop, and the scope travels with it.
+    def call_from_thread():
+        from panel_agents.context import _scope
+        with _scope(run_id="r1", tool_call_id="c1", actor="agent"):
+            return asyncio.run(actions.invoke("where"))
+
+    await asyncio.to_thread(call_from_thread)
+    assert seen == [(runner.run_id, "call-0"), ("r1", "c1")]

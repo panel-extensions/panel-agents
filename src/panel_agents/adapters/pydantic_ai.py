@@ -56,6 +56,7 @@ from pydantic_core import to_jsonable_python
 
 from .. import events as ev
 from ..actions import Action, ActionRegistry
+from ..context import _scope
 from ..policy import ApprovalPolicy
 from ..recording import _dump_event
 from .cassette import Cassette, CassetteError, Divergence, RecordedFailure
@@ -171,7 +172,8 @@ class _RecordingApprovalToolset(ApprovalRequiredToolset[Any]):
         self.runner._validators[name] = tool.args_validator
         # The response that called the tool is complete in the history by now.
         self.runner._trace(ctx.messages)
-        return await super().call_tool(name, tool_args, ctx, tool)
+        with _scope(run_id=ctx.run_id or self.runner.run_id, tool_call_id=ctx.tool_call_id, actor="agent"):
+            return await super().call_tool(name, tool_args, ctx, tool)
 
 
 _URL_TAIL = re.compile(r"(https?://[^\s?#]+)[?#]\S*")
@@ -471,7 +473,7 @@ class _PanelEventStream(UIEventStream[None, ev.Event, Any, Any]):
         return ev.ArtifactPublished(
             artifact_id=artifact.artifact_id, value=artifact.value, kind=artifact.kind, title=artifact.title,
             tool_call_id=artifact.tool_call_id or tool_call_id, metadata=dict(artifact.metadata),
-            applied=artifact.applied,
+            applied=artifact.applied, actor="agent",
         )
 
     async def handle_custom_event(self, event: CustomEvent) -> AsyncIterator[ev.Event]:
@@ -661,12 +663,13 @@ class AgentRunner(param.Parameterized):
         capability = _RunCapability(runner=self)
         capabilities = [*run_kwargs.pop("capabilities", []), capability]
         try:
-            async with self.agent.run_stream_events(
-                model_prompt, message_history=self.messages or None, deferred_tool_results=deferred_tool_results,
-                deps=self.deps, capabilities=capabilities, cancellation_token=self._token, **run_kwargs,
-            ) as events:
-                async for event in stream.transform_stream(events):
-                    self._apply(stream, event)
+            with _scope(run_id=run_id, actor="agent"):
+                async with self.agent.run_stream_events(
+                    model_prompt, message_history=self.messages or None, deferred_tool_results=deferred_tool_results,
+                    deps=self.deps, capabilities=capabilities, cancellation_token=self._token, **run_kwargs,
+                ) as events:
+                    async for event in stream.transform_stream(events):
+                        self._apply(stream, event)
         except asyncio.CancelledError as e:
             self._close(stream, ev.RunError(run_id=run_id, message="Run cancelled", code="cancelled"))
             self._trace_failure(run_id, capability, e)

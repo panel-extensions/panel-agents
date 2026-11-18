@@ -385,6 +385,81 @@ async def test_publish_artifact_versions():
     assert [type(e) for e in published[-2:]] == [ev.ArtifactPublished, ev.ToolCallResult]
 
 
+async def test_agent_versions_record_the_run_and_actor():
+    agent = Agent(streaming(calls_then_text(("write", {"text": "v1"}), ("table", {}))))
+
+    @agent.tool
+    async def write(ctx: RunContext, text: str) -> str:
+        await publish_artifact(ctx, "draft", text, kind="text")
+        return "saved"
+
+    @agent.tool_plain
+    def table() -> object:
+        return artifact_return("1 row", "table", [1])
+
+    runner = make_runner(agent)
+    await runner.run("Write")
+    versions = [runner.state.artifacts[a].latest for a in ("draft", "table")]
+    assert [(v.run_id, v.tool_call_id, v.actor, v.user) for v in versions] == [
+        (runner.run_id, "call-0", "agent", None), (runner.run_id, "call-1", "agent", None),
+    ]
+
+
+async def test_host_code_in_a_tool_sees_the_run_and_tool_call():
+    from panel_agents import current_run_id, current_tool_call_id
+
+    agent = Agent(streaming(calls_then_text(("edit", {"value": 1}), ("peek", {}))))
+    state = RunState(flush_interval=0)
+    seen = {}
+
+    def mutate(value):
+        # Host code with no RunContext, e.g. an editor method a tool calls.
+        seen["edit"] = (current_run_id(), current_tool_call_id())
+        state.publish_artifact("doc", {"value": value}, applied=True, metadata={"op": "set_value"})
+
+    @agent.tool_plain
+    async def edit(value: int) -> str:
+        mutate(value)
+        return "edited"
+
+    @agent.tool
+    def peek(ctx: RunContext) -> str:
+        seen["peek"] = (current_run_id(), current_tool_call_id(), ctx.run_id, ctx.tool_call_id)
+        return "ok"
+
+    runner = AgentRunner(agent, state)
+    await runner.run("Edit")
+    assert seen == {"edit": (runner.run_id, "call-0"), "peek": (runner.run_id, "call-1") * 2}
+    version = state.artifacts["doc"].latest
+    assert (version.run_id, version.tool_call_id, version.actor, version.user) == (runner.run_id, "call-0", "agent", None)
+    assert current_run_id() is None
+
+
+async def test_edits_from_other_callbacks_during_a_run_are_the_users():
+    import contextvars
+
+    state = RunState(flush_interval=0)
+    agent = Agent(streaming(calls_then_text(("delete", {}))))
+
+    @agent.tool_plain(requires_approval=True)
+    def delete() -> str:
+        return "deleted"
+
+    def on_request(event):
+        if isinstance(event, ev.ApprovalRequested):
+            def user_edit():
+                # A widget callback runs in a context of its own, not the agent's.
+                state.publish_artifact("doc", {"a": 1}, applied=True, user="ann")
+                state.resolve_approval(event.tool_call_id, approved=True)
+            asyncio.get_running_loop().call_soon(user_edit, context=contextvars.Context())
+
+    state.subscribe(on_request)
+    runner = AgentRunner(agent, state)
+    await runner.run("Delete")
+    version = state.artifacts["doc"].latest
+    assert (version.run_id, version.tool_call_id, version.actor, version.user) == (None, None, "user", "ann")
+
+
 # A fake SQL analyst used for the record/replay test and the shared fixture.
 
 SALES = pd.DataFrame({

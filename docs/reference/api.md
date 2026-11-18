@@ -22,7 +22,8 @@ This page lists the public API of panel-agents 1.x. Every name below is covered 
 
 | Name | Purpose |
 | --- | --- |
-| `RunState` | Reactive store built from events. `apply(event)`, `apply_many(events)`, `subscribe(callback)`, `reset()`, `flush()`, `from_events(events)`, `events`, `add_user_message(text)`, `resolve_approval(tool_call_id, approved, args=None, reason=None, user=None)` (raises `ValueError` if already decided and `PermissionError` if the runner's policy does not allow `user`), `publish_artifact(artifact_id, value, *, kind, title, metadata, applied=False)`, `apply_artifact_version(artifact_id, version, user=None)`. |
+| `RunState` | Reactive store built from events. `apply(event)`, `apply_many(events)`, `subscribe(callback)`, `reset()`, `flush()`, `from_events(events)`, `events`, `add_user_message(text)`, `resolve_approval(tool_call_id, approved, args=None, reason=None, user=None)` (raises `ValueError` if already decided and `PermissionError` if the runner's policy does not allow `user`), `publish_artifact(artifact_id, value, *, kind, title, metadata, applied=False, run_id=None, tool_call_id=None, actor=None, user=None)` (who made the version defaults to the current run and tool call, or to the user), `user_run(input=None, *, user=None, run_id=None)` (a context manager grouping a person's edits into a run, yielding its id), `apply_artifact_version(artifact_id, version, user=None)`. |
+| `current_run_id()`, `current_tool_call_id()` | The run and tool call the calling code executes in, set by `AgentRunner` and `RunState.user_run`; None outside them. Also in `panel_agents.context`. |
 | `MessageState`, `ToolCallState`, `ApprovalRequest`, `RunInfo` | The entities in a `RunState`, as parameterized objects components watch. |
 | `events` | The event classes, see below. |
 | `Recorder(state, sink, *, on_error="log")`, `dump_events(events, path)`, `load_events(source)`, `load_state(source)` | Record runs as JSON Lines, starting with a format version line, and load them back for replay. A sink is a file path, a text stream or a callable receiving each record as a dict; a source is a file path or an iterable of those dicts. |
@@ -32,14 +33,14 @@ This page lists the public API of panel-agents 1.x. Every name below is covered 
 
 | Name | Purpose |
 | --- | --- |
-| `Artifact`, `ArtifactVersion`, `ArtifactStore` | Versioned artifacts. `Artifact.current` is the number of the version shown, `Artifact.is_document` and `Artifact.applied_version` describe documents; `ArtifactStore.publish(...)` and `mark_applied(artifact_id, version)`. |
+| `Artifact`, `ArtifactVersion`, `ArtifactStore` | Versioned artifacts. `ArtifactVersion` records who made it as `run_id`, `tool_call_id`, `actor` (`"agent"`, `"user"` or a host's own string) and `user`. `Artifact.current` is the number of the version shown, `Artifact.is_document` and `Artifact.applied_version` describe documents; `ArtifactStore.publish(...)` and `mark_applied(artifact_id, version)`. |
 | `register_diff(*kinds)` | Register a diff strategy `func(old, new, **options) -> Diff` for artifact kinds. |
 | `ApprovalPolicy(rules)`, `ApprovalRule(tool, when=None, approvers=None)` | Which tool calls need approval and who may give it. `approvers` is a collection of user names or a callable `(request, user) -> bool`. `requires_approval(tool, args)`, `can_approve(request, user)`, `can_decide(request, user, args=None)`, `rule_for(tool, args)`. |
 | `ActionRegistry()`, `Action` | Typed front-end actions run in the user's session. `action(...)`, `add(func, *, name, description)`, `remove(name)`, `await invoke(name, args)`; `Action(name, description, function)`, `Action.from_function(function, name=None, description=None)`, `parameters`, `validate(args)`. |
 
 ## `panel_agents.events`
 
-`Event` and its subclasses, mirroring AG-UI: `RunStarted`, `RunFinished`, `RunError`, `StepStarted`, `StepFinished`, `TextMessageStart`, `TextMessageContent`, `TextMessageEnd`, `ThinkingStart`, `ThinkingContent`, `ThinkingEnd`, `ToolCallStart`, `ToolCallArgs`, `ToolCallEnd`, `ToolCallResult`, `StateSnapshot`, `StateDelta`, `Custom`. The kit-specific events map onto AG-UI `CUSTOM` events: `ArtifactPublished`, `ArtifactApplied`, `ApprovalRequested`, `ApprovalResolved`, `Usage` and `GuardrailFired`. Each has `to_dict()` and `Event.from_dict(data)`.
+`Event` and its subclasses, mirroring AG-UI: `RunStarted`, `RunFinished`, `RunError`, `StepStarted`, `StepFinished`, `TextMessageStart`, `TextMessageContent`, `TextMessageEnd`, `ThinkingStart`, `ThinkingContent`, `ThinkingEnd`, `ToolCallStart`, `ToolCallArgs`, `ToolCallEnd`, `ToolCallResult`, `StateSnapshot`, `StateDelta`, `Custom`. The kit-specific events map onto AG-UI `CUSTOM` events: `ArtifactPublished` (with `actor` and `user` next to `run_id` and `tool_call_id`), `ArtifactApplied`, `ApprovalRequested`, `ApprovalResolved`, `Usage` and `GuardrailFired`. Each has `to_dict()` and `Event.from_dict(data)`.
 
 ## `panel_agents.artifacts`
 
@@ -64,7 +65,7 @@ Requires the `pydantic-ai` extra.
 | Name | Purpose |
 | --- | --- |
 | `AgentRunner(agent=None, state=None, deps=None, *, approval_policy, thread_id, run_kwargs, raise_errors)` | Runs a pydantic-ai agent into a `RunState`, keeping the conversation. `await run(prompt, *, deferred_tool_results=None, **kwargs)`, `cancel()`, `clear()`, `close()`; `running`, `run_id`, `error`, `deferred`, `messages`. A failed run, unless cancelled, is logged with its traceback on the `panel_agents` logger and adds an `error` message to the timeline. |
-| `publish_artifact(ctx, artifact_id, value, *, title, kind, metadata, applied=False)` | Publish an artifact version from an async tool. |
+| `publish_artifact(ctx, artifact_id, value, *, title, kind, metadata, applied=False)` | Publish an artifact version from an async tool, stamped with the run, the tool call and the actor `"agent"`. |
 | `artifact_return(return_value, artifact_id, value, *, title, kind, metadata, applied=False)` | Return a value to the model and publish an artifact, from any tool. |
 | `ActionToolset(registry, *, id=None, max_retries=1)` | An `ActionRegistry` as a pydantic-ai toolset. |
 | `ModelTraceRecorder(runner, sink, *, include_content=True, on_error="log")` | Keeps a JSON Lines model trace in sync with a runner's pydantic-ai message history while it runs, with `rewind` records where the history was rewritten and `failed_run` records for runs that fail. `close()`. |

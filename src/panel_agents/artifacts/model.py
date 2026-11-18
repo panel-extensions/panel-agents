@@ -26,7 +26,20 @@ class ArtifactVersion(param.Parameterized):
 
     created_at = param.Number(constant=True)
 
-    tool_call_id = param.String(default=None, allow_None=True, constant=True)
+    tool_call_id = param.String(default=None, allow_None=True, constant=True, doc="""
+        Id of the tool call that published the version, if a tool did.""")
+
+    run_id = param.String(default=None, allow_None=True, constant=True, doc="""
+        Id of the run the version was published in: an agent run, or a
+        run grouping a person's edits (``RunState.user_run``).""")
+
+    actor = param.String(default=None, allow_None=True, constant=True, doc="""
+        Who made the version, e.g. 'agent' or 'user'. A free string, so
+        hosts may add their own, such as 'import'. None in recordings
+        made before versions recorded their actor.""")
+
+    user = param.String(default=None, allow_None=True, constant=True, doc="""
+        Name of the person who made the version, if a person did.""")
 
     metadata = param.Dict(default={}, constant=True)
 
@@ -82,12 +95,19 @@ class Artifact(param.Parameterized):
         metadata: dict[str, Any] | None = None,
         created_at: float | None = None,
         applied: bool = False,
+        *,
+        run_id: str | None = None,
+        actor: str | None = None,
+        user: str | None = None,
     ) -> ArtifactVersion:
         version = ArtifactVersion(
             version=len(self.versions) + 1,
             value=value,
             created_at=time.time() if created_at is None else created_at,
             tool_call_id=tool_call_id,
+            run_id=run_id,
+            actor=actor,
+            user=user,
             metadata=metadata or {},
         )
         update = {"versions": [*self.versions, version], "current": version.version}
@@ -129,18 +149,24 @@ class ArtifactStore(param.Parameterized):
         metadata: dict[str, Any] | None = None,
         created_at: float | None = None,
         applied: bool = False,
+        *,
+        run_id: str | None = None,
+        actor: str | None = None,
+        user: str | None = None,
     ) -> Artifact:
         """
         Create an artifact, or add a new version if the id exists.
 
         ``applied`` marks the version as the one the host document now
-        holds, which makes the artifact a document.
+        holds, which makes the artifact a document. ``run_id``, ``actor``
+        and ``user`` record who made the version, see ``ArtifactVersion``.
         """
+        who = {"run_id": run_id, "actor": actor, "user": user}
         if artifact_id in self.artifacts:
             artifact = self.artifacts[artifact_id]
             if title:
                 artifact.title = title
-            artifact.add_version(value, tool_call_id, metadata, created_at, applied)
+            artifact.add_version(value, tool_call_id, metadata, created_at, applied, **who)
             self.param.trigger("artifacts")
         else:
             artifact = Artifact(
@@ -148,7 +174,7 @@ class ArtifactStore(param.Parameterized):
                 kind=kind or infer_kind(value),
                 title=title or artifact_id,
             )
-            artifact.add_version(value, tool_call_id, metadata, created_at, applied)
+            artifact.add_version(value, tool_call_id, metadata, created_at, applied, **who)
             self.artifacts = {**self.artifacts, artifact_id: artifact}
         self.active = artifact_id
         return artifact

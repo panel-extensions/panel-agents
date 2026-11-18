@@ -12,7 +12,8 @@ import copy
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import param
@@ -20,10 +21,16 @@ from pydantic_core import from_json
 
 from . import events as ev
 from .artifacts import ArtifactStore
+from .context import _current_scope, _scope
 
 
 def _new_id(prefix: str = "") -> str:
     return f"{prefix}{uuid.uuid4().hex[:12]}"
+
+
+def _session_user() -> str | None:
+    import panel as pn
+    return pn.state.user
 
 
 def _parse_partial_json(text: str) -> dict[str, Any]:
@@ -331,16 +338,61 @@ class RunState(param.Parameterized):
         title: str | None = None,
         metadata: dict[str, Any] | None = None,
         applied: bool = False,
+        run_id: str | None = None,
+        tool_call_id: str | None = None,
+        actor: str | None = None,
+        user: str | None = None,
     ):
         """
         Publish a version of an artifact from the host app rather than a
         tool, e.g. after the user edited a document directly. With
         ``applied=True`` the version becomes the one the host document holds.
+
+        ``run_id``, ``tool_call_id``, ``actor`` and ``user`` record who
+        made the version. Called from code an ``AgentRunner`` runs, such
+        as a mutator a tool calls, they default to the current run and
+        tool call with the actor ``"agent"``; inside ``user_run`` to that
+        run and its user; anywhere else to the actor ``"user"`` and
+        ``pn.state.user``.
         """
+        scope = _current_scope()
+        if scope is not None:
+            run_id = run_id or scope.run_id
+            tool_call_id = tool_call_id or scope.tool_call_id
+            actor = actor or scope.actor
+            user = user or scope.user
+        else:
+            actor = actor or "user"
+            if actor == "user" and user is None:
+                user = _session_user()
         self.apply(ev.ArtifactPublished(
             artifact_id=artifact_id, value=value, kind=kind, title=title, metadata=metadata or {}, applied=applied,
+            run_id=run_id, tool_call_id=tool_call_id, actor=actor, user=user,
         ))
         return self.artifacts[artifact_id]
+
+    @contextmanager
+    def user_run(self, input: Any = None, *, user: str | None = None, run_id: str | None = None) -> Iterator[str]:
+        """
+        Group a person's edits into a run of their own, yielding its id.
+
+        Emits ``RunStarted`` with the user as ``agent_name`` and ``input``
+        (e.g. a description of the edit) on entry and ``RunFinished`` on
+        exit, and makes ``publish_artifact`` inside the block default to
+        this run, the actor ``"user"`` and ``user``, which defaults to
+        ``pn.state.user``. A user run has no model calls. Meant for a
+        batch of edits made in one go; the state counts as ``running``
+        while the block is open.
+        """
+        user = user if user is not None else _session_user()
+        run_id = run_id or _new_id("run-")
+        self.apply(ev.RunStarted(run_id=run_id, agent_name=user or "user", input=input))
+        try:
+            with _scope(run_id=run_id, actor="user", user=user):
+                yield run_id
+        finally:
+            # The edits that were published before an error happened stand, so the run still finishes.
+            self.apply(ev.RunFinished(run_id=run_id))
 
     def apply_artifact_version(self, artifact_id: str, version: int, user: str | None = None):
         """
@@ -454,7 +506,7 @@ class RunState(param.Parameterized):
         self.artifacts.publish(
             event.artifact_id, event.value, kind=event.kind, title=event.title,
             tool_call_id=event.tool_call_id, metadata=event.metadata, created_at=event.timestamp,
-            applied=event.applied,
+            applied=event.applied, run_id=event.run_id, actor=event.actor, user=event.user,
         )
 
     def _on_artifact_applied(self, event: ev.ArtifactApplied):

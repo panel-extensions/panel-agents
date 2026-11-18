@@ -8,8 +8,8 @@ PUBLIC = {
     "panel_agents": [
         "Action", "ActionRegistry", "AgentChat", "AgentDrawer", "ApprovalCard", "ApprovalPolicy", "ApprovalQueue",
         "ApprovalRequest", "ApprovalRule", "Artifact", "ArtifactPane", "ArtifactStore", "ArtifactVersion", "ArtifactView",
-        "AuditLog", "MessageState", "Recorder", "RunInfo", "RunState", "ToolCallCard", "ToolCallState", "dump_events",
-        "events", "load_events", "load_state", "register_diff", "register_renderer",
+        "AuditLog", "MessageState", "Recorder", "RunInfo", "RunState", "ToolCallCard", "ToolCallState", "current_run_id",
+        "current_tool_call_id", "dump_events", "events", "load_events", "load_state", "register_diff", "register_renderer",
     ],
     "panel_agents.actions": ["Action", "ActionRegistry"],
     "panel_agents.artifacts": [
@@ -17,6 +17,7 @@ PUBLIC = {
         "ValueDiff", "diff", "diff_structured", "diff_table", "diff_text", "diff_values", "infer_kind", "register_diff",
     ],
     "panel_agents.audit": ["AuditLog"],
+    "panel_agents.context": ["current_run_id", "current_tool_call_id"],
     "panel_agents.components": [
         "AgentChat", "AgentDrawer", "ApprovalCard", "ApprovalQueue", "ArtifactPane", "ArtifactView", "ToolCallCard",
         "approval_factory", "register_renderer", "render",

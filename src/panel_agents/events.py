@@ -220,6 +220,10 @@ class ArtifactPublished(Event):
     applied: bool = False
     """Whether the host document already holds this version, e.g. because
     the tool edited the document in place."""
+    actor: str | None = None
+    """Who made the version, e.g. ``"agent"`` or ``"user"``."""
+    user: str | None = None
+    """Name of the person who made the version, if a person did."""
 
 
 @dataclass(kw_only=True)

@@ -13,6 +13,7 @@ from .components import (
     ToolCallCard,
     register_renderer,
 )
+from .context import current_run_id, current_tool_call_id
 from .policy import ApprovalPolicy, ApprovalRule
 from .recording import Recorder, dump_events, load_events, load_state
 from .state import (
@@ -45,6 +46,8 @@ __all__ = [
     "RunState",
     "ToolCallCard",
     "ToolCallState",
+    "current_run_id",
+    "current_tool_call_id",
     "dump_events",
     "events",
     "load_events",

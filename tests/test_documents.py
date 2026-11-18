@@ -333,3 +333,58 @@ def test_applied_is_a_public_read_only_number():
     assert (artifact.applied, seen) == (1, [2, 1])
     with pytest.raises(TypeError):
         artifact.applied = 2
+
+
+def test_host_versions_default_to_the_user(monkeypatch):
+    import panel as pn
+    monkeypatch.setattr(type(pn.state), "user", property(lambda self: "ann"))
+    state = RunState(flush_interval=0)
+    version = state.publish_artifact("doc", {"a": 1}, applied=True).latest
+    assert (version.actor, version.user, version.run_id, version.tool_call_id) == ("user", "ann", None, None)
+    version = state.publish_artifact("doc", {"a": 2}, actor="import", metadata={"label": "Loaded"}).latest
+    assert (version.actor, version.user) == ("import", None)
+    version = state.publish_artifact("doc", {"a": 3}, actor="agent", run_id="r1", tool_call_id="c1").latest
+    assert (version.actor, version.user, version.run_id, version.tool_call_id) == ("agent", None, "r1", "c1")
+
+
+def test_user_run_groups_edits():
+    from panel_agents import current_run_id, current_tool_call_id
+
+    state = RunState(flush_interval=0)
+    assert current_run_id() is None and current_tool_call_id() is None
+    with state.user_run("Moved the chart", user="ann") as run_id:
+        assert current_run_id() == run_id and current_tool_call_id() is None
+        assert state.running
+        state.publish_artifact("doc", {"a": 1}, applied=True)
+        state.publish_artifact("doc", {"a": 2}, applied=True)
+    assert current_run_id() is None and not state.running
+    run = state.runs[run_id]
+    assert (run.agent_name, run.input, run.status, run.usage) == ("ann", "Moved the chart", "finished", [])
+    assert [(v.run_id, v.actor, v.user) for v in state.artifacts["doc"].versions] == [(run_id, "user", "ann")] * 2
+    assert not [i for i in state.items]
+
+
+def test_user_run_finishes_when_an_edit_fails():
+    state = RunState(flush_interval=0)
+    with pytest.raises(RuntimeError), state.user_run(user="ann", run_id="r1"):
+        state.publish_artifact("doc", {"a": 1}, applied=True)
+        raise RuntimeError("boom")
+    assert state.runs["r1"].status == "finished" and not state.running
+    assert len(state.artifacts["doc"].versions) == 1
+
+
+def test_version_authors_round_trip(tmp_path):
+    state = RunState(flush_interval=0)
+    with state.user_run(user="ann"):
+        state.publish_artifact("doc", {"a": 1}, applied=True)
+    state.apply(ev.ArtifactPublished(artifact_id="doc", value={"a": 2}, run_id="r2", tool_call_id="c1", actor="agent", applied=True))
+    path = tmp_path / "run.jsonl"
+    dump_events(state.events, path)
+    authors = [(v.run_id, v.tool_call_id, v.actor, v.user) for v in state.artifacts["doc"].versions]
+    assert [(v.run_id, v.tool_call_id, v.actor, v.user) for v in load_state(path).artifacts["doc"].versions] == authors
+
+
+def test_recordings_without_authors_still_load():
+    record = {"type": "ARTIFACT_PUBLISHED", "artifact_id": "doc", "value": 1, "run_id": None, "timestamp": 0.0}
+    version = load_state([record]).artifacts["doc"].latest
+    assert (version.actor, version.user, version.run_id) == (None, None, None)
