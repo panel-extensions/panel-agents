@@ -229,3 +229,12 @@ def test_live_validation():
     form = SchemaForm(schema=ELICITATION, live_validation=True)
     form.field("age").value = -1
     assert "age: Must be at least 0." in form.errors
+
+
+def test_schema_form_is_public():
+    import panel_agents
+    from panel_agents.components import SchemaForm as Public
+
+    assert panel_agents.SchemaForm is Public is SchemaForm
+    form = Public(schema={"type": "object", "properties": {"n": {"type": "integer"}}}, value={"n": 2})
+    assert form.value == {"n": 2} and form.valid

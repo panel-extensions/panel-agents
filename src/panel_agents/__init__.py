@@ -12,6 +12,7 @@ from .components import (
     ArtifactView,
     ModelCallCard,
     RunTrace,
+    SchemaForm,
     ToolCallCard,
     register_renderer,
 )
@@ -51,6 +52,7 @@ __all__ = [
     "RunInfo",
     "RunState",
     "RunTrace",
+    "SchemaForm",
     "ToolCallCard",
     "ToolCallState",
     "current_run_id",

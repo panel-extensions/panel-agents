@@ -489,8 +489,6 @@ class SchemaForm(Viewer):
     `$ref`/`$defs`, `allOf` and nullable `anyOf` unions are resolved;
     any other shape falls back to a JSON editor for that field.
 
-    Reference: https://panel-material-ui.holoviz.org/reference/widgets/SchemaForm.html
-
     :Example:
 
     >>> SchemaForm(schema={
