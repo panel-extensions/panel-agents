@@ -26,7 +26,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any
 
-from .events import ArtifactApplied, ArtifactPublished, Event, RunError, RunFinished, RunStarted
+from .events import (
+    ArtifactApplied,
+    ArtifactPublished,
+    ArtifactVersionsDropped,
+    Event,
+    RunError,
+    RunFinished,
+    RunStarted,
+)
 from .state import RunState
 
 _log = logging.getLogger(__name__)
@@ -326,7 +334,8 @@ class HistoryRecorder(Recorder):
     Record the version history of artifacts, e.g. to keep a document's
     history across sessions.
 
-    Writes the ``ArtifactPublished`` and ``ArtifactApplied`` events of the
+    Writes the ``ArtifactPublished``, ``ArtifactApplied`` and
+    ``ArtifactVersionsDropped`` events of the
     artifacts in ``artifact_ids`` (default: all) and, for each run that
     published one of those versions, its ``RunStarted`` before the first
     such version, after those of the runs it is a child of, and its
@@ -362,7 +371,7 @@ class HistoryRecorder(Recorder):
                 self._written.discard(event.run_id)
                 super()._write(event)
             return
-        if not isinstance(event, (ArtifactPublished, ArtifactApplied)):
+        if not isinstance(event, (ArtifactPublished, ArtifactApplied, ArtifactVersionsDropped)):
             return
         if self.artifact_ids is not None and event.artifact_id not in self.artifact_ids:
             return

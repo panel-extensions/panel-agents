@@ -69,6 +69,8 @@ def group_versions(versions: list[ArtifactVersion], state: RunState | None = Non
     groups: list[VersionGroup] = []
     runs = state.runs if state is not None else None
     for version in versions:
+        if version.dropped:
+            continue
         run_id = root_run_id(runs, version.run_id)
         group = groups[-1] if groups else None
         if group is not None and (

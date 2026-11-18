@@ -168,6 +168,16 @@ recorder = HistoryRecorder(state, path, artifact_ids=["dashboard"])
 
 A `RunState` keeps every event it applied in `state.events`, which grows without limit in a long editing session. Once a recorder keeps the log, cap what stays in memory with `RunState(max_events=1000)`. The state is built as events arrive, so dropping old ones changes nothing you see, and undo and redo still work; only `state.events` stops being a full log once `state.dropped_events` is above zero, so replay the recording rather than `state.events`.
 
+The versions of a document hold their values, so an artifact edited for hours holds every state of the document. `state.drop_artifact_versions("dashboard", before=n)` drops the values of the versions numbered below `n`, except the applied one, for example to keep the latest few hundred. The values are freed once nothing else holds them; `state.events` holds the events that published them, so set `max_events` as well:
+
+```python
+artifact = state.artifacts["dashboard"]
+if len(artifact.versions) > 550:
+    state.drop_artifact_versions("dashboard", before=len(artifact.versions) - 500 + 1)
+```
+
+A dropped version keeps its object, number, run, author, metadata and time, so version numbers never shift and code holding a version or its number stays valid, but its `value` is None, `version.dropped` is True and it cannot be applied. Dropped versions leave the undo and redo history, so undo stops at the oldest version kept, and the artifact view leaves them out of its history and compare lists. Only documents can drop versions; for any other artifact it raises `ValueError`. The drop is recorded as an `ArtifactVersionsDropped` event, which a `HistoryRecorder` writes too, so a replay drops the same versions.
+
 ## Describe changes semantically
 
 The compare tab picks a diff strategy by artifact kind. Text kinds get a line diff and tables a cell diff. For structured documents, register a strategy that returns a `StructuredDiff`, a list of `Change(op, path, old, new, label)` records. `diff_structured` computes the changes between two nested dict and list values. A change's `path` is a tuple of the keys and list positions leading to it, such as `("nodes", "sales", "config")`, so keys containing dots stay unambiguous, and `path_str` renders it for display. A strategy can relabel the changes in the document's own terms:

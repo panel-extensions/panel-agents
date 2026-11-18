@@ -25,7 +25,7 @@ PUBLIC = {
         "RunTrace", "ToolCallCard", "approval_factory", "register_renderer", "render",
     ],
     "panel_agents.events": [
-        "ApprovalRequested", "ApprovalResolved", "ArtifactApplied", "ArtifactPublished", "Custom", "Event",
+        "ApprovalRequested", "ApprovalResolved", "ArtifactApplied", "ArtifactPublished", "ArtifactVersionsDropped", "Custom", "Event",
         "GuardrailFired", "ModelRequestStarted", "RunError", "RunFinished", "RunStarted", "StateDelta", "StateSnapshot", "StepFinished",
         "StepStarted", "TextMessageContent", "TextMessageEnd", "TextMessageStart", "ThinkingContent", "ThinkingEnd",
         "ThinkingStart", "ToolCallArgs", "ToolCallEnd", "ToolCallResult", "ToolCallStart", "Usage",

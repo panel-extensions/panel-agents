@@ -385,18 +385,33 @@ class ArtifactView(Viewer):
         latest = len(versions)
         if self.target is None or self.target == previous_latest or self.target > latest:
             self.param.update(target=latest if versions else None, base=self._default_base(latest) if versions else None)
+        elif versions[self.target - 1].dropped:
+            target = self._kept_target()
+            self.param.update(target=target, base=self._default_base(target))
+        elif self.base is not None and versions[self.base - 1].dropped:
+            self.base = self._default_base(self.target)
         self._on_current()
+
+    def _kept_target(self) -> int:
+        artifact = self.artifact
+        current = artifact.current
+        if current is not None and not self.versions[current - 1].dropped:
+            return current
+        return next(v.version for v in reversed(self.versions) if not v.dropped)
 
     def _default_base(self, target: int) -> int:
         # A new document version is compared with what the host holds, which after a revert is not the previous one.
         applied = self.artifact.applied if self.artifact else None
         if applied is not None and applied != target:
             return applied
-        return max(target - 1, 1)
+        earlier = [v.version for v in self.versions[: target - 1] if not v.dropped]
+        return earlier[-1] if earlier else target
 
     def _version_options(self) -> dict[str, int]:
         applied = self.artifact.applied if self.artifact else None
-        return {_version_label(v, applied=v.version == applied): v.version for v in self.versions}
+        return {
+            _version_label(v, applied=v.version == applied): v.version for v in self.versions if not v.dropped
+        }
 
     def _on_applied(self, *events):
         options = self._version_options()
@@ -535,6 +550,8 @@ class ArtifactView(Viewer):
         if not isinstance(number, int) or not 1 <= number <= len(self.versions):
             raise ValueError(f"{artifact.artifact_id!r} has no version {number}.")
         version = self.versions[number - 1]
+        if version.dropped:
+            raise ValueError(f"Version {number} of {artifact.artifact_id!r} was dropped and cannot be applied.")
         self._apply_error.visible = False
         self._applying = True
         self._apply.param.update(disabled=True, loading=True)

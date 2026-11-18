@@ -243,6 +243,16 @@ class ArtifactApplied(Event):
 
 
 @dataclass(kw_only=True)
+class ArtifactVersionsDropped(Event):
+    """The values of a document's older versions were dropped to bound memory."""
+
+    type: ClassVar[str] = "ARTIFACT_VERSIONS_DROPPED"
+
+    artifact_id: str
+    before: int
+    """Versions numbered below this lose their value, except the applied one."""
+
+@dataclass(kw_only=True)
 class ApprovalRequested(Event):
     type: ClassVar[str] = "APPROVAL_REQUESTED"
 
@@ -320,7 +330,7 @@ class GuardrailFired(Event):
 
 
 _KIT_EVENTS = (
-    ArtifactPublished, ArtifactApplied, ApprovalRequested, ApprovalResolved, ModelRequestStarted, Usage, GuardrailFired,
+    ArtifactPublished, ArtifactApplied, ArtifactVersionsDropped, ApprovalRequested, ApprovalResolved, ModelRequestStarted, Usage, GuardrailFired,
 )
 
 __all__ = [name for name, obj in list(globals().items()) if isinstance(obj, type) and issubclass(obj, Event)]

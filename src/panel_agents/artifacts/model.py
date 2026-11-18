@@ -60,6 +60,11 @@ class ArtifactVersion(param.Parameterized):
 
     metadata = param.Dict(default={}, constant=True)
 
+    dropped = param.Boolean(default=False, constant=True, doc="""
+        Whether the version's value was dropped to bound memory, see
+        ``RunState.drop_artifact_versions``. It keeps its number and who
+        made it, but its ``value`` is None and it cannot be applied.""")
+
 
 class Artifact(param.Parameterized):
     """Something the agent produced, kept as a list of versions."""
@@ -248,6 +253,39 @@ class Artifact(param.Parameterized):
     def value(self) -> Any:
         return self.versions[self.current - 1].value if self.versions and self.current else None
 
+    def drop_versions(self, before: int) -> list[int]:
+        """
+        Drop the values of the versions numbered below ``before``, except
+        the applied one, and return the numbers dropped. Their numbers and
+        authors stay; they leave the undo and redo history, so undo stops
+        at the oldest version kept. Raises ``ValueError`` for an artifact
+        that is not a document, which has no applied version to keep.
+        """
+        if self.applied is None:
+            raise ValueError(f"{self.artifact_id!r} is not a document, so it has no versions to drop.")
+        numbers = [
+            v.version for v in self.versions[: max(before - 1, 0)]
+            if not v.dropped and v.version != self.applied
+        ]
+        if not numbers:
+            return []
+        gone = set(numbers)
+        for number in numbers:
+            with param.edit_constant(self.versions[number - 1]):
+                self.versions[number - 1].param.update(value=None, dropped=True)
+        self._undo[:] = [n for n in self._undo if n not in gone]
+        self._redo[:] = [n for n in self._redo if n not in gone]
+        self._redo_steps[:] = [step for step in ([n for n in s if n not in gone] for s in self._redo_steps) if step]
+        update = self._stacks()
+        if self.current in gone:
+            update["current"] = self.applied or next(
+                (v.version for v in reversed(self.versions) if not v.dropped), None
+            )
+        with param.edit_constant(self):
+            self.param.update(update)
+        self.param.trigger("versions")
+        return numbers
+
     def add_version(
         self,
         value: Any,
@@ -315,6 +353,13 @@ class ArtifactStore(param.Parameterized):
         self._reindex()
         for call_id in list(self._call_watchers):
             self._notify(call_id)
+
+    def drop_versions(self, artifact_id: str, before: int) -> list[int]:
+        """Drop the values of older versions of an artifact, see ``Artifact.drop_versions``."""
+        numbers = self.artifacts[artifact_id].drop_versions(before)
+        if numbers:
+            self._reindex()
+        return numbers
 
     def __getitem__(self, artifact_id: str) -> Artifact:
         return self.artifacts[artifact_id]
@@ -397,7 +442,7 @@ class ArtifactStore(param.Parameterized):
 
     def _index(self, artifact_id: str, version: ArtifactVersion):
         self._order.setdefault(artifact_id, len(self._order))
-        if version.tool_call_id is None:
+        if version.tool_call_id is None or version.dropped:
             return
         self._by_call.setdefault(version.tool_call_id, {})[artifact_id] = version
         self._publishers.setdefault(artifact_id, {})[version.tool_call_id] = None
@@ -438,6 +483,8 @@ class ArtifactStore(param.Parameterized):
         artifact = self.artifacts[artifact_id]
         if not 1 <= version <= len(artifact.versions):
             raise ValueError(f"{artifact_id!r} has no version {version}.")
+        if artifact.versions[version - 1].dropped:
+            raise ValueError(f"Version {version} of {artifact_id!r} was dropped and cannot be applied.")
         with param.edit_constant(artifact):
             artifact.param.update(artifact._move_applied(version, action))
         self.param.trigger("artifacts")
