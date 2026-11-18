@@ -51,14 +51,16 @@ The cards say "Approve" and "Deny" by default. When an approval is not about a t
 
 ```python
 policy = ApprovalPolicy([
-    ApprovalRule("plan_step", labels={"approve": "Approve", "deny": "Remove"}),
+    ApprovalRule("plan_step", labels={"deny": "Remove", "denied": "Removed"}),
     "run_sql",
 ])
 ```
 
-The plan steps now show "Approve" and "Remove", once decided they read "Removed", and the tool-call card's badge says "Removed" instead of "Denied". The `run_sql` cards keep "Approve" and "Deny". An `ApprovalQueue` names its batch buttons "Approve all" and "Remove all" while every pending request is a plan step.
+The plan steps now show "Approve" and "Remove", once decided they read "Removed", and the tool-call card's badge says "Removed" instead of "Denied". The `run_sql` cards keep "Approve" and "Deny". An `ApprovalQueue` names its batch buttons "Approve all" and "Remove all" while every pending request is a plan step. The deny action keeps its red text style, which suits a removal as well.
 
-Only `approve` and `deny` usually need to be given. The past tense (`approved`, `denied`) is derived by adding "d" or "ed", so pass it as well for an irregular verb, and the batch and edit wording (`approve_all`, `deny_all`, `approve_edited`, `approved_edited`) is derived from those; any of them, and `edit` for the edit toggle, can be overridden. To change the wording for every card rather than per tool, pass `labels` to `ApprovalCard` or `ApprovalQueue`; labels from a rule take precedence. The deny action keeps its red text style, which suits a removal as well.
+A changed `approve` or `deny` must come with its past tense, `approved` or `denied`, since it is shown once the request is decided; leaving it out raises `ValueError`. The rest is derived: `approve_all` and `deny_all` append "all", and `approve_edited` and `approved_edited` append "with edits", which reads well when `approve` and `deny` are single verbs. Give any of them explicitly otherwise, for example `"deny_all": "Remove all steps"`, and `edit` names the edit toggle.
+
+Labels on a rule are the main way to set them, because they travel with the request to every place it is shown, including the tool-call card in the chat. `ApprovalCard` and `ApprovalQueue` also take `labels`, applied under the request's own, for an app that wants different words on every card. These do not reach the tool-call card's badge, nor the cards inside `AgentChat` and `AgentDrawer`, which build their own; use a rule there. A tool that asks for approval itself, with `requires_approval=True` or `ApprovalRequired`, matches no rule and so gets the component labels or the defaults.
 
 ## Who may approve is enforced, not only shown
 

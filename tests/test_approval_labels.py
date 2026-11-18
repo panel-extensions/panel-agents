@@ -9,7 +9,7 @@ from panel_agents.components.tool_call import ToolCallCard
 
 from .test_pydantic_ai import make_runner, resolve_on_request, streaming, tool_returns
 
-PLAN = {"approve": "Approve", "deny": "Remove"}
+PLAN = {"approve": "Approve", "deny": "Remove", "denied": "Removed"}
 
 
 def make_state(*labels):
@@ -32,17 +32,44 @@ def test_default_labels():
     }
 
 
-def test_labels_derive_from_verbs():
-    labels = approval_labels(PLAN)
-    assert (labels["denied"], labels["deny_all"]) == ("Removed", "Remove all")
-    assert approval_labels({"deny": "Reject"})["denied"] == "Rejected"
-    assert approval_labels({"approve": "Apply"})["approved"] == "Applied"
-    assert approval_labels({"deny": "Skip", "denied": "Skipped"})["denied"] == "Skipped"
+@pytest.mark.parametrize("verb, past", [("Remove", "Removed"), ("Skip", "Skipped"), ("Run", "Ran")])
+def test_labels_derive_batch_and_edit_wording(verb, past):
+    labels = approval_labels({"approve": verb, "approved": past, "deny": verb, "denied": past})
+    assert (labels["approved"], labels["denied"]) == (past, past)
+    assert (labels["approve_all"], labels["deny_all"]) == (f"{verb} all", f"{verb} all")
+    assert (labels["approve_edited"], labels["approved_edited"]) == (f"{verb} with edits", f"{past} with edits")
 
 
-def test_later_labels_take_precedence():
-    assert approval_labels({"deny": "Reject"}, {"deny": "Remove"})["deny"] == "Remove"
-    assert approval_labels({"deny": "Remove"}, None)["deny"] == "Remove"
+@pytest.mark.parametrize("labels", [{"deny": "Remove"}, {"approve": "Run"}, {"deny": "Skip", "approved": "Skipped"}])
+def test_changed_verb_needs_its_past_tense(labels):
+    with pytest.raises(ValueError, match="also needs"):
+        ApprovalRule("plan_step", labels=labels)
+    with pytest.raises(ValueError, match="also needs"):
+        ApprovalQueue(make_state(None), labels=labels)
+
+
+def test_default_verb_needs_no_past_tense():
+    assert approval_labels({"approve": "Approve", "deny": "Remove", "denied": "Removed"})["approved"] == "Approved"
+
+
+def test_explicit_batch_labels():
+    labels = approval_labels({"deny": "Remove step", "denied": "Removed", "deny_all": "Remove all steps"})
+    assert labels["deny_all"] == "Remove all steps"
+
+
+def test_later_layer_resets_derived_labels():
+    labels = approval_labels(
+        {"deny": "Reject", "denied": "Rejected", "approve": "Run", "approved": "Ran"},
+        {"deny": "Remove", "denied": "Removed"},
+        {"approve": "Approve"},
+    )
+    assert labels == approval_labels()| {"deny": "Remove", "denied": "Removed", "deny_all": "Remove all"}
+    assert approval_labels({"deny": "Remove", "denied": "Removed"}, None)["deny"] == "Remove"
+
+
+def test_recorded_layer_without_past_tense_keeps_earlier_verb():
+    labels = approval_labels({"deny": "Reject", "denied": "Rejected"}, {"deny": "Remove"})
+    assert (labels["deny"], labels["denied"], labels["deny_all"]) == ("Reject", "Rejected", "Reject all")
 
 
 def test_default_card_wording_is_unchanged():
@@ -63,13 +90,21 @@ def test_card_labels():
     card.can_approve = lambda request, user: False
     assert card._policy.object == "You are not permitted to approve or remove this tool call."
     card.can_approve = None
-    card.labels = {"deny": "Drop"}
+    card.labels = {"deny": "Drop", "denied": "Dropped"}
     assert card._deny.label == "Drop"
+    assert card._edit_toggle.description == "Edit the arguments first"
+
+
+def test_policy_message_escapes_labels():
+    state = make_state(None)
+    card = ApprovalCard(request=state.approvals["t1"], state=state, labels={"deny": "Drop *now*", "denied": "Dropped"})
+    card.can_approve = lambda request, user: False
+    assert "drop \\*now\\*" in card._policy.object
 
 
 def test_card_approve_with_edits_label():
     state = make_state(None)
-    card = ApprovalCard(request=state.approvals["t1"], state=state, labels={"approve": "Run"})
+    card = ApprovalCard(request=state.approvals["t1"], state=state, labels={"approve": "Run", "approved": "Ran"})
     card.editing = True
     card.form.value = {"question": "Step one"}
     assert card._approve.label == "Run with edits"
@@ -85,9 +120,27 @@ def test_unknown_label_raises():
         ApprovalQueue(state, labels={"deny": ""})
 
 
+def test_rule_labels_are_read_only():
+    rule = ApprovalRule("plan_step", labels=PLAN)
+    with pytest.raises(TypeError):
+        rule.labels["deny"] = "Drop"
+
+
+def test_card_factory_gets_labels_only_when_set():
+    seen = []
+
+    def factory(request, state, **params):
+        seen.append(params)
+        return ApprovalCard(request=request, state=state, **params)
+
+    ApprovalQueue(make_state(None), card_factory=factory)
+    ApprovalQueue(make_state(None), card_factory=factory, labels=PLAN)
+    assert ["labels" in p for p in seen] == [False, True]
+
+
 def test_request_labels_override_card_labels():
     state = make_state(PLAN)
-    card = ApprovalCard(request=state.approvals["t1"], state=state, labels={"deny": "Reject"})
+    card = ApprovalCard(request=state.approvals["t1"], state=state, labels={"deny": "Reject", "denied": "Rejected"})
     assert card._deny.label == "Remove"
 
 
@@ -104,7 +157,7 @@ def test_queue_labels_propagate_to_cards():
     queue = ApprovalQueue(state, labels=PLAN)
     assert [c._deny.label for c in queue.cards] == ["Remove", "Remove"]
     assert (queue._approve_all.label, queue._deny_all.label) == ("Approve all", "Remove all")
-    queue.labels = {"deny": "Reject"}
+    queue.labels = {"deny": "Reject", "denied": "Rejected"}
     assert [c._deny.label for c in queue.cards] == ["Reject", "Reject"]
     assert queue._deny_all.label == "Reject all"
 
@@ -155,7 +208,7 @@ def test_labels_round_trip_through_recording(tmp_path):
 
 
 def test_unknown_recorded_label_is_ignored():
-    state = make_state({"deny": "Remove", "later_key": "x"})
+    state = make_state({"deny": "Remove", "denied": "Removed", "later_key": "x"})
     assert ApprovalCard(request=state.approvals["t1"], state=state)._deny.label == "Remove"
 
 
