@@ -17,7 +17,7 @@ import re
 from typing import Any
 
 import param
-from panel.viewable import Viewer
+from panel.viewable import Viewable, Viewer
 from panel_material_ui.layout import Card, Column
 from panel_material_ui.widgets import (
     Checkbox,
@@ -587,8 +587,11 @@ class SchemaForm(Viewer):
         if self._root is not None:
             yield from self._root.leaves()
 
-    def field(self, path: str | tuple[str, ...]):
-        """Return the widget for the field at `path`, a dotted string or tuple of keys."""
+    def field(self, path: str | tuple[str, ...]) -> Viewable:
+        """
+        Return the panel-material-ui widget of the field at `path`, a dotted
+        string or tuple of keys, or the card holding a nested object's fields.
+        """
         parts = tuple(path.split(".")) if isinstance(path, str) else tuple(path)
         if self._wrapped:
             # The single JSON editor of a free-form schema is addressable as "" or "value".
