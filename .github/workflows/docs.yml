@@ -14,9 +14,9 @@ on:
 
 permissions: {}
 
-# Pull requests build in their own group; pushes share one deployment group.
+# Only tags deploy, so only tags share the Pages group; everything else builds per ref.
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('docs-{0}', github.ref) || 'pages' }}
+  group: ${{ startsWith(github.ref, 'refs/tags/') && 'pages' || format('docs-{0}', github.ref) }}
   cancel-in-progress: true
 
 jobs:
@@ -39,13 +39,13 @@ jobs:
         run: pixi run -e docs docs-build
 
       - name: Upload artifact
-        if: github.event_name != 'pull_request'
+        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
           path: ./builtdocs
 
   deploy:
-    if: github.event_name != 'pull_request'
+    if: startsWith(github.ref, 'refs/tags/')
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
