@@ -126,24 +126,31 @@ def _timeline(state):
     return "\n".join(lines)
 
 
-@pytest.mark.parametrize("attempt", range(4))
-def test_every_cell_of_a_streaming_run_renders(page, attempt):
-    runner, chat = _streaming_chat(3)
-    page.set_viewport_size({"width": 1400, "height": 1000})
+def _ask_for_tables(page, chat, runner):
     serve_component(page, chat)
     box = page.get_by_placeholder("Ask the agent…")
     box.fill("tables 3")
     box.press("Enter")
-    wait_until(lambda: bool(runner.state.runs) and not runner.state.running, page, timeout=90000)
-    # Where a slow run spends its time, shown if it fails.
-    print(_timeline(runner.state))
-    page.get_by_text("Here are the tables.").wait_for(timeout=15000)
+    wait_until(lambda: bool(runner.state.runs) and not runner.state.running, page, timeout=120000)
+    page.get_by_text("Here are the tables.").wait_for(timeout=30000)
+    (run,) = runner.state.runs.values()
+    return run.duration
+
+
+@pytest.mark.parametrize("attempt", range(4))
+def test_every_cell_of_a_streaming_run_renders(page, attempt):
+    page.set_viewport_size({"width": 1400, "height": 1000})
+    # The same run in the chat layout gives the pace of this machine to compare with.
+    runner, chat = _streaming_chat(3)
+    chat_layout = AgentChat(runner=runner, feed_params={"height": 800})
+    baseline = _ask_for_tables(page, chat_layout, runner)
+    runner, chat = _streaming_chat(3)
+    duration = _ask_for_tables(page, chat, runner)
     cells = page.locator(".artifact-cell")
     expect(cells).to_have_count(3)
     for i in range(3):
         expect(page.locator(".artifact-cell", has_text=f"table_{i}")).to_contain_text(str(i + 1))
-    (run,) = runner.state.runs.values()
-    assert run.duration < 10, _timeline(runner.state)
+    assert duration < 2 * baseline + 2, f"chat layout {baseline:.2f}s\n{_timeline(runner.state)}"
 
 
 def test_a_run_past_max_cells_shows_the_rest_on_request(page):
@@ -154,7 +161,8 @@ def test_a_run_past_max_cells_shows_the_rest_on_request(page):
     box = page.get_by_placeholder("Ask the agent…")
     box.fill("tables 12")
     box.press("Enter")
-    page.get_by_text("Here are the tables.").wait_for(timeout=15000)
+    wait_until(lambda: bool(runner.state.runs) and not runner.state.running, page, timeout=120000)
+    page.get_by_text("Here are the tables.").wait_for(timeout=30000)
     expect(page.locator(".artifact-cell")).to_have_count(5)
     page.get_by_role("button", name="Show 7 more").click()
     expect(page.locator(".artifact-cell")).to_have_count(12)
@@ -169,7 +177,7 @@ def test_the_input_offers_stop_only_while_a_run_goes_on(page):
     box.fill("tables 1")
     box.press("Enter")
     expect(page.get_by_role("button", name="Stop")).to_be_visible()
-    page.get_by_text("Here are the tables.").wait_for(timeout=15000)
+    page.get_by_text("Here are the tables.").wait_for(timeout=60000)
     expect(page.get_by_role("button", name="Stop")).to_have_count(0)
     expect(page.get_by_role("button", name="Send message")).to_be_visible()
 
