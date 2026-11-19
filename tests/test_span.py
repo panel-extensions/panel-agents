@@ -1,6 +1,6 @@
 import pytest
 
-from panel_agents import AgentChat, AgentDrawer, ArtifactView, RunState, SpanView, ToolCallCard
+from panel_agents import AgentChat, AgentDrawer, ArtifactView, RunState, RunTrace, SpanView, ToolCallCard
 from panel_agents import events as ev
 from panel_agents.components.model_call import ModelCallCard
 
@@ -114,7 +114,7 @@ def test_span_view_shows_the_question_steps_and_published_versions():
     assert "1 step blocked, 1 request retried, 1 tool call failed" in head
     assert view._trace.run_id == "r1" and view._trace._step_count == 7
     assert [i["secondary"] for i in view._published.items] == ["v1 · Added revenue", "v2"]
-    assert view._problems.visible and "Blocked: Blocked SELECT" in view._problems.object.replace("\\", "")
+    assert view._problems.visible and "Blocked SELECT" in view._problems.object.replace("\\", "")
     assert not view._unrecorded.visible and not view._missing.visible
 
 
@@ -289,7 +289,7 @@ def test_cancelled_runs_are_not_failures():
     assert [(e.kind, e.message) for e in s.span("r").errors] == [("cancelled", "Stopped by the user")]
     view = SpanView(s, run_id="r")
     assert "Cancelled: Stopped by the user" in view._header.object and "Failed" not in view._header.object
-    assert "The run was cancelled: Stopped by the user" in view._problems.object.replace("\\", "")
+    assert view._header.object.count("Stopped by the user") == 1 and not view._problems.visible
     assert "Cancelled</span>" in SpanView(s, run_id="r", redacted=True)._header.object
 
 
@@ -385,3 +385,21 @@ def test_redacted_cards_hide_approval_descriptions_and_argument_tooltips():
     assert "customers" not in card._header.object
     plain = ToolCallCard(s.tool_calls["t"], state=s)
     assert "customers" in plain._approval.objects[0].object
+
+
+def test_the_question_is_shown_once():
+    view = SpanView(state(), run_id="r1")
+    assert "Paid revenue by region?" in view._header.object
+    assert "Paid revenue" not in view._trace._axis.object
+    assert "Blocked: Blocked" not in view._problems.object.replace("\\", "")
+    assert RunTrace(state(), run_id="r1").run.run_id == "r1"
+
+
+def test_failures_beyond_the_row_limit_reach_the_header():
+    s = RunState(flush_interval=0)
+    s.apply(ev.RunStarted(run_id="r", timestamp=0))
+    for i in range(5):
+        s.apply(ev.ToolCallStart(tool_call_id=f"t{i}", tool_name="x", run_id="r", timestamp=i))
+    view = SpanView(s, run_id="r", row_limit=2)
+    s.apply(ev.ToolCallResult(tool_call_id="t4", content="no", is_error=True, run_id="r", timestamp=9))
+    assert "1 tool call failed" in view._header.object

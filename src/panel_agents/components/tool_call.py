@@ -224,20 +224,18 @@ class ToolCallCard(Viewer):
         if it raises or returns anything but a non-empty string the header
         shows the tool name and arguments as without a label.""")
 
-    defer_result = param.Boolean(default=False, constant=True, doc="""
-        Whether the result is rendered only once the card is opened, so a
-        long list of collapsed cards stays cheap.""")
-
     redacted = param.Boolean(default=False, constant=True, doc="""
         Whether to show which tool ran, its status and duration without
         its arguments, result or error message, e.g. for a viewer who may
         not see the data. A callable ``label`` is not used, as it reads
         the arguments.""")
 
-    def __init__(self, call: ToolCallState | None = None, **params):
+    def __init__(self, call: ToolCallState | None = None, *, _defer_result: bool = False, **params):
         if call is not None:
             params["call"] = call
         super().__init__(**params)
+        # A run trace renders a result once its card is opened, so a long list of collapsed cards stays cheap.
+        self._defer_result = _defer_result
         self._header = pn.pane.HTML(sizing_mode="stretch_width", margin=0, stylesheets=[_HEADER_CSS])
         self._args = _output_markdown(margin=(2, 0), stylesheets=[_ARGS_CSS], css_classes=["tc-args"])
         self._result = pn.Column(sizing_mode="stretch_width", margin=0)
@@ -390,7 +388,7 @@ class ToolCallCard(Viewer):
         if result is not None and result is self._rendered_result and self._result.objects:
             return
         # A result is rendered once the card is opened, so long runs of collapsed cards stay cheap.
-        self._deferred = result is not None and self.collapsed and self.defer_result
+        self._deferred = result is not None and self.collapsed and self._defer_result
         if self._deferred:
             self._result.objects = []
             self._result_section.visible = False

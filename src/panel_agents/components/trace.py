@@ -151,7 +151,7 @@ class RunTrace(Viewer):
         Number of steps built at first, with a button building the next
         as many, or None to build them all. Keeps a long run cheap to open.""")
 
-    def __init__(self, state: RunState | None = None, **params):
+    def __init__(self, state: RunState | None = None, *, _hide_question: bool = False, **params):
         if state is not None:
             params["state"] = state
         super().__init__(**params)
@@ -167,7 +167,7 @@ class RunTrace(Viewer):
             self._totals, self._axis, self._rows, self._more, sizing_mode="stretch_width", css_classes=["run-trace"],
         )
         # A SpanView shows the question in its own header.
-        self._hide_question = False
+        self._hide_question = _hide_question
         # Called after every refresh, e.g. by a SpanView keeping its header current.
         self._on_refresh: Any = None
         # Cards are kept per item and rows per item and depth, so expanded cards survive other runs and switching back.
@@ -179,6 +179,7 @@ class RunTrace(Viewer):
         self._labels: dict[str, pn.pane.HTML] = {}
         self._shown: list[tuple[Any, int]] | None = None
         self._own_items: list[Any] = []
+        self._step_watchers: list[tuple[Any, Any]] = []
         self._ids: set[str] = set()
         self._watched_runs: list[tuple[Any, Any]] = []
         self._state_watchers = [
@@ -206,11 +207,17 @@ class RunTrace(Viewer):
         self._state_watchers = []
         self._unwatch_runs()
         self._forget(set())
+        self._unwatch_steps()
         self._shown = None
 
     @property
-    def _run(self):
+    def run(self):
+        """The ``RunInfo`` of the run shown, or None."""
         return self.state.runs.get(self.run_id) if self.run_id else None
+
+    @property
+    def _run(self):
+        return self.run
 
     @param.depends("run_id", "include_children", watch=True)
     def _show_run(self):
@@ -231,7 +238,21 @@ class RunTrace(Viewer):
 
     def _rebuild_items(self):
         self._ids = set(self._tree_ids())
-        self._own_items = [i for i in self.state.items if i.run_id in self._ids]
+        self._unwatch_steps()
+        self._own_items = []
+        self._add_items([i for i in self.state.items if i.run_id in self._ids])
+
+    def _add_items(self, items: list[Any]):
+        self._own_items += items
+        # Every step is watched, shown or not, so counts of failures in steps beyond the row limit stay current.
+        for item in items:
+            if isinstance(item, (ModelCallState, ToolCallState)):
+                self._step_watchers.append((item, item.param.watch(self._refresh_item, ["status", "ended_at"])))
+
+    def _unwatch_steps(self):
+        for item, watcher in self._step_watchers:
+            item.param.unwatch(watcher)
+        self._step_watchers = []
 
     def _unwatch_runs(self):
         for run, watcher in self._watched_runs:
@@ -303,8 +324,7 @@ class RunTrace(Viewer):
             if isinstance(item, ModelCallState):
                 card = ModelCallCard(item, state=self.state, show_tool_count=True, redacted=self.redacted)
             else:
-                card = ToolCallCard(item, state=self.state, redacted=self.redacted, defer_result=True)
-            self._watch_item(item, self._refresh_item, ["status", "ended_at"])
+                card = ToolCallCard(item, state=self.state, redacted=self.redacted, _defer_result=True)
         self._cards[id(item)] = card
         return card
 
@@ -347,7 +367,7 @@ class RunTrace(Viewer):
                 added = [i for i in new[len(old):] if i.run_id in self._ids]
                 if not added:
                     return
-                self._own_items += added
+                self._add_items(added)
             else:
                 self._forget({id(i) for i in new if self._cached.get(id(i)) is i})
                 self._rebuild_items()
@@ -379,8 +399,12 @@ class RunTrace(Viewer):
             self._update_rows()
 
     def _refresh_item(self, *events):
+        if self._released:
+            return
         if self._shown is not None and any(i is events[0].obj for i, _ in self._shown):
             self._refresh()
+        elif self._on_refresh is not None:
+            self._on_refresh()
 
     def _window(self) -> tuple[float, float]:
         run = self._run

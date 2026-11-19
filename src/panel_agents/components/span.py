@@ -112,8 +112,8 @@ class SpanView(Viewer):
         )
         self._trace = RunTrace(
             self.state, run_id=self.run_id, redacted=self.redacted, row_limit=self.row_limit, include_children=True,
+            _hide_question=True,
         )
-        self._trace._hide_question = True
         self._problems = pmui.Alert(
             object="", title="Problems", severity="warning", variant="outlined",
             sizing_mode="stretch_width", visible=False, margin=(4, 0),
@@ -210,19 +210,17 @@ class SpanView(Viewer):
         self._header.object = self._header_html(run, runs, question, errors)
         self._unrecorded.visible = not self._trace._step_count and run.status != "running"
         # Errors a step already shows: failed requests, retries and tool calls, and the error message of a top-level run.
-        unshown = [
-            e for e in errors
-            if e.kind in ("guardrail", "cancelled") or (e.kind == "run" and e.item is not run)
-        ]
+        # The run's own failure is a step and its cancellation is in the header.
+        unshown = [e for e in errors if e.kind == "guardrail" or (e.kind in ("run", "cancelled") and e.item is not run)]
         lines = []
         for e in unshown:
             if e.kind == "guardrail":
-                text = "A guardrail blocked a step." if self.redacted else f"Blocked: {e.message}"
+                message = e.message if e.message.lower().startswith("blocked") else f"Blocked: {e.message}"
+                text = "A guardrail blocked a step." if self.redacted else message
             else:
                 name = e.item.agent_name or e.item.run_id
                 verb = "was cancelled" if e.kind == "cancelled" else "failed"
-                who = "The run" if e.item is run else f"Sub-run {name}"
-                text = f"{who} {verb}." if self.redacted else f"{who} {verb}: {e.message}"
+                text = f"Sub-run {name} {verb}." if self.redacted else f"Sub-run {name} {verb}: {e.message}"
             lines.append(_escape_markdown(text))
         self._problems.param.update(object="\n\n".join(lines), visible=bool(lines))
 

@@ -332,7 +332,7 @@ def test_store_lookup_survives_undo_and_redo(state):
 
 
 def test_a_collapsed_card_renders_its_result_once_opened(state):
-    card = ToolCallCard(start(state), state=state, defer_result=True)
+    card = ToolCallCard(start(state), state=state, _defer_result=True)
     finish(state, [{"a": 1}])
     assert card._result.objects == [] and not card._result_section.visible
     card.collapsed = False
