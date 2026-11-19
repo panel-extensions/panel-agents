@@ -42,6 +42,10 @@ def messages(chat):
     return [m for m in chat.feed.objects if not is_cells(m)]
 
 
+def row_cells(chat, row):
+    return [c for c in chat.cells.values() if c.__panel__() in row.object.objects[0].objects]
+
+
 def cells_after(chat, message):
     """The cells shown right after *message*."""
     objects = chat.feed.objects
@@ -79,22 +83,42 @@ def test_a_run_with_only_a_question_shows_its_artifacts_under_the_question():
     assert len(cells_after(chat, user)) == 1
 
 
-def test_cells_stay_where_they_were_put_while_the_run_streams():
-    state = RunState(flush_interval=0)
-    chat = AgentChat(state, layout="document", readonly=True)
-    state.apply_many([*question("r1", "Revenue?"), table("r1", "a")])
-    (user,) = messages(chat)
-    row = chat.feed.objects[-1]
-    first = cells_after(chat, user)
-    assert len(first) == 1
-    flex = row.object.objects[0]
-    state.apply_many(answer("r1", "East leads."))
-    state.apply(table("r1", "b"))
-    state.apply(ev.RunFinished(run_id="r1"))
-    user, reply = messages(chat)
-    assert chat.feed.objects == [user, row, reply]
-    assert row.object.objects[0] is flex
-    assert flex.objects[0] is first[0] and len(flex.objects) == 2
+def test_cells_end_their_run_live_as_in_a_replay():
+    events = [
+        *question("r1", "Revenue?"),
+        ev.ToolCallStart(tool_call_id="c1", tool_name="make", run_id="r1"),
+        ev.ToolCallEnd(tool_call_id="c1", run_id="r1"),
+        ev.ToolCallResult(tool_call_id="c1", content="ok", run_id="r1"),
+        table("r1", "a", tool_call_id="c1"),
+        ev.ToolCallStart(tool_call_id="c2", tool_name="make", run_id="r1"),
+        ev.ToolCallEnd(tool_call_id="c2", run_id="r1"),
+        ev.ToolCallResult(tool_call_id="c2", content="ok", run_id="r1"),
+        table("r1", "b", tool_call_id="c2"),
+        *answer("r1", "East leads."),
+        ev.RunFinished(run_id="r1"),
+        *question("r2", "And by state?"),
+        table("r2", "c"),
+        *answer("r2", "Texas."),
+        ev.RunFinished(run_id="r2"),
+    ]
+
+    def shape(chat):
+        return [
+            ("cells", tuple(c.artifact.artifact_id for c in row_cells(chat, m))) if is_cells(m) else ("message", m.user)
+            for m in chat.feed.objects if m.visible
+        ]
+
+    live_state = RunState(flush_interval=0)
+    live = AgentChat(live_state, layout="document", readonly=True)
+    first = None
+    for event in events:
+        live_state.apply(event)
+        if first is None and live.cells:
+            first = next(iter(live.cells.values()))
+    replay = AgentChat(RunState.from_events(events), layout="document", readonly=True)
+    assert shape(live) == shape(replay)
+    assert shape(live)[-1] == ("cells", ("c",))
+    assert live.cells["a"] is first
 
 
 def test_a_run_past_max_cells_shows_the_rest_on_request():

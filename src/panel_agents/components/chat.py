@@ -531,6 +531,10 @@ class AgentChat(Viewer):
             message = self._messages[id(item)]
             index = self._index[id(item)]
             position = len(objects) if index >= tail_from else self._position(objects, present, index)
+            # A run's row of cells ends the run, as it does when the run is replayed.
+            row = self._cell_rows.get(root_run_id(self.state.runs, getattr(item, "run_id", None)))
+            if row is not None and id(row.message) in present:
+                position = min(position, objects.index(row.message))
             objects.insert(position, message)
             present.add(id(message))
             messages.append(message)
@@ -540,6 +544,9 @@ class AgentChat(Viewer):
                 position = objects.index(first)
             else:
                 position = self._position(objects, present, self._index[id(group.calls[0])], own_row=False)
+            row = self._cell_rows.get(root_run_id(self.state.runs, group.calls[0].run_id))
+            if row is not None and id(row.message) in present:
+                position = min(position, objects.index(row.message))
             objects.insert(position, group.message)
             present.add(id(group.message))
         for group in removed:
@@ -605,8 +612,9 @@ class AgentChat(Viewer):
         """
         Add the cells of newly published inline artifacts. A run's row of
         cells is put after the run's messages shown when its first artifact
-        is published, and stays there: later cells are appended to it, so
-        nothing on screen is moved or rendered again.
+        is published and stays there, while the run's later messages go in
+        before it, so the cells end the run as they do in a replay. Later
+        cells are appended to the row, so no cell is moved or rendered again.
         """
         if self.layout != "document":
             return

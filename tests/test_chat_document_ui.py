@@ -111,6 +111,21 @@ def _streaming_chat(tables: int, slow: float = 0):
     return runner, AgentChat(runner=runner, layout="document", feed_params={"height": 800}, max_cells=20)
 
 
+def _timeline(state):
+    (run,) = state.runs.values()
+    start = run.started_at
+    lines = [f"run {run.duration:.2f}s"]
+    for item in state.items:
+        begin = getattr(item, "started_at", None) or getattr(item, "created_at", None)
+        end = getattr(item, "ended_at", None)
+        name = getattr(item, "tool_name", None) or getattr(item, "model_name", None) or getattr(item, "kind", "")
+        lines.append(
+            f"{type(item).__name__} {name} {(begin or start) - start:.2f}"
+            + (f" .. {end - start:.2f}" if end else "")
+        )
+    return "\n".join(lines)
+
+
 @pytest.mark.parametrize("attempt", range(4))
 def test_every_cell_of_a_streaming_run_renders(page, attempt):
     runner, chat = _streaming_chat(3)
@@ -119,12 +134,16 @@ def test_every_cell_of_a_streaming_run_renders(page, attempt):
     box = page.get_by_placeholder("Ask the agent…")
     box.fill("tables 3")
     box.press("Enter")
+    wait_until(lambda: bool(runner.state.runs) and not runner.state.running, page, timeout=90000)
+    # Where a slow run spends its time, shown if it fails.
+    print(_timeline(runner.state))
     page.get_by_text("Here are the tables.").wait_for(timeout=15000)
     cells = page.locator(".artifact-cell")
     expect(cells).to_have_count(3)
     for i in range(3):
         expect(page.locator(".artifact-cell", has_text=f"table_{i}")).to_contain_text(str(i + 1))
-    wait_until(lambda: not runner.state.running, page)
+    (run,) = runner.state.runs.values()
+    assert run.duration < 10, _timeline(runner.state)
 
 
 def test_a_run_past_max_cells_shows_the_rest_on_request(page):
