@@ -205,6 +205,11 @@ class ToolCallCard(Viewer):
         widget shown while the call awaits approval. When None a short
         notice is shown instead.""")
 
+    show_artifact = param.Callable(default=None, allow_None=True, doc="""
+        Predicate ``(artifact) -> bool`` choosing which published artifacts
+        get a chip, e.g. leaving out those a feed shows inline already.
+        Defaults to all of them.""")
+
     max_chars = param.Integer(default=20_000, bounds=(1, None), doc="""
         Maximum number of characters of a string result to display.""")
 
@@ -472,6 +477,8 @@ class ToolCallCard(Viewer):
 
     def _update_artifacts(self, *_):
         published = self.published_artifacts()
+        if self.show_artifact is not None:
+            published = [(a, v) for a, v in published if self.show_artifact(a)]
         chips = {}
         for artifact, version in published:
             label = artifact.title or artifact.artifact_id

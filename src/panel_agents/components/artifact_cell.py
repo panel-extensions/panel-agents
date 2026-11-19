@@ -18,21 +18,11 @@ from panel.viewable import Viewer
 
 from ..actions import ActionRegistry
 from ..artifacts.model import Artifact
+from ..security import _escape_markdown, _plain_typography, untrusted_markdown
+from .artifacts import _kind_icon
 from .renderers import render
 
 logger = logging.getLogger(__name__)
-
-_KIND_ICONS = {
-    "table": "table_chart",
-    "sql": "code",
-    "code": "code",
-    "python": "code",
-    "json": "data_object",
-    "text": "article",
-    "markdown": "article",
-    "plot": "insert_chart",
-    "chart": "insert_chart",
-}
 
 _CELL_CSS = """
 :host {
@@ -91,22 +81,23 @@ class ArtifactCell(Viewer):
         The actions offered on the cell; those whose action the registry
         does not have are left out.""")
 
-    def __init__(self, artifact: Artifact | None = None, **params):
+    def __init__(self, artifact: Artifact | None = None, *, styles: dict | None = None, **params):
         if artifact is not None:
             params["artifact"] = artifact
         super().__init__(**params)
         artifact = self.artifact
         self._chip = pmui.Chip(
-            label=artifact.kind, icon=_KIND_ICONS.get(artifact.kind, "inventory_2"), size="small",
+            label=artifact.kind, icon=_kind_icon(artifact.kind), size="small",
             variant="outlined", margin=(0, 8, 0, 0), css_classes=["artifact-cell-kind"],
         )
-        self._title = pmui.Typography(
+        # Titles and errors may carry injected content, so they are plain text.
+        self._title = _plain_typography(
             artifact.title or artifact.artifact_id, variant="subtitle2", margin=0,
             sx={"fontFamily": "monospace", "overflow": "hidden", "textOverflow": "ellipsis", "whiteSpace": "nowrap"},
             css_classes=["artifact-cell-title"],
         )
         self._actions = pn.Row(margin=0, css_classes=["artifact-cell-actions"])
-        self._error = pmui.Typography(
+        self._error = _plain_typography(
             "", variant="caption", visible=False, margin=(4, 12),
             sx={"color": "error.main"}, css_classes=["artifact-cell-error"],
         )
@@ -118,9 +109,10 @@ class ArtifactCell(Viewer):
         )
         self._layout = pn.Column(
             header, self._error, self._body, sizing_mode="stretch_width", margin=0,
-            stylesheets=[_CELL_CSS], css_classes=["artifact-cell"],
+            stylesheets=[_CELL_CSS], css_classes=["artifact-cell"], styles=styles or {},
         )
         self._rendered: int | None = None
+        self._controls: dict[tuple, Any] = {}
         self._watchers = [
             artifact.param.watch(self._update_title, "title"),
             artifact.param.watch(self._update_body, "versions"),
@@ -138,7 +130,7 @@ class ArtifactCell(Viewer):
         self._watchers = []
 
     def _update_title(self, *_):
-        self._title.object = self.artifact.title or self.artifact.artifact_id
+        self._title.object = _escape_markdown(self.artifact.title or self.artifact.artifact_id)
 
     def _update_body(self, *_):
         latest = self.artifact.latest
@@ -150,9 +142,20 @@ class ArtifactCell(Viewer):
 
     def _render(self):
         artifact = self.artifact
-        if self.renderer is not None:
-            return self.renderer(artifact)
-        return render(artifact.value, artifact.kind)
+        try:
+            if self.renderer is None:
+                return render(artifact.value, artifact.kind)
+            view = self.renderer(artifact)
+        except Exception as exc:
+            # A broken renderer must not stop the run that published the artifact.
+            logger.exception("Rendering the artifact %s failed", artifact.artifact_id)
+            return _plain_typography(
+                f"This artifact could not be shown: {exc}", variant="body2", margin=(8, 12),
+                sx={"color": "error.main"}, css_classes=["artifact-cell-render-error"],
+            )
+        if isinstance(view, str):
+            return untrusted_markdown(view, sizing_mode="stretch_width")
+        return view
 
     @param.depends("renderer", watch=True)
     def _rerender(self):
@@ -162,37 +165,49 @@ class ArtifactCell(Viewer):
     @param.depends("actions", "artifact_actions", watch=True)
     def refresh(self):
         """Evaluate again which actions apply to the artifact and which are done."""
-        objects = []
+        objects, controls = [], {}
         for spec in self.artifact_actions:
             if self.actions is None or spec.action not in self.actions:
                 continue
-            if spec.done is not None and (label := spec.done(self.artifact)):
-                objects.append(pmui.Chip(
-                    label=label, icon="check", size="small", color="success", variant="outlined",
-                    margin=0, css_classes=["artifact-cell-done"],
-                ))
+            label = spec.done(self.artifact) if spec.done is not None else None
+            if not label and spec.arguments(self.artifact) is None:
                 continue
-            arguments = spec.arguments(self.artifact)
-            if arguments is None:
-                continue
-            button = pmui.Button(
-                label=spec.label, icon=spec.icon, variant="outlined", size="small", margin=0,
-                sx={"textTransform": "none"}, css_classes=["artifact-cell-action"],
-            )
-            button.on_click(lambda _, s=spec, a=arguments, b=button: pn.state.execute(partial(self._invoke, s, a, b)))
-            objects.append(button)
-        self._actions.objects = objects
+            key = (spec, label)
+            # A control whose state is unchanged is kept, so a click on it is never lost to a refresh.
+            control = self._controls.get(key) or self._control(spec, label)
+            controls[key] = control
+            objects.append(control)
+        self._controls = controls
+        if [id(o) for o in self._actions.objects] != [id(o) for o in objects]:
+            self._actions.objects = objects
 
-    async def _invoke(self, spec: ArtifactAction, arguments: dict[str, Any], button: pmui.Button):
+    def _control(self, spec: ArtifactAction, label: str | None):
+        if label:
+            return pmui.Chip(
+                label=label, icon="check", size="small", color="success", variant="outlined",
+                margin=0, css_classes=["artifact-cell-done"],
+            )
+        button = pmui.Button(
+            label=spec.label, icon=spec.icon, variant="outlined", size="small", margin=0,
+            sx={"textTransform": "none"}, css_classes=["artifact-cell-action"],
+        )
+        button.on_click(lambda _: pn.state.execute(partial(self._invoke, spec, button)))
+        return button
+
+    async def _invoke(self, spec: ArtifactAction, button: pmui.Button):
+        """Run ``spec`` on the artifact as it is now, with the arguments it gives at the click."""
         button.loading = True
         self._error.visible = False
         try:
+            arguments = spec.arguments(self.artifact)
+            if arguments is None:
+                raise ValueError("it no longer applies")
             result = self.actions.invoke(spec.action, arguments)
             if inspect.isawaitable(result):
                 await result
         except Exception as exc:
             logger.info("The %r action failed on %s: %s", spec.action, self.artifact.artifact_id, exc)
-            self._error.param.update(object=f"{spec.label} failed: {exc}", visible=True)
+            self._error.param.update(object=_escape_markdown(f"{spec.label} failed: {exc}"), visible=True)
         finally:
             button.loading = False
         self.refresh()

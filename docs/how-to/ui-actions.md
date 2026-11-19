@@ -60,7 +60,7 @@ add = ArtifactAction(
     arguments=lambda artifact: {"name": artifact.title} if artifact.kind == "table" else None,
     done=lambda artifact: "On dashboard" if dashboard.shows(artifact.title) else None,
 )
-chat = AgentChat(runner=runner, layout="document", actions=actions, artifact_actions=[add])
+chat = AgentChat(runner=runner, layout="document", action_registry=actions, artifact_actions=[add])
 ```
 
-An action whose `arguments` returns None is not offered on that artifact. Clicking runs it through `actions.invoke`, so the button and the agent tool are the same action, and a failure is shown on the card. Call `chat.refresh_actions()` when the host's state changes what is done, for example after the user edited the dashboard by hand.
+An action whose `arguments` returns None is not offered on that artifact. Clicking runs it through `actions.invoke` with the arguments `arguments` gives at that moment, so the button and the agent tool are the same action, and a failure is shown on the card. Call `chat.refresh_actions()` when the host's state changes what is done, for example after the user edited the dashboard by hand.

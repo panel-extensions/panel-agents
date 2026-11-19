@@ -69,7 +69,7 @@ def test_an_action_runs_and_shows_its_done_label(page):
         "place", "Add to dashboard", icon="add",
         arguments=lambda a: {"name": a.title}, done=lambda a: "On dashboard" if a.title in placed else None,
     )
-    _, chat = _chat(actions=actions, artifact_actions=[spec], callback=lambda text: None)
+    _, chat = _chat(action_registry=actions, artifact_actions=[spec], callback=lambda text: None)
     serve_component(page, chat)
     cell = page.locator(".artifact-cell", has_text="paid_by_state")
     cell.get_by_role("button", name="Add to dashboard").click()
@@ -78,8 +78,96 @@ def test_an_action_runs_and_shows_its_done_label(page):
     expect(page.locator(".artifact-cell", has_text="paid_by_region").get_by_role("button", name="Add to dashboard")).to_be_visible()
 
 
-def test_the_idle_input_offers_send_not_stop(page):
-    _, chat = _chat(callback=lambda text: None)
+def _streaming_chat(tables: int, slow: float = 0):
+    import asyncio as aio
+
+    from pydantic_ai import Agent
+    from pydantic_ai.messages import ModelRequest, ToolReturnPart
+    from pydantic_ai.models.function import DeltaToolCall, FunctionModel
+
+    from panel_agents.adapters.pydantic_ai import AgentRunner, artifact_return
+
+    async def stream(messages, info):
+        last = messages[-1]
+        if isinstance(last, ModelRequest) and any(isinstance(p, ToolReturnPart) for p in last.parts):
+            for chunk in ["Here ", "are ", "the ", "tables."]:
+                await aio.sleep(0.02)
+                yield chunk
+            return
+        yield "Working on it. "
+        for i in range(tables):
+            yield {i + 1: DeltaToolCall(name="make_table", json_args='{"n": %d}' % i, tool_call_id=f"c{i}")}
+
+    agent = Agent(FunctionModel(stream_function=stream))
+
+    @agent.tool_plain
+    async def make_table(n: int):
+        """Make a table."""
+        await aio.sleep(slow)
+        frame = pd.DataFrame({"region": ["East", "West"], "total": [n, n + 1]})
+        return artifact_return("ok", f"table_{n}", frame, kind="table", title=f"table_{n}")
+
+    runner = AgentRunner(agent, RunState(flush_interval=0))
+    return runner, AgentChat(runner=runner, layout="document", feed_params={"height": 800}, max_cells=20)
+
+
+@pytest.mark.parametrize("attempt", range(4))
+def test_every_cell_of_a_streaming_run_renders(page, attempt):
+    runner, chat = _streaming_chat(3)
+    page.set_viewport_size({"width": 1400, "height": 1000})
     serve_component(page, chat)
-    expect(page.locator(".artifact-cell")).to_have_count(2)
+    box = page.get_by_placeholder("Ask the agent…")
+    box.fill("tables 3")
+    box.press("Enter")
+    page.get_by_text("Here are the tables.").wait_for(timeout=15000)
+    cells = page.locator(".artifact-cell")
+    expect(cells).to_have_count(3)
+    for i in range(3):
+        expect(page.locator(".artifact-cell", has_text=f"table_{i}")).to_contain_text(str(i + 1))
+    wait_until(lambda: not runner.state.running, page)
+
+
+def test_a_run_past_max_cells_shows_the_rest_on_request(page):
+    runner, chat = _streaming_chat(12)
+    chat.max_cells = 5
+    page.set_viewport_size({"width": 1400, "height": 1000})
+    serve_component(page, chat)
+    box = page.get_by_placeholder("Ask the agent…")
+    box.fill("tables 12")
+    box.press("Enter")
+    page.get_by_text("Here are the tables.").wait_for(timeout=15000)
+    expect(page.locator(".artifact-cell")).to_have_count(5)
+    page.get_by_role("button", name="Show 7 more").click()
+    expect(page.locator(".artifact-cell")).to_have_count(12)
+
+
+def test_the_input_offers_stop_only_while_a_run_goes_on(page):
+    runner, chat = _streaming_chat(1, slow=2)
+    serve_component(page, chat)
+    expect(page.get_by_role("button", name="Send message")).to_be_visible()
     expect(page.get_by_role("button", name="Stop")).to_have_count(0)
+    box = page.get_by_placeholder("Ask the agent…")
+    box.fill("tables 1")
+    box.press("Enter")
+    expect(page.get_by_role("button", name="Stop")).to_be_visible()
+    page.get_by_text("Here are the tables.").wait_for(timeout=15000)
+    expect(page.get_by_role("button", name="Stop")).to_have_count(0)
+    expect(page.get_by_role("button", name="Send message")).to_be_visible()
+
+
+def test_a_title_with_markup_is_shown_as_text(page):
+    state = RunState(flush_interval=0)
+    state.apply(ev.RunStarted(run_id="r1"))
+    state.add_user_message("Evil?", run_id="r1")
+    state.publish_artifact(
+        "evil", pd.DataFrame({"a": [1]}), kind="table", run_id="r1",
+        title='<img src=x onerror="document.title=\'XSS\'"><b>bold</b>',
+    )
+    state.apply(ev.RunFinished(run_id="r1"))
+    chat = AgentChat(state, layout="document", readonly=True, feed_params={"height": 500})
+    serve_component(page, chat)
+    title = page.locator(".artifact-cell-title")
+    expect(title).to_contain_text("<b>bold</b>")
+    assert title.locator("img, b").count() == 0
+    page.wait_for_timeout(300)
+    assert page.title() != "XSS"
