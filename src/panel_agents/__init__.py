@@ -13,6 +13,7 @@ from .components import (
     ModelCallCard,
     RunTrace,
     SchemaForm,
+    SpanView,
     ToolCallCard,
     register_renderer,
 )
@@ -24,7 +25,9 @@ from .state import (
     MessageState,
     ModelCallState,
     RunInfo,
+    RunSpan,
     RunState,
+    SpanError,
     ToolCallState,
 )
 
@@ -50,9 +53,12 @@ __all__ = [
     "ModelCallState",
     "Recorder",
     "RunInfo",
+    "RunSpan",
     "RunState",
     "RunTrace",
     "SchemaForm",
+    "SpanError",
+    "SpanView",
     "ToolCallCard",
     "ToolCallState",
     "current_run_id",

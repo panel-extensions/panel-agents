@@ -224,6 +224,12 @@ class ToolCallCard(Viewer):
         if it raises or returns anything but a non-empty string the header
         shows the tool name and arguments as without a label.""")
 
+    redacted = param.Boolean(default=False, constant=True, doc="""
+        Whether to show which tool ran, its status and duration without
+        its arguments, result or error message, e.g. for a viewer who may
+        not see the data. A callable ``label`` is not used, as it reads
+        the arguments.""")
+
     def __init__(self, call: ToolCallState | None = None, **params):
         if call is not None:
             params["call"] = call
@@ -295,6 +301,8 @@ class ToolCallCard(Viewer):
     def resolved_label(self) -> str | None:
         """The label of the call, or None when there is none or it could not be made."""
         label = self.label
+        if callable(label) and self.redacted:
+            return None
         if callable(label):
             try:
                 label = label(dict(self.call.args))
@@ -313,7 +321,7 @@ class ToolCallCard(Viewer):
             self._tool.object = f'<div class="tc-label">Tool</div><div class="tc-tool">{name}</div>'
         else:
             parts = [f'<span class="tc-name">{name}</span>']
-            preview = _args_preview(call.args)
+            preview = "" if self.redacted else _args_preview(call.args)
             parts.append(f'<span class="tc-preview" title="{escape(preview)}">{escape(preview)}</span>')
         self._tool_section.visible = label is not None
         meta = []
@@ -334,7 +342,7 @@ class ToolCallCard(Viewer):
         return approval_labels(request.labels if request is not None else None)
 
     def _update_args(self, *_):
-        text = _format_args(self.call.args, self.call.args_text)
+        text = "" if self.redacted else _format_args(self.call.args, self.call.args_text)
         if text:
             self._args.object = text
         # A pending approval card already lists the arguments, editable.
@@ -356,6 +364,8 @@ class ToolCallCard(Viewer):
             denied = call.status == "denied"
             denied_label = self._approval_labels()["denied"]
             message = call.error or (f"The call was {_lower(denied_label)}." if denied else "The call failed.")
+            if self.redacted:
+                message = f"The call was {_lower(denied_label)}." if denied else "The call failed."
             # Denial reasons are prose; errors are often tracebacks or driver messages, kept verbatim.
             self._error_text.object = "" if denied else f"<pre>{escape(message)}</pre>"
             self._error.param.update(
@@ -365,7 +375,7 @@ class ToolCallCard(Viewer):
             self._show_result(None)
             return
         self._error.visible = False
-        self._show_result(call.result)
+        self._show_result(None if self.redacted else call.result)
 
     def _show_result(self, result):
         if result is not None and result is self._rendered_result and self._result.objects:

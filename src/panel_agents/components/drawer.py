@@ -16,6 +16,7 @@ from ._toggle import DrawerResizeNotifier, DrawerToggle
 from .approval import ApprovalQueue
 from .artifacts import ArtifactPane
 from .chat import AgentChat
+from .span import SpanView
 
 _TABS = ("chat", "artifacts", "approvals")
 
@@ -103,9 +104,14 @@ class AgentDrawer(Viewer):
 
         self._chat = AgentChat(
             state=self.state, runner=self.runner, can_approve=self.can_approve,
-            **{"feed_params": {"min_height": 0}, **self.chat_params},
+            **{"feed_params": {"min_height": 0}, "on_show_run": self.show_run, **self.chat_params},
         )
-        self._artifacts = ArtifactPane(state=self.state, on_apply=self.on_apply, show_list=False)
+        self._artifacts = ArtifactPane(state=self.state, on_apply=self.on_apply, show_list=False, on_show_run=self.show_run)
+        self._span: SpanView | None = None
+        self._span_dialog = pmui.Dialog(
+            title="How this was made", open=False, show_close_button=True, close_on_click=True, width_option="md",
+            css_classes=["span-dialog"],
+        )
         self._artifact_select = pmui.Select(
             label="Artifact", options={}, size="small", sizing_mode="stretch_width", margin=(8, 8, 0, 8),
         )
@@ -172,7 +178,7 @@ class AgentDrawer(Viewer):
                     "border-bottom": "1px solid var(--mui-palette-divider)"},
         )
         self._content = pmui.Column(
-            header, self._pending_bar, self._body, self._confirm, sizing_mode="stretch_both", margin=0, styles={"height": "100%"},
+            header, self._pending_bar, self._body, self._confirm, self._span_dialog, sizing_mode="stretch_both", margin=0, styles={"height": "100%"},
         )
 
         self._drawer = pmui.Drawer(
@@ -226,6 +232,33 @@ class AgentDrawer(Viewer):
     def content(self) -> pmui.Column:
         """The body of the drawer, for placing it in another container such as a page's contextbar."""
         return self._content
+
+    @property
+    def span_view(self) -> SpanView | None:
+        """The ``SpanView`` that ``show_run`` last opened, if any."""
+        return self._span
+
+    def show_run(self, run_id: str):
+        """
+        Open a dialog showing how the run ``run_id`` was made: a
+        ``SpanView`` with its question, model requests, tool calls and the
+        versions it published. Clicking a version opens it in the
+        artifacts view. The chat's "Details" link and the history's "How
+        was this made?" action call this.
+        """
+        if self._span is None or self._span.state is not self.state:
+            self._span = SpanView(self.state, run_id=run_id, on_artifact=self._open_version)
+            self._span_dialog.objects = [self._span]
+        else:
+            self._span.run_id = run_id
+        self._span_dialog.open = True
+
+    def _open_version(self, artifact_id: str, version: int):
+        self._span_dialog.open = False
+        self.state.artifacts.active = artifact_id
+        self.param.update(open=True, tab="artifacts")
+        if (view := self._artifacts.views.get(artifact_id)) is not None:
+            view.show_version(version)
 
     def _ask_new_conversation(self):
         if any(artifact.is_document for artifact in self.state.artifacts):

@@ -15,7 +15,7 @@ import param
 from panel.viewable import Viewer
 
 from ..security import _escape_markdown, untrusted_markdown
-from ..state import MessageState, ModelCallState, RunState, ToolCallState
+from ..state import MessageState, ModelCallState, RunState, ToolCallState, nest_steps
 from .model_call import ModelCallCard, format_cost, format_tokens
 from .tool_call import ToolCallCard, _format_duration
 
@@ -73,6 +73,14 @@ _BAR_CSS = """
 .rt-bar.failed { background: var(--mui-palette-error-main, #d32f2f); }
 """
 
+_HIDDEN_CSS = """
+:host { width: 100%; }
+.rt-hidden {
+  font-size: 0.8125rem; font-style: italic; font-family: var(--mui-font-family, inherit);
+  color: var(--mui-palette-text-secondary, rgba(127, 127, 127, 0.9));
+}
+"""
+
 _TEXT_CSS = """
 :host { width: 100%; }
 .markdown { font-size: 0.875rem; }
@@ -105,6 +113,23 @@ class RunTrace(Viewer):
 
     show_totals = param.Boolean(default=True, doc="Whether to show the run's usage totals above the steps.")
 
+    show_question = param.Boolean(default=True, doc="""
+        Whether to show the run's question above the steps, next to the time axis.""")
+
+    include_children = param.Boolean(default=False, doc="""
+        Whether the steps of the run's child runs, e.g. a sub-agent's,
+        are shown with the run's own.""")
+
+    redacted = param.Boolean(default=False, constant=True, doc="""
+        Whether to show the run's shape without its content: which tools
+        ran, the models, tokens, cost and timings stay, the question, the
+        agent's text, tool arguments and results and error messages are
+        hidden.""")
+
+    row_limit = param.Integer(default=None, allow_None=True, bounds=(1, None), doc="""
+        Number of steps built at first, with a button building the next
+        as many, or None to build them all. Keeps a long run cheap to open.""")
+
     def __init__(self, state: RunState | None = None, **params):
         if state is not None:
             params["state"] = state
@@ -112,7 +137,14 @@ class RunTrace(Viewer):
         self._totals = pn.pane.HTML(sizing_mode="stretch_width", margin=(0, 0, 8, 0), stylesheets=[_TOTALS_CSS])
         self._axis = pn.pane.HTML(sizing_mode="stretch_width", margin=0, stylesheets=[_AXIS_CSS])
         self._rows = pn.Column(sizing_mode="stretch_width", margin=0)
-        self._layout = pn.Column(self._totals, self._axis, self._rows, sizing_mode="stretch_width", css_classes=["run-trace"])
+        self._more = pmui.Button(
+            label="", variant="text", size="small", visible=False, margin=(4, 0), css_classes=["rt-more"],
+        )
+        self._more.on_click(self._show_more)
+        self._limit = self.row_limit
+        self._layout = pn.Column(
+            self._totals, self._axis, self._rows, self._more, sizing_mode="stretch_width", css_classes=["run-trace"],
+        )
         # Cards are kept per item and rows per item and depth, so expanded cards survive other runs and switching back.
         self._cards: dict[int, Any] = {}
         self._rows_by_key: dict[tuple[int, int], tuple[Any, pn.pane.HTML | None]] = {}
@@ -131,9 +163,10 @@ class RunTrace(Viewer):
     def run(self):
         return self.state.runs.get(self.run_id) if self.run_id else None
 
-    @param.depends("run_id", watch=True)
+    @param.depends("run_id", "include_children", watch=True)
     def _show_run(self):
         self._shown = None
+        self._limit = self.row_limit
         self._watch_run()
         self._update_rows()
 
@@ -149,32 +182,19 @@ class RunTrace(Viewer):
         self._refresh()
 
     def _items(self) -> list[Any]:
-        return [i for i in self.state.items if i.run_id == self.run_id] if self.run_id else []
+        if not self.run_id:
+            return []
+        tree = self._tree()
+        return [i for i in self.state.items if i.run_id in tree]
+
+    def _tree(self) -> set[str]:
+        if self.include_children and self.run_id in self.state.runs:
+            return set(self.state.run_tree(self.run_id))
+        return {self.run_id}
 
     def _nested(self) -> list[tuple[Any, int]]:
         """The run's items with their depth: tool calls sit under the model request that issued them."""
-        items = self._items()
-        issued = {t: m for m in items if isinstance(m, ModelCallState) for t in m.tool_call_ids}
-        children: dict[int, list[ToolCallState]] = {}
-        order: list[Any] = []
-        current = None
-        for item in items:
-            if isinstance(item, ModelCallState):
-                current = item
-                order.append(item)
-            elif isinstance(item, ToolCallState):
-                parent = issued.get(item.tool_call_id, current)
-                if parent is None:
-                    order.append(item)
-                else:
-                    children.setdefault(id(parent), []).append(item)
-            elif isinstance(item, MessageState) and item.role != "user" and item.kind in ("text", "error"):
-                order.append(item)
-        rows = []
-        for item in order:
-            rows.append((item, 0))
-            rows += [(child, 1) for child in children.get(id(item), [])]
-        return rows
+        return nest_steps(self._items())
 
     def _forget(self, alive: set[int]):
         for key in [k for k in self._cached if k not in alive]:
@@ -196,17 +216,22 @@ class RunTrace(Viewer):
         if isinstance(item, MessageState):
             if item.kind == "error":
                 card = pmui.Alert(
-                    object=_escape_markdown(item.content), severity="error", variant="outlined",
-                    sizing_mode="stretch_width", margin=(4, 0),
+                    object="The run failed." if self.redacted else _escape_markdown(item.content), severity="error",
+                    variant="outlined", sizing_mode="stretch_width", margin=(4, 0),
+                )
+            elif self.redacted:
+                card = pn.pane.HTML(
+                    '<div class="rt-hidden">The agent replied; its text is hidden.</div>',
+                    sizing_mode="stretch_width", margin=(4, 0), stylesheets=[_HIDDEN_CSS],
                 )
             else:
                 card = untrusted_markdown(item.content, sizing_mode="stretch_width", margin=(4, 0), stylesheets=[_TEXT_CSS])
                 item.param.watch(lambda e, p=card: setattr(p, "object", e.new), "content")
         else:
             if isinstance(item, ModelCallState):
-                card = ModelCallCard(item, state=self.state, show_tool_count=True)
+                card = ModelCallCard(item, state=self.state, show_tool_count=True, redacted=self.redacted)
             else:
-                card = ToolCallCard(item, state=self.state)
+                card = ToolCallCard(item, state=self.state, redacted=self.redacted)
             item.param.watch(self._refresh_item, ["status", "ended_at"])
         self._cards[id(item)] = card
         return card
@@ -230,15 +255,34 @@ class RunTrace(Viewer):
         if event is not None and self._shown is not None:
             old, new = event.old, event.new
             appended = len(new) >= len(old) and all(a is b for a, b in zip(old, new, strict=False))
-            if appended and all(i.run_id != self.run_id for i in new[len(old):]):
+            if appended and all(i.run_id not in self._tree() for i in new[len(old):]):
                 return
             if not appended:
                 self._forget({id(i) for i in new if self._cached.get(id(i)) is i})
         rows = self._nested()
+        hidden = 0
+        if self._limit is not None and len(rows) > self._limit:
+            hidden = len(rows) - self._limit
+            rows = rows[: self._limit]
         if self._shown is None or [(id(i), d) for i, d in rows] != [(id(i), d) for i, d in self._shown]:
             self._rows.objects = [self._row(item, depth)[0] for item, depth in rows]
             self._shown = rows
+        step = min(hidden, self.row_limit or hidden)
+        label = f"Show {step} more step{'s' if step != 1 else ''}"
+        if step != hidden:
+            label += f" of {hidden}"
+        self._more.param.update(label=label, visible=bool(hidden))
         self._refresh()
+
+    def _show_more(self, *_):
+        if self._limit is not None:
+            self._limit += self.row_limit or self._limit
+            self._update_rows()
+
+    @property
+    def steps(self) -> int:
+        """Number of steps of the run, shown or not."""
+        return len(self._nested())
 
     def _refresh_item(self, *events):
         if self._shown is not None and any(i is events[0].obj for i, _ in self._shown):
@@ -285,7 +329,7 @@ class RunTrace(Viewer):
             self._totals.object = self._totals_html(run)
         self._axis.object = self._axis_html(run, span)
 
-    @param.depends("show_totals", watch=True)
+    @param.depends("show_totals", "show_question", watch=True)
     def _toggle_totals(self):
         self._refresh()
 
@@ -309,6 +353,8 @@ class RunTrace(Viewer):
         else:
             users = [i for i in self.state.items if isinstance(i, MessageState) and i.role == "user" and i.run_id == self.run_id]
             question = users[0].content if users else ""
+        if self.redacted or not self.show_question:
+            question = ""
         ticks = "".join(f"<span>{_format_duration(span * f) if f else '0s'}</span>" for f in (0, 0.5, 1))
         return (
             f'<div class="rt-axis"><span class="rt-question" title="{escape(question, quote=True)}">{escape(question)}</span>'

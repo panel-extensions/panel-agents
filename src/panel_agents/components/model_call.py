@@ -124,6 +124,10 @@ class ModelCallCard(Viewer):
     show_tool_count = param.Boolean(default=False, doc="""
         Whether the header counts the tool calls the response issued.""")
 
+    redacted = param.Boolean(default=False, constant=True, doc="""
+        Whether to leave out error messages, which can quote the data a
+        request was sent, e.g. for a viewer who may not see it.""")
+
     def __init__(self, call: ModelCallState | None = None, **params):
         if call is not None:
             params["call"] = call
@@ -177,16 +181,20 @@ class ModelCallCard(Viewer):
             f'<span class="mc-meta">{"".join(meta)}</span></div>'
         )
         self._details.object = self._details_html()
-        self._error.param.update(object=_escape_markdown(call.error or ""), visible=bool(call.error))
+        error = "The request failed." if self.redacted and call.error else call.error or ""
+        self._error.param.update(object=_escape_markdown(error), visible=bool(error))
 
     def _tooltip(self) -> str:
         call = self.call
         lines = [call.model or "Model"]
         if call.cached_tokens:
             lines.append(f"{call.cached_tokens:,} of {call.input_tokens:,} input tokens from the cache")
-        if call.error:
+        if call.error and not self.redacted:
             lines.append(call.error)
-        lines += [f"Attempt {i} failed: {a.error}" for i, a in enumerate(call.attempts, start=1)]
+        lines += [
+            f"Attempt {i} failed" + ("" if self.redacted else f": {a.error}")
+            for i, a in enumerate(call.attempts, start=1)
+        ]
         return "\n".join(lines)
 
     def _tool_names(self) -> list[str]:
@@ -201,17 +209,17 @@ class ModelCallCard(Viewer):
         if call.duration is not None:
             rows.append(("latency", _format_duration(call.duration)))
         if call.status != "running":
-            cached = f", {call.cached_tokens:,} cached" if call.cached_tokens else ""
+            share = f" ({call.cached_tokens / call.input_tokens:.0%})" if call.input_tokens else ""
+            cached = f", {call.cached_tokens:,} cached{share}" if call.cached_tokens else ""
             rows += [("input", f"{call.input_tokens:,} tokens{cached}"), ("output", f"{call.output_tokens:,} tokens")]
         rows += [
             ("cost", format_cost(call.cost_usd)), ("finish", call.finish_reason),
             ("tool calls", ", ".join(self._tool_names())),
             ("response id", call.provider_response_id), ("request id", call.request_id), ("run id", call.run_id),
         ]
-        rows += [
-            (f"attempt {i}", f"{a.error} ({_format_duration(a.duration)})" if a.duration is not None else a.error)
-            for i, a in enumerate(call.attempts, start=1)
-        ]
+        for i, a in enumerate(call.attempts, start=1):
+            error = "failed" if self.redacted else a.error
+            rows.append((f"attempt {i}", f"{error} ({_format_duration(a.duration)})" if a.duration is not None else error))
         items = "".join(f"<dt>{escape(k)}</dt><dd>{escape(str(v))}</dd>" for k, v in rows if v)
         return f"<dl>{items}</dl>"
 

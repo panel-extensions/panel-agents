@@ -161,6 +161,10 @@ class VersionTimeline(Viewer):
         Called with the version number to apply and ``"undo"`` when it
         undoes a group, or None when it restores a single version.""")
 
+    on_show_run = param.Callable(default=None, allow_None=True, doc="""
+        Called with a run id from a group's "How was this made?" action,
+        offered on groups whose run is in ``state``.""")
+
     def __init__(self, **params):
         super().__init__(**params)
         self._groups: list[VersionGroup] = []
@@ -175,6 +179,7 @@ class VersionTimeline(Viewer):
         self._list.param.watch(self._on_expanded, "expanded")
         self._list.on_action("restore", self._on_restore_action)
         self._list.on_action("undo_group", self._on_undo_action)
+        self._list.on_action("show_run", self._on_show_run_action)
         self._list.on_click(self._on_click)
         self._watchers: list = []
         self._bound = None
@@ -187,7 +192,7 @@ class VersionTimeline(Viewer):
     def groups(self) -> list[VersionGroup]:
         return list(self._groups)
 
-    @param.depends("artifact", "can_apply", "user", "state", watch=True)
+    @param.depends("artifact", "can_apply", "user", "state", "on_show_run", watch=True)
     def _update(self):
         # One refresh however many of these change together.
         if self.artifact is not self._bound:
@@ -316,6 +321,7 @@ class VersionTimeline(Viewer):
         actions = self._group_actions(group, item)
         if self._restorable(version):
             actions.insert(0, self._restore_action(version))
+        actions += self._run_actions(group, item)
         if actions:
             item["actions"] = actions
         return item
@@ -327,9 +333,15 @@ class VersionTimeline(Viewer):
             "secondary": " · ".join(filter(None, (f"{n} versions", _time(group.versions[0].created_at)))),
             "icon": _ACTOR_ICONS.get(group.actor or "", "edit_note"), "color": "action",
         }
-        if actions := self._group_actions(group, item):
+        if actions := self._group_actions(group, item) + self._run_actions(group, item):
             item["actions"] = actions
         return item
+
+    def _run_actions(self, group: VersionGroup, item: dict[str, Any]) -> list[dict[str, Any]]:
+        if self.on_show_run is None or self.state is None or group.run_id not in self.state.runs:
+            return []
+        item["run_id"] = group.run_id
+        return [{"action": "show_run", "label": "How was this made?", "icon": "manage_search", "inline": True}]
 
     def _group_actions(self, group: VersionGroup, item: dict[str, Any]) -> list[dict[str, Any]]:
         applied = self.artifact.applied
@@ -395,6 +407,10 @@ class VersionTimeline(Viewer):
 
     async def _on_undo_action(self, item: dict[str, Any]):
         await self._restore(item["before"], "undo")
+
+    def _on_show_run_action(self, item: dict[str, Any]):
+        if self.on_show_run is not None and (run_id := item.get("run_id")):
+            self.on_show_run(run_id)
 
     async def _restore(self, version: int, action: str | None = None):
         if self.on_restore is not None:

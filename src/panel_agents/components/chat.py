@@ -105,6 +105,12 @@ class AgentChat(Viewer):
         Whether a finished run's model requests, tokens, cost and wall
         time are shown in a line under its last message.""")
 
+    on_show_run = param.Callable(default=None, allow_None=True, doc="""
+        Called with a run id when a person asks how a finished run's
+        answer was made. When set, the usage line under the run has a
+        "Details" link, e.g. opening a ``SpanView`` of the run, as
+        ``AgentDrawer`` does.""")
+
     feed_params = param.Dict(default={}, doc="""
         Additional parameters passed to the underlying pmui ChatFeed or ChatInterface.""")
 
@@ -403,7 +409,7 @@ class AgentChat(Viewer):
         runs.append(current)
         return {id(run[0]): run for run in runs if len(run) > 1}
 
-    @param.depends("group_tool_calls", "show_model_calls", "show_usage", watch=True)
+    @param.depends("group_tool_calls", "show_model_calls", "show_usage", "on_show_run", watch=True)
     def _regroup(self, *_, new=(), tail_from=None):
         """Fold runs of two or more untroubled tool and model calls of one run into a step group."""
         wanted = self._fold_runs()
@@ -518,11 +524,28 @@ class AgentChat(Viewer):
             footer = (
                 f'<div class="usage" title="{escape(usage_tooltip(run), quote=True)}">{escape(usage_summary(run))}</div>'
             )
+            linked = self.on_show_run is not None
             panes = message.footer_objects
-            if panes and getattr(panes[0], "object", None) == footer:
+            if panes and getattr(panes[0], "_usage", None) == (footer, linked):
                 continue
-            message.footer_objects = [pn.pane.HTML(footer, margin=(0, 10), stylesheets=[USAGE_CSS], css_classes=["run-usage"])]
+            usage = pn.pane.HTML(footer, margin=(0, 10), stylesheets=[USAGE_CSS], css_classes=["run-usage"])
+            if linked:
+                link = pmui.Button(
+                    label="Details", variant="text", size="small", margin=0, css_classes=["run-details"],
+                    description="How this answer was made: every model request and tool call of the run",
+                    sx={"minWidth": 0, "py": 0, "px": "4px", "fontSize": "0.75rem", "textTransform": "none"},
+                )
+                link.on_click(lambda _, rid=run_id: self._show_run(rid))
+                row = pn.Row(usage, link, margin=0, styles={"align-items": "center"})
+            else:
+                row = usage
+            row._usage = (footer, linked)
+            message.footer_objects = [row]
             self._footers[run_id] = message
+
+    def _show_run(self, run_id: str):
+        if self.on_show_run is not None:
+            self.on_show_run(run_id)
 
     def _last_shown(self, run_id: str) -> pmui.ChatMessage | None:
         """The run's last visible message or group row in the feed, leaving out user messages."""

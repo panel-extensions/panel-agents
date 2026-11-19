@@ -16,6 +16,7 @@ import uuid
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any
 
 import param
@@ -261,6 +262,117 @@ class RunInfo(param.Parameterized):
         if self.started_at is None or self.ended_at is None:
             return None
         return self.ended_at - self.started_at
+
+
+@dataclass(frozen=True)
+class SpanError:
+    """Something that went wrong in a run: what failed, its message and the item it belongs to."""
+
+    kind: str
+    message: str
+    item: Any = None
+
+
+@dataclass(frozen=True)
+class RunSpan:
+    """
+    Everything one run did, read from a ``RunState`` by ``RunState.span``:
+    the question, the model requests with the tool calls each issued, the
+    agent's messages, the artifact versions published and what failed.
+    Child runs count as part of the run, as for ``RunState.undo_run``.
+
+    A snapshot: the entities in it are the state's live objects, but the
+    lists are not updated as the run goes on; call ``span`` again.
+    """
+
+    run: RunInfo
+    runs: tuple[RunInfo, ...]
+    question: str | None
+    steps: tuple[tuple[Any, int], ...]
+    messages: tuple[MessageState, ...]
+    model_calls: tuple[ModelCallState, ...]
+    tool_calls: tuple[ToolCallState, ...]
+    published: tuple[tuple[Artifact, ArtifactVersion], ...]
+    errors: tuple[SpanError, ...]
+
+    @property
+    def run_id(self) -> str:
+        return self.run.run_id
+
+    @property
+    def usage(self) -> list[ev.Usage]:
+        return [u for run in self.runs for u in run.usage]
+
+    @property
+    def requests(self) -> int:
+        """Model requests, failed ones and retried attempts included."""
+        return len(self.usage)
+
+    @property
+    def input_tokens(self) -> int:
+        return sum(u.input_tokens for u in self.usage)
+
+    @property
+    def output_tokens(self) -> int:
+        return sum(u.output_tokens for u in self.usage)
+
+    @property
+    def cached_tokens(self) -> int:
+        return sum(u.cached_tokens for u in self.usage)
+
+    @property
+    def cached_share(self) -> float | None:
+        """The share of input tokens read from the provider's cache, or None without input tokens."""
+        return self.cached_tokens / self.input_tokens if self.input_tokens else None
+
+    @property
+    def cost_usd(self) -> float | None:
+        costs = [u.cost_usd for u in self.usage if u.cost_usd is not None]
+        return sum(costs) if costs else None
+
+    @property
+    def model_duration(self) -> float | None:
+        durations = [u.duration for u in self.usage if u.duration is not None]
+        return sum(durations) if durations else None
+
+    @property
+    def models(self) -> list[str]:
+        return list(dict.fromkeys(u.model for u in self.usage if u.model))
+
+    @property
+    def duration(self) -> float | None:
+        return self.run.duration
+
+
+def nest_steps(items: Iterable[Any]) -> list[tuple[Any, int]]:
+    """
+    A run's model requests, tool calls and assistant messages with their
+    depth: a tool call sits under the model request that issued it (depth
+    1), or under the request before it when requests do not name their tool
+    calls, as in older recordings. User messages and thinking are left out.
+    """
+    items = list(items)
+    issued = {t: m for m in items if isinstance(m, ModelCallState) for t in m.tool_call_ids}
+    children: dict[int, list[ToolCallState]] = {}
+    order: list[Any] = []
+    current = None
+    for item in items:
+        if isinstance(item, ModelCallState):
+            current = item
+            order.append(item)
+        elif isinstance(item, ToolCallState):
+            parent = issued.get(item.tool_call_id, current)
+            if parent is None:
+                order.append(item)
+            else:
+                children.setdefault(id(parent), []).append(item)
+        elif isinstance(item, MessageState) and item.role != "user" and item.kind in ("text", "error"):
+            order.append(item)
+    rows = []
+    for item in order:
+        rows.append((item, 0))
+        rows += [(child, 1) for child in children.get(id(item), [])]
+    return rows
 
 
 _DELTA_EVENTS = (ev.TextMessageContent, ev.ThinkingContent, ev.ToolCallArgs)
@@ -673,6 +785,69 @@ class RunState(param.Parameterized):
         )
         return version
 
+    def run_tree(self, run_id: str) -> list[str]:
+        """``run_id`` followed by the ids of its child runs, their children and so on, in the order they started."""
+        children: dict[str, list[str]] = {}
+        for rid, run in self.runs.items():
+            if run.parent_run_id is not None:
+                children.setdefault(run.parent_run_id, []).append(rid)
+        tree, queue = [], [run_id]
+        while queue:
+            rid = queue.pop(0)
+            if rid in tree:
+                continue
+            tree.append(rid)
+            queue += children.get(rid, [])
+        return tree
+
+    def published_in(self, run_ids: Iterable[str]) -> list[tuple[Artifact, ArtifactVersion]]:
+        """The artifact versions published in any of ``run_ids``, as (artifact, version) pairs in time order."""
+        runs = set(run_ids)
+        published = [(a, v) for a in self.artifacts for v in a.versions if v.run_id in runs]
+        published.sort(key=lambda p: p[1].created_at if p[1].created_at is not None else 0)
+        return published
+
+    def span(self, run_id: str) -> RunSpan:
+        """
+        Everything the run ``run_id`` and its child runs did, as a
+        ``RunSpan``: the question, each model request with the tool calls
+        it issued, the agent's messages, the artifact versions published
+        and the errors. Raises ``KeyError`` if the state has no such run,
+        e.g. because the events of an older session were not loaded.
+
+        Reads the items and artifact versions once, so it costs time in
+        proportion to the session, and is meant to be called when a person
+        asks for the span rather than on every event.
+        """
+        run = self.runs[run_id]
+        ids = self.run_tree(run_id)
+        tree = set(ids)
+        items = [i for i in self.items if i.run_id in tree]
+        question = run.input if isinstance(run.input, str) and run.input.strip() else None
+        if question is None:
+            question = next((
+                i.content for i in items if isinstance(i, MessageState) and i.role == "user" and i.content
+            ), None)
+        published = self.published_in(ids)
+        runs = tuple(self.runs[r] for r in ids)
+        model_calls = tuple(i for i in items if isinstance(i, ModelCallState))
+        tool_calls = tuple(i for i in items if isinstance(i, ToolCallState))
+        errors = []
+        for r in runs:
+            if r.status == "error":
+                errors.append(SpanError("run", r.error or "The run failed.", r))
+            errors += [SpanError("guardrail", g.message or g.name, g) for g in r.guardrails if g.severity == "block"]
+        for call in model_calls:
+            errors += [SpanError("attempt", a.error or "The request failed.", call) for a in call.attempts]
+            if call.status == "failed":
+                errors.append(SpanError("model_call", call.error or "The request failed.", call))
+        errors += [SpanError("tool_call", c.error or "The call failed.", c) for c in tool_calls if c.status == "failed"]
+        return RunSpan(
+            run=run, runs=runs, question=question, steps=tuple(nest_steps(items)),
+            messages=tuple(i for i in items if isinstance(i, MessageState) and i.role == "assistant" and i.kind == "text"),
+            model_calls=model_calls, tool_calls=tool_calls, published=tuple(published), errors=tuple(errors),
+        )
+
     # Event handlers
 
     def _add_item(self, item):
@@ -943,6 +1118,8 @@ __all__ = [
     "MessageState",
     "ModelCallState",
     "RunInfo",
+    "RunSpan",
     "RunState",
+    "SpanError",
     "ToolCallState",
 ]
