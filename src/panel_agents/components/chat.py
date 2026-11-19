@@ -202,9 +202,13 @@ class AgentChat(Viewer):
             self._model_picker = ModelPicker(
                 models=self.models, value=self.model_id, runner=self.runner, remember=self.remember_model,
             )
+            # pmui pulls the footer into the input's 8px bottom padding, so the picker's text
+            # needs 14px more (16px less its button's 2px padding) to sit as far from the
+            # bottom edge as the text is from the top (8px padding and 8px in the textarea).
+            self._model_picker.__panel__().margin = (0, 0, 14, 0)
             self.model_id = self._model_picker.value
             self._model_picker.param.watch(lambda e: setattr(self, "model_id", e.new), "value")
-            self._feed._widget.footer_objects = [self._model_picker]
+            self._sync_footer()
             self.param.watch(self._sync_model_picker, ["models", "model_id", "remember_model"])
         # Timeline items in order; only the ones shown get a view and a message.
         self._rendered: list[Any] = []
@@ -270,6 +274,13 @@ class AgentChat(Viewer):
         picker.param.update({
             names[e.name]: e.new for e in events if getattr(picker, names[e.name]) is not e.new
         })
+        self._sync_footer()
+
+    def _sync_footer(self):
+        # An empty footer row still takes space in the input and pushes the text off center.
+        footer = [self._model_picker.__panel__()] if len(self._model_picker.choices) > 1 else []
+        if self._feed._widget.footer_objects != footer:
+            self._feed._widget.footer_objects = footer
 
     def view_for(self, item: MessageState | ModelCallState | ToolCallState) -> Any:
         """

@@ -138,11 +138,15 @@ def test_the_picker_shows_only_with_a_choice():
     runner = make_runner(Agent(answering("a")))
     chat = AgentChat(runner=runner)
     assert chat.model_picker._menu.visible is False and runner.model is None
+    assert chat.feed._widget.footer_objects == []
     chat.models = ["test"]
     assert chat.model_picker._menu.visible is False and chat.model_id == "test"
+    assert chat.feed._widget.footer_objects == []
     chat.models = ["test", "bogus:x"]
     assert chat.model_picker._menu.visible
     assert chat.feed._widget.footer_objects == [chat.model_picker._menu]
+    chat.models = ["test"]
+    assert chat.feed._widget.footer_objects == []
     assert AgentChat(state=RunState(), readonly=True, models=["test", "bogus:x"]).model_picker is None
 
 
