@@ -47,3 +47,20 @@ runner = AgentRunner(agent, run_kwargs={"toolsets": [ActionToolset(actions)]})
 The agent sees actions registered later on its next model request. When an action raises, the model receives the error as a failed tool call and can try something else, so a stale selection or a missing page does not end the run. Invalid arguments are sent back to the model to retry, as with any pydantic-ai tool. Actions are covered by the runner's `approval_policy` like other tools, so an action such as `delete_selection` can still require approval.
 
 `examples/sql_analyst/app.py` registers a `show_artifact` action that brings a result into view in the artifact pane.
+
+## Offer actions on artifacts
+
+In the document layout of `AgentChat`, the artifacts a run published render inline as cards, and each card can offer actions from a registry. An `ArtifactAction` names the action, its button label and icon, how to get its arguments from the artifact, and optionally the label shown once there is nothing left to do:
+
+```python
+from panel_agents import AgentChat, ArtifactAction
+
+add = ArtifactAction(
+    "add_to_dashboard", "Add to dashboard", icon="add",
+    arguments=lambda artifact: {"name": artifact.title} if artifact.kind == "table" else None,
+    done=lambda artifact: "On dashboard" if dashboard.shows(artifact.title) else None,
+)
+chat = AgentChat(runner=runner, layout="document", actions=actions, artifact_actions=[add])
+```
+
+An action whose `arguments` returns None is not offered on that artifact. Clicking runs it through `actions.invoke`, so the button and the agent tool are the same action, and a failure is shown on the card. Call `chat.refresh_actions()` when the host's state changes what is done, for example after the user edited the dashboard by hand.
