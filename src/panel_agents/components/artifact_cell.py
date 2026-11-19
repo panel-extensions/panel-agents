@@ -38,6 +38,14 @@ _HEADER_CSS = """
 """
 
 
+def _title_sx(title: str) -> dict[str, str]:
+    """A name such as a table or file name is set in monospace; a title in words is not."""
+    sx = {"overflow": "hidden", "textOverflow": "ellipsis", "whiteSpace": "nowrap"}
+    if title and not any(ch.isspace() for ch in title):
+        sx["fontFamily"] = "monospace"
+    return sx
+
+
 @dataclass(frozen=True)
 class ArtifactAction:
     """
@@ -91,20 +99,22 @@ class ArtifactCell(Viewer):
             variant="outlined", margin=(0, 8, 0, 0), css_classes=["artifact-cell-kind"],
         )
         # Titles and errors may carry injected content, so they are plain text.
+        title = artifact.title or artifact.artifact_id
         self._title = _plain_typography(
-            artifact.title or artifact.artifact_id, variant="subtitle2", margin=0,
-            sx={"fontFamily": "monospace", "overflow": "hidden", "textOverflow": "ellipsis", "whiteSpace": "nowrap"},
-            css_classes=["artifact-cell-title"],
+            title, variant="subtitle2", margin=0, sx=_title_sx(title),
+            styles={"flex": "1 1 120px", "min-width": "0"}, css_classes=["artifact-cell-title"],
         )
-        self._actions = pn.Row(margin=0, css_classes=["artifact-cell-actions"])
+        self._actions = pn.Row(margin=0, styles={"margin-left": "auto"}, css_classes=["artifact-cell-actions"])
         self._error = _plain_typography(
             "", variant="caption", visible=False, margin=(4, 12),
             sx={"color": "error.main"}, css_classes=["artifact-cell-error"],
         )
         self._body = pn.Column(sizing_mode="stretch_width", margin=0, css_classes=["artifact-cell-body"])
-        header = pn.Row(
-            self._chip, self._title, pn.HSpacer(), self._actions,
-            sizing_mode="stretch_width", margin=0, styles={"align-items": "center", "padding": "6px 12px"},
+        # On a narrow card the actions wrap below the title rather than being cut off.
+        header = pn.FlexBox(
+            self._chip, self._title, self._actions,
+            flex_wrap="wrap", align_items="center", gap="4px 0",
+            sizing_mode="stretch_width", margin=0, styles={"padding": "6px 12px"},
             stylesheets=[_HEADER_CSS], css_classes=["artifact-cell-header"],
         )
         self._layout = pn.Column(
@@ -130,7 +140,8 @@ class ArtifactCell(Viewer):
         self._watchers = []
 
     def _update_title(self, *_):
-        self._title.object = _escape_markdown(self.artifact.title or self.artifact.artifact_id)
+        title = self.artifact.title or self.artifact.artifact_id
+        self._title.param.update(object=_escape_markdown(title), sx=_title_sx(title))
 
     def _update_body(self, *_):
         latest = self.artifact.latest
