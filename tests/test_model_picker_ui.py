@@ -145,3 +145,36 @@ def test_the_keyboard_opens_and_picks_from_the_list(page):
     expect(page.get_by_role("button", name="Model: Beta")).to_be_focused()
     wait_until(lambda: component.runner.model is MODELS["beta-model"], page)
     assert component.state.runs == {}
+
+
+COMPOSER_GAPS = """
+() => {
+  const deep = (root) => [...root.querySelectorAll('*')].flatMap(e => [e, ...(e.shadowRoot ? deep(e.shadowRoot) : [])]);
+  const all = deep(document);
+  const box = all.find(e => e.classList.contains('MuiInputBase-root')).getBoundingClientRect();
+  const content = (el) => {
+    const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+    return {top: r.top + parseFloat(s.paddingTop), bottom: r.bottom - parseFloat(s.paddingBottom)};
+  };
+  const text = content(all.find(e => e.tagName === 'TEXTAREA' && e.offsetHeight));
+  const picker = all.find(e => e.classList.contains('pa-model-button'));
+  const last = picker ? content(picker) : text;
+  return [text.top - box.top, box.bottom - last.bottom];
+}
+"""
+
+
+@pytest.mark.parametrize("models", [["alpha-model"], ["alpha-model", "beta-model"]], ids=["one", "two"])
+@pytest.mark.parametrize("text", ["", "First line\nSecond line"], ids=["empty", "multiline"])
+def test_the_input_is_padded_evenly_above_and_below(page, models, text):
+    serve_component(page, drawer(models))
+    box = page.get_by_placeholder("Ask the agent…")
+    box.fill(text)
+    if len(models) > 1:
+        expect(page.get_by_role("button", name="Model: Alpha")).to_be_visible()
+
+    def even():
+        top, bottom = page.evaluate(COMPOSER_GAPS)
+        return top >= 16 and abs(top - bottom) <= 1
+
+    wait_until(even, page)
