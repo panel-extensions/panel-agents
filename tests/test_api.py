@@ -1,6 +1,8 @@
 """The 1.x public API; changing these lists is a breaking change or a new feature."""
 
 import importlib
+import subprocess
+import sys
 
 import pytest
 
@@ -89,3 +91,13 @@ def test_version_numbers_are_one_based():
     state.apply_artifact_version("doc", 1)
     assert artifact.applied_version.version == 1
     assert state.events[-1].version == 1
+
+
+def test_imports_without_pandas():
+    # Panel 1.11 no longer installs pandas, and panel-agents does not require it.
+    code = (
+        "import sys; sys.modules['pandas'] = None\n"
+        "import panel_agents, panel_agents.components, panel_agents.recording\n"
+        "from panel_agents import AgentDrawer, ArtifactView, RunState, SchemaForm\n"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)

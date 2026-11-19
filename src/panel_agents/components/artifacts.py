@@ -9,9 +9,8 @@ import inspect
 import io
 import json
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import pandas as pd
 import panel as pn
 import panel_material_ui as pmui
 import param
@@ -31,6 +30,9 @@ from ..state import RunState
 from ._diff import DiffViewer
 from ._timeline import VersionTimeline
 from .renderers import render
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 _KIND_ICONS = {
     "table": "table_chart",
@@ -135,6 +137,8 @@ def _version_label(version: ArtifactVersion, applied: bool = False) -> str:
 def _version_bytes(value: Any, kind: str) -> tuple[bytes, str]:
     """Serialize a version for download, returning the payload and file extension."""
     if kind == "table" and hasattr(value, "to_csv"):
+        import pandas as pd
+
         return value.to_csv(index=not isinstance(value.index, pd.RangeIndex)).encode(), "csv"
     if kind == "json" and not isinstance(value, str):
         return json.dumps(value, indent=2, default=repr).encode(), "json"
@@ -152,6 +156,8 @@ def _row_labels(df: pd.DataFrame, table_diff: TableDiff, key: list[str]) -> list
 
 def _table_styles(df: pd.DataFrame, table_diff: TableDiff, side: str, key: list[str] | None = None) -> pd.DataFrame:
     """CSS for each cell of one side of a table diff, positionally aligned with ``df``."""
+    import pandas as pd
+
     styles = pd.DataFrame("", index=range(len(df)), columns=range(len(df.columns)))
     if table_diff.alignment is None:
         return styles
@@ -175,6 +181,8 @@ def _table_styles(df: pd.DataFrame, table_diff: TableDiff, side: str, key: list[
 
 
 def _apply_styles(table, styles: pd.DataFrame):
+    import pandas as pd
+
     def style(data):
         values = styles.iloc[:len(data), :data.shape[1]].to_numpy()
         return pd.DataFrame(values, index=data.index, columns=data.columns)
@@ -765,6 +773,8 @@ class ArtifactView(Viewer):
     def _table_comparison(self, old: ArtifactVersion, new: ArtifactVersion, result: TableDiff):
         key = self.diff_options.get("key")
         key = [key] if isinstance(key, str) else list(key or [])
+        import pandas as pd
+
         sides = []
         for side, version in (("old", old), ("new", new)):
             df = version.value if version.value is not None else pd.DataFrame()
