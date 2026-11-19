@@ -224,6 +224,10 @@ class ToolCallCard(Viewer):
         if it raises or returns anything but a non-empty string the header
         shows the tool name and arguments as without a label.""")
 
+    defer_result = param.Boolean(default=False, constant=True, doc="""
+        Whether the result is rendered only once the card is opened, so a
+        long list of collapsed cards stays cheap.""")
+
     redacted = param.Boolean(default=False, constant=True, doc="""
         Whether to show which tool ran, its status and duration without
         its arguments, result or error message, e.g. for a viewer who may
@@ -262,16 +266,19 @@ class ToolCallCard(Viewer):
         self._step.param.watch(lambda e: setattr(self, "collapsed", e.new), "collapsed")
         self._approval_watcher = None
         self._rendered_result = None
+        self._deferred = False
         self._unwatch_artifacts: Callable[[], None] | None = None
         self._state_watcher = None
         self._title_watchers: list = []
         self._chips: dict[str, pmui.Chip] = {}
 
-        self.call.param.watch(self._update_header, ["tool_name", "args", "status", "ended_at", "approval"])
-        self.call.param.watch(self._update_args, ["args", "args_text"])
-        self.call.param.watch(self._update_status, "status")
-        self.call.param.watch(self._update_result, ["result", "error", "status"])
-        self.call.param.watch(self._watch_approval, "approval")
+        self._call_watchers = [
+            self.call.param.watch(self._update_header, ["tool_name", "args", "status", "ended_at", "approval"]),
+            self.call.param.watch(self._update_args, ["args", "args_text"]),
+            self.call.param.watch(self._update_status, "status"),
+            self.call.param.watch(self._update_result, ["result", "error", "status"]),
+            self.call.param.watch(self._watch_approval, "approval"),
+        ]
         if self.state is not None:
             self._state_watcher = self.state.param.watch(self._watch_artifacts, "artifacts")
             self._watch_artifacts()
@@ -293,6 +300,8 @@ class ToolCallCard(Viewer):
     @param.depends("collapsed", watch=True)
     def _sync_collapsed(self):
         self._step.collapsed = self.collapsed
+        if not self.collapsed and self._deferred:
+            self._update_result()
 
     @param.depends("approval_factory", watch=True)
     def _refresh_approval(self):
@@ -380,6 +389,13 @@ class ToolCallCard(Viewer):
     def _show_result(self, result):
         if result is not None and result is self._rendered_result and self._result.objects:
             return
+        # A result is rendered once the card is opened, so long runs of collapsed cards stay cheap.
+        self._deferred = result is not None and self.collapsed and self.defer_result
+        if self._deferred:
+            self._result.objects = []
+            self._result_section.visible = False
+            self._rendered_result = None
+            return
         self._rendered_result = result
         if result is None:
             self._result.objects = []
@@ -414,8 +430,9 @@ class ToolCallCard(Viewer):
                 # The card's own header already names the tool.
                 widget._title.visible = False
         else:
+            description = None if self.redacted else request.description
             widget = pmui.Alert(
-                object=_escape_markdown(request.description or "Waiting for a decision before this tool runs."),
+                object=_escape_markdown(description or "Waiting for a decision before this tool runs."),
                 title="Approval required", severity="warning", variant="outlined",
                 sizing_mode="stretch_width", margin=(5, 0),
             )
@@ -435,7 +452,13 @@ class ToolCallCard(Viewer):
         return self.state.artifacts.published_by(self.call.tool_call_id)
 
     def _release(self):
-        """Stop following the state's artifacts, e.g. when the chat showing the card is cleared."""
+        """Stop following the call and the state's artifacts, e.g. when the chat showing the card is cleared."""
+        for watcher in self._call_watchers:
+            self.call.param.unwatch(watcher)
+        self._call_watchers = []
+        if self._approval_watcher is not None:
+            self._approval_watcher[0].param.unwatch(self._approval_watcher[1])
+            self._approval_watcher = None
         if self._state_watcher is not None:
             self.state.param.unwatch(self._state_watcher)
             self._state_watcher = None

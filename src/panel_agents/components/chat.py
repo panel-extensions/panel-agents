@@ -107,8 +107,9 @@ class AgentChat(Viewer):
 
     on_show_run = param.Callable(default=None, allow_None=True, doc="""
         Called with a run id when a person asks how a finished run's
-        answer was made. When set, the usage line under the run has a
-        "Details" link, e.g. opening a ``SpanView`` of the run, as
+        answer was made. When set, every finished top-level run gets a
+        "Details" link under its last message, after its usage line if
+        one is shown, e.g. opening a ``SpanView`` of the run, as
         ``AgentDrawer`` does.""")
 
     feed_params = param.Dict(default={}, doc="""
@@ -510,11 +511,13 @@ class AgentChat(Viewer):
     def _update_usage(self):
         """Show each finished run's usage totals under the last message of the run that is shown."""
         wanted = {}
-        if self.show_usage:
-            for run_id, run in self.state.runs.items():
-                if run.status != "running" and run.usage and run.parent_run_id is None:
-                    if (message := self._last_shown(run_id)) is not None:
-                        wanted[run_id] = message
+        linked = self.on_show_run is not None
+        for run_id, run in self.state.runs.items():
+            if run.status == "running" or run.parent_run_id is not None:
+                continue
+            if (self.show_usage and run.usage) or linked:
+                if (message := self._last_shown(run_id)) is not None:
+                    wanted[run_id] = message
         for run_id, message in list(self._footers.items()):
             if wanted.get(run_id) is not message:
                 message.footer_objects = []
@@ -523,12 +526,14 @@ class AgentChat(Viewer):
             run = self.state.runs[run_id]
             footer = (
                 f'<div class="usage" title="{escape(usage_tooltip(run), quote=True)}">{escape(usage_summary(run))}</div>'
+                if self.show_usage and run.usage else ""
             )
-            linked = self.on_show_run is not None
             panes = message.footer_objects
             if panes and getattr(panes[0], "_usage", None) == (footer, linked):
                 continue
-            usage = pn.pane.HTML(footer, margin=(0, 10), stylesheets=[USAGE_CSS], css_classes=["run-usage"])
+            usage = pn.pane.HTML(
+                footer, margin=(0, 10), stylesheets=[USAGE_CSS], css_classes=["run-usage"], visible=bool(footer),
+            )
             if linked:
                 link = pmui.Button(
                     label="Details", variant="text", size="small", margin=0, css_classes=["run-details"],

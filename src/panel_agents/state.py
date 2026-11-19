@@ -205,7 +205,9 @@ class RunInfo(param.Parameterized):
 
     result = param.Parameter(default=None)
 
-    status = param.Selector(default="running", objects=["running", "finished", "error"])
+    status = param.Selector(default="running", objects=["running", "finished", "error", "cancelled"], doc="""
+        ``cancelled`` runs were stopped on purpose, e.g. by the user; ``error``
+        holds the reason given, as for a failed run.""")
 
     error = param.String(default=None, allow_None=True)
 
@@ -273,35 +275,14 @@ class SpanError:
     item: Any = None
 
 
-@dataclass(frozen=True)
-class RunSpan:
-    """
-    Everything one run did, read from a ``RunState`` by ``RunState.span``:
-    the question, the model requests with the tool calls each issued, the
-    agent's messages, the artifact versions published and what failed.
-    Child runs count as part of the run, as for ``RunState.undo_run``.
+class _UsageTotals:
+    """Usage totals over ``runs``, the first of which is the run whose wall time counts."""
 
-    A snapshot: the entities in it are the state's live objects, but the
-    lists are not updated as the run goes on; call ``span`` again.
-    """
-
-    run: RunInfo
     runs: tuple[RunInfo, ...]
-    question: str | None
-    steps: tuple[tuple[Any, int], ...]
-    messages: tuple[MessageState, ...]
-    model_calls: tuple[ModelCallState, ...]
-    tool_calls: tuple[ToolCallState, ...]
-    published: tuple[tuple[Artifact, ArtifactVersion], ...]
-    errors: tuple[SpanError, ...]
 
     @property
-    def run_id(self) -> str:
-        return self.run.run_id
-
-    @property
-    def usage(self) -> list[ev.Usage]:
-        return [u for run in self.runs for u in run.usage]
+    def usage(self) -> tuple[ev.Usage, ...]:
+        return tuple(u for run in self.runs for u in run.usage)
 
     @property
     def requests(self) -> int:
@@ -341,27 +322,79 @@ class RunSpan:
 
     @property
     def duration(self) -> float | None:
-        return self.run.duration
+        return self.runs[0].duration if self.runs else None
 
 
-def nest_steps(items: Iterable[Any]) -> list[tuple[Any, int]]:
+@dataclass(frozen=True)
+class _RunTreeTotals(_UsageTotals):
+    runs: tuple[RunInfo, ...]
+
+
+@dataclass(frozen=True)
+class RunSpan(_UsageTotals):
     """
-    A run's model requests, tool calls and assistant messages with their
-    depth: a tool call sits under the model request that issued it (depth
-    1), or under the request before it when requests do not name their tool
-    calls, as in older recordings. User messages and thinking are left out.
+    Everything one run did, read from a ``RunState`` by ``RunState.span``:
+    the question, the model requests with the tool calls each issued, the
+    agent's messages, the artifact versions published and what failed.
+    Child runs count as part of the run, as for ``RunState.undo_run``, and
+    the totals (``requests``, ``input_tokens``, ``output_tokens``,
+    ``cached_tokens``, ``cached_share``, ``cost_usd``, ``model_duration``,
+    ``models``) cover them too; ``duration`` is the run's wall time.
+
+    A snapshot: the entities in it are the state's live objects, but the
+    lists are not updated as the run goes on; call ``span`` again.
+    """
+
+    run: RunInfo
+    runs: tuple[RunInfo, ...]
+    question: str | None
+    steps: tuple[tuple[Any, int], ...]
+    messages: tuple[MessageState, ...]
+    model_calls: tuple[ModelCallState, ...]
+    tool_calls: tuple[ToolCallState, ...]
+    published: tuple[tuple[Artifact, ArtifactVersion], ...]
+    errors: tuple[SpanError, ...]
+
+    @property
+    def run_id(self) -> str:
+        return self.run.run_id
+
+
+def _span_errors(runs: Iterable[RunInfo], model_calls: Iterable[ModelCallState], tool_calls: Iterable[ToolCallState]) -> tuple[SpanError, ...]:
+    errors = []
+    for r in runs:
+        if r.status == "error":
+            errors.append(SpanError("run", r.error or "The run failed.", r))
+        elif r.status == "cancelled":
+            errors.append(SpanError("cancelled", r.error or "The run was cancelled.", r))
+        errors += [SpanError("guardrail", g.message or g.name, g) for g in r.guardrails if g.severity == "block"]
+    for call in model_calls:
+        errors += [SpanError("attempt", a.error or "The request failed.", call) for a in call.attempts]
+        if call.status == "failed":
+            errors.append(SpanError("model_call", call.error or "The request failed.", call))
+    errors += [SpanError("tool_call", c.error or "The call failed.", c) for c in tool_calls if c.status == "failed"]
+    return tuple(errors)
+
+
+def _nest_steps(items: Iterable[Any]) -> list[tuple[Any, int]]:
+    """
+    Model requests, tool calls and assistant messages with their depth: a
+    tool call sits under the model request that issued it (depth 1), or,
+    when requests do not name their tool calls as in older recordings,
+    under the request of its own run before it. User messages and thinking
+    are left out.
     """
     items = list(items)
     issued = {t: m for m in items if isinstance(m, ModelCallState) for t in m.tool_call_ids}
     children: dict[int, list[ToolCallState]] = {}
     order: list[Any] = []
-    current = None
+    current: dict[str | None, ModelCallState] = {}
     for item in items:
         if isinstance(item, ModelCallState):
-            current = item
+            current[item.run_id] = item
             order.append(item)
         elif isinstance(item, ToolCallState):
-            parent = issued.get(item.tool_call_id, current)
+            parent = issued.get(item.tool_call_id) or current.get(item.run_id)
             if parent is None:
                 order.append(item)
             else:
@@ -785,7 +818,7 @@ class RunState(param.Parameterized):
         )
         return version
 
-    def run_tree(self, run_id: str) -> list[str]:
+    def _run_tree(self, run_id: str) -> list[str]:
         """``run_id`` followed by the ids of its child runs, their children and so on, in the order they started."""
         children: dict[str, list[str]] = {}
         for rid, run in self.runs.items():
@@ -800,7 +833,7 @@ class RunState(param.Parameterized):
             queue += children.get(rid, [])
         return tree
 
-    def published_in(self, run_ids: Iterable[str]) -> list[tuple[Artifact, ArtifactVersion]]:
+    def _published_in(self, run_ids: Iterable[str]) -> list[tuple[Artifact, ArtifactVersion]]:
         """The artifact versions published in any of ``run_ids``, as (artifact, version) pairs in time order."""
         runs = set(run_ids)
         published = [(a, v) for a in self.artifacts for v in a.versions if v.run_id in runs]
@@ -820,7 +853,7 @@ class RunState(param.Parameterized):
         asks for the span rather than on every event.
         """
         run = self.runs[run_id]
-        ids = self.run_tree(run_id)
+        ids = self._run_tree(run_id)
         tree = set(ids)
         items = [i for i in self.items if i.run_id in tree]
         question = run.input if isinstance(run.input, str) and run.input.strip() else None
@@ -828,24 +861,15 @@ class RunState(param.Parameterized):
             question = next((
                 i.content for i in items if isinstance(i, MessageState) and i.role == "user" and i.content
             ), None)
-        published = self.published_in(ids)
+        published = self._published_in(ids)
         runs = tuple(self.runs[r] for r in ids)
         model_calls = tuple(i for i in items if isinstance(i, ModelCallState))
         tool_calls = tuple(i for i in items if isinstance(i, ToolCallState))
-        errors = []
-        for r in runs:
-            if r.status == "error":
-                errors.append(SpanError("run", r.error or "The run failed.", r))
-            errors += [SpanError("guardrail", g.message or g.name, g) for g in r.guardrails if g.severity == "block"]
-        for call in model_calls:
-            errors += [SpanError("attempt", a.error or "The request failed.", call) for a in call.attempts]
-            if call.status == "failed":
-                errors.append(SpanError("model_call", call.error or "The request failed.", call))
-        errors += [SpanError("tool_call", c.error or "The call failed.", c) for c in tool_calls if c.status == "failed"]
+        errors = _span_errors(runs, model_calls, tool_calls)
         return RunSpan(
-            run=run, runs=runs, question=question, steps=tuple(nest_steps(items)),
+            run=run, runs=runs, question=question, steps=tuple(_nest_steps(items)),
             messages=tuple(i for i in items if isinstance(i, MessageState) and i.role == "assistant" and i.kind == "text"),
-            model_calls=model_calls, tool_calls=tool_calls, published=tuple(published), errors=tuple(errors),
+            model_calls=model_calls, tool_calls=tool_calls, published=tuple(published), errors=errors,
         )
 
     # Event handlers
@@ -873,7 +897,8 @@ class RunState(param.Parameterized):
     def _on_run_error(self, event: ev.RunError):
         run = self.runs.get(event.run_id)
         if run is not None:
-            run.param.update(status="error", error=event.message, ended_at=event.timestamp)
+            status = "cancelled" if event.code == "cancelled" else "error"
+            run.param.update(status=status, error=event.message, ended_at=event.timestamp)
         # A sub-run's error reaches its parent, which may recover; a cancellation is the user's own doing.
         if event.code != "cancelled" and (run is None or run.parent_run_id is None):
             message = MessageState(

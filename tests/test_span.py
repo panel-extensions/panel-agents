@@ -112,9 +112,9 @@ def test_span_view_shows_the_question_steps_and_published_versions():
     assert "Paid revenue by region?" in head and "Finished" in head
     assert "31% of input from cache" in head
     assert "1 step blocked, 1 request retried, 1 tool call failed" in head
-    assert view._trace.run_id == "r1" and view._trace.steps == 7
+    assert view._trace.run_id == "r1" and view._trace._step_count == 7
     assert [i["secondary"] for i in view._published.items] == ["v1 · Added revenue", "v2"]
-    assert view._guardrails.visible and "Blocked SELECT" in view._guardrails.object
+    assert view._problems.visible and "Blocked: Blocked SELECT" in view._problems.object.replace("\\", "")
     assert not view._unrecorded.visible and not view._missing.visible
 
 
@@ -131,14 +131,14 @@ def test_span_view_says_when_steps_were_not_recorded_or_the_run_is_missing():
 def test_redacted_span_view_hides_content_but_keeps_the_shape():
     view = SpanView(state(), run_id="r1", redacted=True, row_limit=None)
     trace = view._trace
-    texts = [view._header.object, view._guardrails.object, str(view._published.items)]
+    texts = [view._header.object, view._problems.object, str(view._published.items)]
     for item, _ in trace._shown:
         card = trace._cards[id(item)]
         if isinstance(card, ToolCallCard):
             assert not card._args_section.visible and not card._result_section.visible
             texts += [card._header.object, card._error.object, card._error_text.object]
         elif isinstance(card, ModelCallCard):
-            texts += [card._header.object, card._details.object, card._error.object]
+            texts += [card._header.object, card._details.object, card._error.object, card._tooltip()]
         else:
             texts.append(str(getattr(card, "object", "")))
     blob = "\n".join(str(t or "") for t in texts)
@@ -171,7 +171,7 @@ def test_span_view_follows_a_run_in_progress():
     assert "Running" in view._header.object and not view._unrecorded.visible
     s.apply(ev.ToolCallStart(tool_call_id="t", tool_name="step", run_id="r", timestamp=1))
     s.apply(ev.ArtifactPublished(artifact_id="a", value=1, run_id="r", tool_call_id="t"))
-    assert view._trace.steps == 1 and len(view._published.items) == 1
+    assert view._trace._step_count == 1 and len(view._published.items) == 1
     s.apply(ev.RunFinished(run_id="r", timestamp=2))
     assert "Finished" in view._header.object
 
@@ -184,23 +184,36 @@ def test_clicking_a_published_version_calls_on_artifact():
     assert calls == [("doc", 2)]
     s.artifacts.active = None
     SpanView(s, run_id="r1")._on_published_click({"artifact_id": "doc", "version": 1})
-    assert s.artifacts.active == "doc"
+    assert s.artifacts.active is None
 
 
 def test_chat_details_link_calls_on_show_run():
     s = state()
     shown = []
     chat = AgentChat(s, readonly=True, on_show_run=shown.append)
-    assert chat._footers
     (message,) = chat._footers.values()
     row = message.footer_objects[0]
     usage, link = row.objects
     assert link.label == "Details"
-    link.clicks += 1
-    chat._show_run("r1")
-    assert "r1" in shown
+    link.param.trigger("clicks")
+    assert shown == ["r1"]
     chat.on_show_run = None
     assert message.footer_objects[0] is not row and "run-usage" in message.footer_objects[0].css_classes
+
+
+def test_chat_details_link_does_not_need_usage():
+    s = RunState(flush_interval=0)
+    s.add_user_message("Hi", run_id="r")
+    s.apply_many([
+        ev.RunStarted(run_id="r"), ev.TextMessageStart(message_id="a", run_id="r"),
+        ev.TextMessageContent(message_id="a", delta="Hello", run_id="r"), ev.TextMessageEnd(message_id="a", run_id="r"),
+        ev.RunFinished(run_id="r"),
+    ])
+    assert not AgentChat(s, readonly=True)._footers
+    chat = AgentChat(s, readonly=True, on_show_run=lambda r: None)
+    (message,) = chat._footers.values()
+    usage, link = message.footer_objects[0].objects
+    assert not usage.visible and link.label == "Details"
 
 
 def test_history_rows_offer_how_was_this_made():
@@ -231,13 +244,28 @@ def test_drawer_show_run_opens_a_span_dialog_and_versions_in_the_artifacts_view(
     drawer = AgentDrawer(state=s)
     assert drawer.chat.on_show_run == drawer.show_run
     drawer.show_run("r1")
-    assert drawer._span_dialog.open and drawer.span_view.run_id == "r1"
-    first = drawer.span_view
+    assert drawer._span_dialog.open and drawer._span.run_id == "r1" and not drawer._span.redacted
+    first = drawer._span
     drawer.show_run("r2")
-    assert drawer.span_view is first and first.run_id == "r2"
+    assert drawer._span is first and first.run_id == "r2"
     drawer._open_version("doc", 1)
     assert not drawer._span_dialog.open and drawer.open and drawer.tab == "artifacts"
     assert s.artifacts["doc"].current == 1
+
+
+def test_drawer_redacts_runs_by_the_hosts_policy():
+    s = state()
+    drawer = AgentDrawer(state=s, redact_runs=lambda run_id: run_id == "r1")
+    drawer.show_run("r2")
+    plain = drawer._span
+    assert not plain.redacted
+    drawer.show_run("r1")
+    assert drawer._span.redacted and drawer._span is not plain and plain._released
+    drawer.show_run("r1", redacted=False)
+    assert not drawer._span.redacted
+    drawer.redact_runs = True
+    drawer.show_run("r2")
+    assert drawer._span.redacted
 
 
 def test_span_view_includes_the_steps_of_child_runs():
@@ -248,5 +276,112 @@ def test_span_view_includes_the_steps_of_child_runs():
         ev.RunFinished(run_id="sub", timestamp=2),
         ev.RunFinished(run_id="r", timestamp=3),
     ])
-    assert SpanView(s, run_id="r")._trace.steps == 1
+    assert SpanView(s, run_id="r")._trace._step_count == 1
     assert [t.tool_call_id for t in s.span("r").tool_calls] == ["t"]
+
+
+def test_cancelled_runs_are_not_failures():
+    s = RunState.from_events([
+        ev.RunStarted(run_id="r", input="Go", timestamp=0),
+        ev.RunError(run_id="r", message="Stopped by the user", code="cancelled", timestamp=1),
+    ])
+    assert s.runs["r"].status == "cancelled"
+    assert [(e.kind, e.message) for e in s.span("r").errors] == [("cancelled", "Stopped by the user")]
+    view = SpanView(s, run_id="r")
+    assert "Cancelled: Stopped by the user" in view._header.object and "Failed" not in view._header.object
+    assert "The run was cancelled: Stopped by the user" in view._problems.object.replace("\\", "")
+    assert "Cancelled</span>" in SpanView(s, run_id="r", redacted=True)._header.object
+
+
+def child_failure() -> RunState:
+    return RunState.from_events([
+        ev.RunStarted(run_id="r", input="Go", timestamp=0),
+        ev.ModelRequestStarted(request_id="q1", model="m", run_id="r", timestamp=0),
+        ev.Usage(request_id="q1", model="m", input_tokens=100, output_tokens=10, cached_tokens=50, run_id="r", timestamp=1),
+        ev.RunStarted(run_id="sub", parent_run_id="r", agent_name="helper", timestamp=1),
+        ev.ModelRequestStarted(request_id="q2", model="m2", run_id="sub", timestamp=1),
+        ev.ToolCallStart(tool_call_id="t", tool_name="look", run_id="sub", timestamp=1.5),
+        ev.Usage(request_id="q2", model="m2", input_tokens=300, output_tokens=30, run_id="sub", timestamp=2),
+        ev.RunError(run_id="sub", message="helper broke", timestamp=2.5),
+        ev.RunFinished(run_id="r", timestamp=3),
+    ])
+
+
+def test_a_failed_child_run_is_shown_and_counted():
+    s = child_failure()
+    view = SpanView(s, run_id="r")
+    assert "1 sub-run failed" in view._header.object
+    assert "Sub-run helper failed: helper broke" in view._problems.object.replace("\\", "")
+    labels = [o for o in view._trace._rows.objects if "rt-child" in o.css_classes]
+    assert len(labels) == 1 and "helper" in labels[0].object
+
+
+def test_totals_cover_the_whole_run_tree():
+    s = child_failure()
+    trace = SpanView(s, run_id="r")._trace
+    totals = trace._totals.object
+    for text in (">2<", "400", "50 from cache", ">40<", "m, m2"):
+        assert text in totals
+    assert s.span("r").input_tokens == 400
+
+
+def test_a_childs_tool_call_is_not_nested_under_the_parents_request():
+    s = RunState.from_events([
+        ev.RunStarted(run_id="r", timestamp=0),
+        ev.ModelRequestStarted(request_id="q1", model="m", run_id="r", timestamp=0),
+        ev.RunStarted(run_id="sub", parent_run_id="r", timestamp=1),
+        ev.ToolCallStart(tool_call_id="t", tool_name="look", run_id="sub", timestamp=1),
+    ])
+    steps = [(type(i).__name__, d) for i, d in s.span("r").steps]
+    assert steps == [("ModelCallState", 0), ("ToolCallState", 0)]
+
+
+def test_header_counts_follow_steps_as_they_finish():
+    s = RunState(flush_interval=0)
+    s.apply(ev.RunStarted(run_id="r", timestamp=0))
+    view = SpanView(s, run_id="r")
+    s.apply(ev.ToolCallStart(tool_call_id="t", tool_name="x", run_id="r", timestamp=1))
+    assert "failed" not in view._header.object
+    s.apply(ev.ToolCallResult(tool_call_id="t", content="no", is_error=True, run_id="r", timestamp=2))
+    assert "1 tool call failed" in view._header.object
+
+
+def watcher_count(obj) -> int:
+    return sum(len(w) for names in obj.param.watchers.values() for w in names.values())
+
+
+def test_a_released_view_stops_following_the_state():
+    s = RunState(flush_interval=0)
+    s.apply(ev.RunStarted(run_id="r", timestamp=0))
+    before = watcher_count(s)
+    view = SpanView(s, run_id="r")
+    s.apply(ev.ToolCallStart(tool_call_id="t0", tool_name="x", run_id="r", timestamp=1))
+    calls = []
+    view._trace._update_rows = lambda *a, **k: calls.append(a)
+    view.release()
+    header = view._header.object
+    s.apply(ev.ToolCallStart(tool_call_id="t1", tool_name="x", run_id="r", timestamp=2))
+    s.apply(ev.ToolCallResult(tool_call_id="t0", content="no", is_error=True, run_id="r", timestamp=3))
+    s.apply(ev.ArtifactPublished(artifact_id="a", value=1, run_id="r"))
+    s.apply(ev.RunFinished(run_id="r", timestamp=4))
+    assert view._header.object == header and view._published.items == []
+    assert view._trace._cards == {} and not calls
+    assert watcher_count(s) == before
+    assert all(watcher_count(o) == 0 for o in [*s.runs.values(), *s.tool_calls.values()])
+
+
+def test_redacted_cards_hide_approval_descriptions_and_argument_tooltips():
+    s = RunState(flush_interval=0)
+    s.apply_many([
+        ev.RunStarted(run_id="r"),
+        ev.ToolCallStart(tool_call_id="t", tool_name="run_sql", run_id="r"),
+        ev.ToolCallArgs(tool_call_id="t", delta=f'{{"sql": "{SECRET}"}}', run_id="r"),
+        ev.ToolCallEnd(tool_call_id="t", run_id="r"),
+        ev.ApprovalRequested(tool_call_id="t", tool_name="run_sql", args={"sql": SECRET}, description=f"Run {SECRET}", run_id="r"),
+    ])
+    card = ToolCallCard(s.tool_calls["t"], state=s, redacted=True)
+    notice = card._approval.objects[0]
+    assert SECRET not in notice.object and "Waiting for a decision" in notice.object
+    assert "customers" not in card._header.object
+    plain = ToolCallCard(s.tool_calls["t"], state=s)
+    assert "customers" in plain._approval.objects[0].object

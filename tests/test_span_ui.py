@@ -7,7 +7,7 @@ from panel.io.state import state as pn_state
 from panel.tests.util import serve_component, wait_until
 from playwright.sync_api import expect
 
-from panel_agents import AgentDrawer, RunState, SpanView
+from panel_agents import AgentDrawer, ModelCallCard, RunState, SpanView
 from panel_agents import events as ev
 
 from .test_span import SECRET, state
@@ -93,3 +93,13 @@ def test_drawer_opens_a_run_from_the_chat_and_a_version_from_the_span(page):
     row.hover()
     row.locator('.MuiIconButton-root[title="How was this made?"]').click()
     expect(page.get_by_role("dialog").locator(".sv-question")).to_have_text("Paid revenue by region?")
+
+
+def test_model_name_stays_readable_in_a_narrow_card(page):
+    s = state()
+    card = ModelCallCard(s.model_calls["q1"], state=s, show_tool_count=True)
+    serve_component(page, pmui.Column(card, width=380))
+    name = page.locator(".mc-model")
+    expect(name).to_have_text("gpt-4o")
+    assert name.evaluate("el => el.scrollWidth <= el.clientWidth")
+    expect(page.locator(".mc-tokens")).to_be_hidden()

@@ -33,9 +33,9 @@ _MODEL_HEADER_CSS = _HEADER_CSS + """
   color: var(--mui-palette-primary-main, #1976d2);
   background: rgba(var(--mui-palette-primary-mainChannel, 25 118 210) / 0.1);
 }
-@container (max-width: 420px) { .mc-tools { display: none; } }
-@container (max-width: 360px) { .mc-cost { display: none; } }
-@container (max-width: 320px) { .mc-tokens { display: none; } }
+@container (max-width: 460px) { .mc-tools { display: none; } }
+@container (max-width: 420px) { .mc-cost { display: none; } }
+@container (max-width: 380px) { .mc-tokens { display: none; } }
 """
 
 _DETAILS_CSS = """
@@ -143,11 +143,17 @@ class ModelCallCard(Viewer):
         )
         self._step.header.objects = [self._header]
         self._step.param.watch(lambda e: setattr(self, "collapsed", e.new), "collapsed")
-        self.call.param.watch(self._update, list(ModelCallState.param))
+        self._call_watcher = self.call.param.watch(self._update, list(ModelCallState.param))
         self._update()
 
     def __panel__(self):
         return self._step
+
+    def _release(self):
+        """Stop following the call, e.g. when the view showing the card is gone."""
+        if self._call_watcher is not None:
+            self.call.param.unwatch(self._call_watcher)
+            self._call_watcher = None
 
     @param.depends("collapsed", watch=True)
     def _sync_collapsed(self):
