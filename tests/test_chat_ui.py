@@ -202,15 +202,19 @@ def test_folded_rows_of_earlier_runs_stay_shown_in_a_long_feed(page):
     def app():
         chat = AgentChat(state, readonly=True, feed_params={"height": 500, "sizing_mode": "stretch_width"})
         chats.append(chat)
-        # The runs are applied on the server's thread, as a runner applies them.
         runs = iter(range(16))
-        pn_state.add_periodic_callback(lambda: _live_run(state, next(runs)), period=1000, count=16)
-        return chat
+        # The runs are applied on the server's thread, as a runner applies them.
+        button = pmui.Button(label="Next run", on_click=lambda e: _live_run(state, next(runs)))
+        return pmui.Column(button, chat)
 
     serve_component(page, app)
-    expect(page.get_by_text("answer 5", exact=True)).to_be_attached(timeout=30000)
-    page.evaluate(_WATCH_ROWS)
-    wait_until(lambda: len(state.runs) == 16 and not state.running, page, timeout=60000)
+    button = page.get_by_role("button", name="Next run")
+    for n in range(16):
+        if n == 6:
+            page.evaluate(_WATCH_ROWS)
+        button.click()
+        wait_until(lambda n=n: len(state.runs) == n + 1 and not state.running, page, timeout=30000)
+        page.wait_for_timeout(300)
     page.wait_for_timeout(1000)
     page.evaluate("clearInterval(window.rows_watch)")
     assert page.evaluate("window.missing_rows") == []
