@@ -5,6 +5,7 @@ from .artifacts import ArtifactPane, ArtifactView
 from .chat import AgentChat
 from .drawer import AgentDrawer
 from .model_call import ModelCallCard
+from .model_picker import ModelChoice, ModelPicker
 from .renderers import register_renderer, render
 from .span import SpanView
 from .tool_call import ToolCallCard
@@ -20,6 +21,8 @@ __all__ = [
     "ArtifactPane",
     "ArtifactView",
     "ModelCallCard",
+    "ModelChoice",
+    "ModelPicker",
     "RunTrace",
     "SchemaForm",
     "SpanView",

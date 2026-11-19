@@ -1,3 +1,5 @@
+import time
+
 import pandas as pd
 import pytest
 
@@ -82,14 +84,24 @@ def _streaming_chat(tables: int, slow: float = 0):
     import asyncio as aio
 
     from pydantic_ai import Agent
-    from pydantic_ai.messages import ModelRequest, ToolReturnPart
+    from pydantic_ai.messages import ModelRequest, RetryPromptPart, ToolReturnPart, UserPromptPart
     from pydantic_ai.models.function import DeltaToolCall, FunctionModel
 
     from panel_agents.adapters.pydantic_ai import AgentRunner, artifact_return
 
+    def answering(messages):
+        # Any tool result or retry since the question means the tools ran, so a
+        # failing tool ends the run with an answer instead of calling tools again.
+        for message in reversed(messages):
+            if isinstance(message, ModelRequest):
+                if any(isinstance(p, (ToolReturnPart, RetryPromptPart)) for p in message.parts):
+                    return True
+                if any(isinstance(p, UserPromptPart) for p in message.parts):
+                    return False
+        return False
+
     async def stream(messages, info):
-        last = messages[-1]
-        if isinstance(last, ModelRequest) and any(isinstance(p, ToolReturnPart) for p in last.parts):
+        if answering(messages):
             for chunk in ["Here ", "are ", "the ", "tables."]:
                 await aio.sleep(0.02)
                 yield chunk
@@ -114,7 +126,7 @@ def _streaming_chat(tables: int, slow: float = 0):
 def _timeline(state):
     (run,) = state.runs.values()
     start = run.started_at
-    lines = [f"run {run.duration:.2f}s"]
+    lines = [f"run {run.duration:.2f}s" if run.duration is not None else f"run {run.status}"]
     for item in state.items:
         begin = getattr(item, "started_at", None) or getattr(item, "created_at", None)
         end = getattr(item, "ended_at", None)
@@ -126,17 +138,38 @@ def _timeline(state):
     return "\n".join(lines)
 
 
+def _wait_for_run(page, runner, stall: float = 60, limit: float = 300):
+    """
+    Wait for the runner's run to end. A slow machine only fails this when the
+    run stops making progress for ``stall`` seconds, or runs past ``limit``,
+    and the failure says where the run got to.
+    """
+    start = changed = time.monotonic()
+    seen = -1
+    while not (runner.state.runs and not runner.state.running):
+        now = time.monotonic()
+        count = len(runner.state.events)
+        if count != seen:
+            seen, changed = count, now
+        if now - changed > stall or now - start > limit:
+            where = _timeline(runner.state) if runner.state.runs else "no run started"
+            raise AssertionError(f"The run made no progress for {now - changed:.0f}s after {now - start:.0f}s:\n{where}")
+        page.wait_for_timeout(250)
+
+
 def _ask_for_tables(page, chat, runner):
     serve_component(page, chat)
     box = page.get_by_placeholder("Ask the agent…")
     box.fill("tables 3")
     box.press("Enter")
-    wait_until(lambda: bool(runner.state.runs) and not runner.state.running, page, timeout=120000)
+    _wait_for_run(page, runner)
     page.get_by_text("Here are the tables.").wait_for(timeout=30000)
     (run,) = runner.state.runs.values()
     return run.duration
 
 
+# The runs that stream through an agent share one worker, so they do not slow each other down.
+@pytest.mark.xdist_group("streaming-runs")
 @pytest.mark.parametrize("attempt", range(4))
 def test_every_cell_of_a_streaming_run_renders(page, attempt):
     page.set_viewport_size({"width": 1400, "height": 1000})
@@ -153,6 +186,7 @@ def test_every_cell_of_a_streaming_run_renders(page, attempt):
     assert duration < 2 * baseline + 2, f"chat layout {baseline:.2f}s\n{_timeline(runner.state)}"
 
 
+@pytest.mark.xdist_group("streaming-runs")
 def test_a_run_past_max_cells_shows_the_rest_on_request(page):
     runner, chat = _streaming_chat(12)
     chat.max_cells = 5
@@ -161,13 +195,14 @@ def test_a_run_past_max_cells_shows_the_rest_on_request(page):
     box = page.get_by_placeholder("Ask the agent…")
     box.fill("tables 12")
     box.press("Enter")
-    wait_until(lambda: bool(runner.state.runs) and not runner.state.running, page, timeout=120000)
+    _wait_for_run(page, runner)
     page.get_by_text("Here are the tables.").wait_for(timeout=30000)
     expect(page.locator(".artifact-cell")).to_have_count(5)
     page.get_by_role("button", name="Show 7 more").click()
     expect(page.locator(".artifact-cell")).to_have_count(12)
 
 
+@pytest.mark.xdist_group("streaming-runs")
 def test_the_input_offers_stop_only_while_a_run_goes_on(page):
     runner, chat = _streaming_chat(1, slow=2)
     serve_component(page, chat)
@@ -177,7 +212,8 @@ def test_the_input_offers_stop_only_while_a_run_goes_on(page):
     box.fill("tables 1")
     box.press("Enter")
     expect(page.get_by_role("button", name="Stop")).to_be_visible()
-    page.get_by_text("Here are the tables.").wait_for(timeout=60000)
+    _wait_for_run(page, runner)
+    page.get_by_text("Here are the tables.").wait_for(timeout=30000)
     expect(page.get_by_role("button", name="Stop")).to_have_count(0)
     expect(page.get_by_role("button", name="Send message")).to_be_visible()
 
@@ -198,3 +234,17 @@ def test_a_title_with_markup_is_shown_as_text(page):
     assert title.locator("img, b").count() == 0
     page.wait_for_timeout(300)
     assert page.title() != "XSS"
+
+
+def test_actions_wrap_below_the_title_on_a_narrow_card(page):
+    actions = ActionRegistry()
+    actions.add(lambda name: None, name="place")
+    spec = ArtifactAction("place", "Add to dashboard", icon="add", arguments=lambda a: {"name": a.title})
+    _, chat = _chat(readonly=True, action_registry=actions, artifact_actions=[spec])
+    page.set_viewport_size({"width": 390, "height": 900})
+    serve_component(page, chat)
+    cell = page.locator(".artifact-cell").first
+    button = cell.get_by_role("button", name="Add to dashboard")
+    expect(button).to_be_visible()
+    box, card = button.bounding_box(), cell.bounding_box()
+    assert box["x"] + box["width"] <= card["x"] + card["width"]
