@@ -8,8 +8,8 @@ PUBLIC = {
     "panel_agents": [
         "Action", "ActionRegistry", "AgentChat", "AgentDrawer", "ApprovalCard", "ApprovalPolicy", "ApprovalQueue",
         "ApprovalRequest", "ApprovalRule", "Artifact", "ArtifactPane", "ArtifactStore", "ArtifactVersion", "ArtifactView",
-        "AuditLog", "HistoryRecorder", "MessageState", "ModelCallCard", "ModelCallState", "Recorder", "RunInfo", "RunState",
-        "RunTrace", "SchemaForm", "ToolCallCard", "ToolCallState", "current_run_id", "current_tool_call_id", "dump_events", "events",
+        "AuditLog", "HistoryRecorder", "MessageState", "ModelCallCard", "ModelCallState", "Recorder", "RunInfo", "RunSpan", "RunState",
+        "RunTrace", "SchemaForm", "SpanError", "SpanView", "ToolCallCard", "ToolCallState", "current_run_id", "current_tool_call_id", "dump_events", "events",
         "load_events", "load_history", "load_state", "register_diff", "register_renderer",
     ],
     "panel_agents.actions": ["Action", "ActionRegistry"],
@@ -22,7 +22,7 @@ PUBLIC = {
     "panel_agents.context": ["current_run_id", "current_tool_call_id"],
     "panel_agents.components": [
         "AgentChat", "AgentDrawer", "ApprovalCard", "ApprovalQueue", "ArtifactPane", "ArtifactView", "ModelCallCard",
-        "RunTrace", "SchemaForm", "ToolCallCard", "approval_factory", "register_renderer", "render",
+        "RunTrace", "SchemaForm", "SpanView", "ToolCallCard", "approval_factory", "register_renderer", "render",
     ],
     "panel_agents.events": [
         "ApprovalRequested", "ApprovalResolved", "ArtifactApplied", "ArtifactPublished", "ArtifactVersionsDropped", "Custom", "Event",
@@ -36,7 +36,7 @@ PUBLIC = {
         "Codec", "FORMAT_VERSION", "HistoryRecorder", "Recorder", "dump_events", "load_events", "load_history", "load_state",
         "register_codec",
     ],
-    "panel_agents.state": ["ApprovalRequest", "MessageState", "ModelCallState", "RunInfo", "RunState", "ToolCallState"],
+    "panel_agents.state": ["ApprovalRequest", "MessageState", "ModelCallState", "RunInfo", "RunSpan", "RunState", "SpanError", "ToolCallState"],
     "panel_agents.adapters.pydantic_ai": [
         "ActionToolset", "AgentRunner", "Cassette", "CassetteError", "Divergence", "ModelRequestSummary",
         "ModelTraceRecorder", "RecordedFailure", "artifact_return", "fingerprint", "load_messages", "load_model_calls",

@@ -244,7 +244,7 @@ async def test_cancelled_run_keeps_its_messages(tmp_path):
 
     with ModelTraceRecorder(runner, path):
         await runner.run("Go")
-    assert runner.state.runs[runner.run_id].status == "error"
+    assert runner.state.runs[runner.run_id].status == "cancelled"
     assert runner.messages
     assert dumped(load_messages(path)) == dumped(runner.messages)
     assert not [r for r in lines(path) if "failed_run" in r]

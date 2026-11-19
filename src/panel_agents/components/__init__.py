@@ -5,6 +5,7 @@ from .chat import AgentChat
 from .drawer import AgentDrawer
 from .model_call import ModelCallCard
 from .renderers import register_renderer, render
+from .span import SpanView
 from .tool_call import ToolCallCard
 from .trace import RunTrace
 
@@ -18,6 +19,7 @@ __all__ = [
     "ModelCallCard",
     "RunTrace",
     "SchemaForm",
+    "SpanView",
     "ToolCallCard",
     "approval_factory",
     "register_renderer",

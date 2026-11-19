@@ -265,6 +265,10 @@ class ArtifactView(Viewer):
         artifacts and keeps it closed for others; the History button in
         the header toggles it.""")
 
+    on_show_run = param.Callable(default=None, allow_None=True, doc="""
+        Called with a run id from the "How was this made?" action on the
+        history's runs, e.g. opening a ``SpanView``.""")
+
     can_undo = param.Boolean(default=False, constant=True, doc="""
         Whether ``undo`` can change the applied version.""")
 
@@ -455,7 +459,7 @@ class ArtifactView(Viewer):
             return self.artifact is not None and self.artifact.is_document
         return self.history
 
-    @param.depends("history", "on_apply", "state", "user", watch=True)
+    @param.depends("history", "on_apply", "state", "user", "on_show_run", watch=True)
     def _update_history(self):
         artifact = self.artifact
         is_open = self._history_open
@@ -464,7 +468,9 @@ class ArtifactView(Viewer):
         can_apply = artifact is not None and artifact.is_document and self.on_apply is not None
         # A closed history is not built, so artifacts nobody browses cost nothing to update.
         shown = artifact if is_open else None
-        self._timeline.param.update(artifact=shown, state=self.state, user=self._user(), can_apply=can_apply)
+        self._timeline.param.update(
+            artifact=shown, state=self.state, user=self._user(), can_apply=can_apply, on_show_run=self.on_show_run,
+        )
         self._undo.visible = self._redo.visible = can_apply
         with param.edit_constant(self):
             self.param.update(
@@ -533,6 +539,14 @@ class ArtifactView(Viewer):
 
     async def _on_redo_click(self, event):
         await self.redo()
+
+    def show_version(self, number: int):
+        """Open the history at version ``number`` and show it, compared with the applied version of a document."""
+        if self.artifact is None or not 1 <= number <= len(self.artifact.versions):
+            raise ValueError(f"The artifact has no version {number}.")
+        self.history = True
+        self._timeline.reveal(number)
+        self._view_version(number)
 
     def _view_version(self, number: int):
         artifact = self.artifact
@@ -807,6 +821,10 @@ class ArtifactPane(Viewer):
         RunState recording applied versions. Its artifacts are shown when
         no store is given.""")
 
+    on_show_run = param.Callable(default=None, allow_None=True, doc="""
+        Called with a run id from a history's "How was this made?"
+        action; see ``ArtifactView.on_show_run``.""")
+
     def __init__(self, store: ArtifactStore | None = None, **params):
         if store is None:
             state = params.get("state")
@@ -876,7 +894,8 @@ class ArtifactPane(Viewer):
             return
         if active not in self._views:
             self._views[active] = ArtifactView(
-                self.store.artifacts[active], on_apply=self.on_apply, state=self.state, **self.view_options,
+                self.store.artifacts[active], on_apply=self.on_apply, state=self.state, on_show_run=self.on_show_run,
+                **self.view_options,
             )
         index = (self._ids.index(active),)
         if self._list.active != index:
@@ -890,10 +909,10 @@ class ArtifactPane(Viewer):
         # A hidden list would still count towards the pane's minimum width.
         self._layout.objects = [self._sidebar, self._container] if self.show_list else [self._container]
 
-    @param.depends("on_apply", "state", watch=True)
+    @param.depends("on_apply", "state", "on_show_run", watch=True)
     def _propagate(self):
         for view in self._views.values():
-            view.param.update(on_apply=self.on_apply, state=self.state)
+            view.param.update(on_apply=self.on_apply, state=self.state, on_show_run=self.on_show_run)
 
     def _on_list_select(self, event):
         index = event.new[0] if isinstance(event.new, tuple) else event.new

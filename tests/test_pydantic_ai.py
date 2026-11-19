@@ -316,7 +316,7 @@ async def test_cancel_while_awaiting_approval():
 
     state = runner.state
     assert of_type(state, ev.RunError)[0].code == "cancelled"
-    assert state.runs[runner.run_id].status == "error"
+    assert state.runs[runner.run_id].status == "cancelled"
     assert state.approvals["call-1"].status == "denied"
     assert not state.pending_approvals and not state.running
     assert runner.messages

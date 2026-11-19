@@ -329,3 +329,11 @@ def test_store_lookup_survives_undo_and_redo(state):
     assert [v.value for _, v in store.published_by("t2")] == ["b"]
     store.mark_applied("doc", 2, action="redo")
     assert [v.value for _, v in store.published_by("t1")] == ["a"]
+
+
+def test_a_collapsed_card_renders_its_result_once_opened(state):
+    card = ToolCallCard(start(state), state=state, _defer_result=True)
+    finish(state, [{"a": 1}])
+    assert card._result.objects == [] and not card._result_section.visible
+    card.collapsed = False
+    assert len(card._result.objects) == 1 and card._result_section.visible

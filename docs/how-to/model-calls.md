@@ -61,6 +61,24 @@ Setting `trace.run_id` shows another run. The time bars take a quarter of the wi
 
 Requests recorded with the tool call ids they issued nest those calls under them; for older recordings a tool call is nested under the request before it.
 
+## How something was made: the span of a run
+
+`SpanView` answers "how was this made?" for one run. It shows the question, the run's totals with the share of input tokens read from the cache, the run's steps as in `RunTrace`, the artifact versions the run published and the problems it ran into (failed requests and retries, failed tool calls, blocking guardrails). The steps of child runs, such as a sub-agent's, are part of it, under a label naming the child run, and so are their tokens and cost. A cancelled run shows as cancelled with its reason, not as failed. It is readonly and follows a run in progress.
+
+```python
+from panel_agents import SpanView
+
+view = SpanView(state, run_id=version.run_id, on_artifact=lambda artifact_id, number: ...)
+```
+
+`on_artifact` is called when a published version is clicked. A view follows the state until `view.release()`, so call it when the view is closed for good. A long run builds its first 50 steps and offers the rest 50 at a time (`row_limit`). A run whose steps were not recorded, for example one restored from a stored history that keeps only versions, says so and still lists what it published.
+
+`redacted=True` shows the shape of the run without its content, for people who may not see the data: which tools ran, the models, tokens, cost and timings, and the titles and numbers of the versions stay, while the question, the agent's text, tool arguments and results, approval descriptions, error messages and version details are hidden. `ToolCallCard`, `ModelCallCard` and `RunTrace` take the same `redacted` parameter.
+
+The same information is available as data from `RunState.span(run_id)`, a `RunSpan` with the run and its child runs, the question, the nested `steps`, the `model_calls`, `tool_calls` and `messages`, the `published` versions, the `errors` as `SpanError(kind, message, item)` and totals such as `requests`, `input_tokens`, `cached_share`, `cost_usd` and `duration`.
+
+`AgentDrawer` wires it up: `show_run(run_id)` opens the span in a dialog, redacted when `redact_runs` (a boolean, or a callable taking the run id, for the host's permissions) says so, each answer in its chat has a "Details" link, and the runs in the version history have a "How was this made?" action. Clicking a published version in the dialog opens it in the artifacts view. Elsewhere, pass `on_show_run` to `AgentChat`, `ArtifactView` or `ArtifactPane`.
+
 ## Sessions recorded without model calls
 
 A conversation recording made before model requests were recorded as events can get them from the session's [model trace](model-traces.md#show-model-calls-of-an-older-recording) with `merge_model_calls`.

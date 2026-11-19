@@ -224,10 +224,18 @@ class ToolCallCard(Viewer):
         if it raises or returns anything but a non-empty string the header
         shows the tool name and arguments as without a label.""")
 
-    def __init__(self, call: ToolCallState | None = None, **params):
+    redacted = param.Boolean(default=False, constant=True, doc="""
+        Whether to show which tool ran, its status and duration without
+        its arguments, result or error message, e.g. for a viewer who may
+        not see the data. A callable ``label`` is not used, as it reads
+        the arguments.""")
+
+    def __init__(self, call: ToolCallState | None = None, *, _defer_result: bool = False, **params):
         if call is not None:
             params["call"] = call
         super().__init__(**params)
+        # A run trace renders a result once its card is opened, so a long list of collapsed cards stays cheap.
+        self._defer_result = _defer_result
         self._header = pn.pane.HTML(sizing_mode="stretch_width", margin=0, stylesheets=[_HEADER_CSS])
         self._args = _output_markdown(margin=(2, 0), stylesheets=[_ARGS_CSS], css_classes=["tc-args"])
         self._result = pn.Column(sizing_mode="stretch_width", margin=0)
@@ -256,16 +264,19 @@ class ToolCallCard(Viewer):
         self._step.param.watch(lambda e: setattr(self, "collapsed", e.new), "collapsed")
         self._approval_watcher = None
         self._rendered_result = None
+        self._deferred = False
         self._unwatch_artifacts: Callable[[], None] | None = None
         self._state_watcher = None
         self._title_watchers: list = []
         self._chips: dict[str, pmui.Chip] = {}
 
-        self.call.param.watch(self._update_header, ["tool_name", "args", "status", "ended_at", "approval"])
-        self.call.param.watch(self._update_args, ["args", "args_text"])
-        self.call.param.watch(self._update_status, "status")
-        self.call.param.watch(self._update_result, ["result", "error", "status"])
-        self.call.param.watch(self._watch_approval, "approval")
+        self._call_watchers = [
+            self.call.param.watch(self._update_header, ["tool_name", "args", "status", "ended_at", "approval"]),
+            self.call.param.watch(self._update_args, ["args", "args_text"]),
+            self.call.param.watch(self._update_status, "status"),
+            self.call.param.watch(self._update_result, ["result", "error", "status"]),
+            self.call.param.watch(self._watch_approval, "approval"),
+        ]
         if self.state is not None:
             self._state_watcher = self.state.param.watch(self._watch_artifacts, "artifacts")
             self._watch_artifacts()
@@ -287,6 +298,8 @@ class ToolCallCard(Viewer):
     @param.depends("collapsed", watch=True)
     def _sync_collapsed(self):
         self._step.collapsed = self.collapsed
+        if not self.collapsed and self._deferred:
+            self._update_result()
 
     @param.depends("approval_factory", watch=True)
     def _refresh_approval(self):
@@ -295,6 +308,8 @@ class ToolCallCard(Viewer):
     def resolved_label(self) -> str | None:
         """The label of the call, or None when there is none or it could not be made."""
         label = self.label
+        if callable(label) and self.redacted:
+            return None
         if callable(label):
             try:
                 label = label(dict(self.call.args))
@@ -313,7 +328,7 @@ class ToolCallCard(Viewer):
             self._tool.object = f'<div class="tc-label">Tool</div><div class="tc-tool">{name}</div>'
         else:
             parts = [f'<span class="tc-name">{name}</span>']
-            preview = _args_preview(call.args)
+            preview = "" if self.redacted else _args_preview(call.args)
             parts.append(f'<span class="tc-preview" title="{escape(preview)}">{escape(preview)}</span>')
         self._tool_section.visible = label is not None
         meta = []
@@ -334,7 +349,7 @@ class ToolCallCard(Viewer):
         return approval_labels(request.labels if request is not None else None)
 
     def _update_args(self, *_):
-        text = _format_args(self.call.args, self.call.args_text)
+        text = "" if self.redacted else _format_args(self.call.args, self.call.args_text)
         if text:
             self._args.object = text
         # A pending approval card already lists the arguments, editable.
@@ -356,6 +371,8 @@ class ToolCallCard(Viewer):
             denied = call.status == "denied"
             denied_label = self._approval_labels()["denied"]
             message = call.error or (f"The call was {_lower(denied_label)}." if denied else "The call failed.")
+            if self.redacted:
+                message = f"The call was {_lower(denied_label)}." if denied else "The call failed."
             # Denial reasons are prose; errors are often tracebacks or driver messages, kept verbatim.
             self._error_text.object = "" if denied else f"<pre>{escape(message)}</pre>"
             self._error.param.update(
@@ -365,10 +382,17 @@ class ToolCallCard(Viewer):
             self._show_result(None)
             return
         self._error.visible = False
-        self._show_result(call.result)
+        self._show_result(None if self.redacted else call.result)
 
     def _show_result(self, result):
         if result is not None and result is self._rendered_result and self._result.objects:
+            return
+        # A result is rendered once the card is opened, so long runs of collapsed cards stay cheap.
+        self._deferred = result is not None and self.collapsed and self._defer_result
+        if self._deferred:
+            self._result.objects = []
+            self._result_section.visible = False
+            self._rendered_result = None
             return
         self._rendered_result = result
         if result is None:
@@ -404,8 +428,9 @@ class ToolCallCard(Viewer):
                 # The card's own header already names the tool.
                 widget._title.visible = False
         else:
+            description = None if self.redacted else request.description
             widget = pmui.Alert(
-                object=_escape_markdown(request.description or "Waiting for a decision before this tool runs."),
+                object=_escape_markdown(description or "Waiting for a decision before this tool runs."),
                 title="Approval required", severity="warning", variant="outlined",
                 sizing_mode="stretch_width", margin=(5, 0),
             )
@@ -425,7 +450,13 @@ class ToolCallCard(Viewer):
         return self.state.artifacts.published_by(self.call.tool_call_id)
 
     def _release(self):
-        """Stop following the state's artifacts, e.g. when the chat showing the card is cleared."""
+        """Stop following the call and the state's artifacts, e.g. when the chat showing the card is cleared."""
+        for watcher in self._call_watchers:
+            self.call.param.unwatch(watcher)
+        self._call_watchers = []
+        if self._approval_watcher is not None:
+            self._approval_watcher[0].param.unwatch(self._approval_watcher[1])
+            self._approval_watcher = None
         if self._state_watcher is not None:
             self.state.param.unwatch(self._state_watcher)
             self._state_watcher = None

@@ -6,6 +6,7 @@ one issued, on a shared time axis, under the run's usage totals.
 from __future__ import annotations
 
 import time
+import weakref
 from html import escape
 from typing import Any
 
@@ -15,7 +16,7 @@ import param
 from panel.viewable import Viewer
 
 from ..security import _escape_markdown, untrusted_markdown
-from ..state import MessageState, ModelCallState, RunState, ToolCallState
+from ..state import MessageState, ModelCallState, RunState, ToolCallState, _nest_steps, _RunTreeTotals
 from .model_call import ModelCallCard, format_cost, format_tokens
 from .tool_call import ToolCallCard, _format_duration
 
@@ -43,7 +44,7 @@ _TOTALS_CSS = """
 """
 
 _AXIS_CSS = """
-:host { width: 100%; }
+:host { width: 100%; container-type: inline-size; }
 .rt-axis {
   display: flex; align-items: baseline; gap: 12px; margin-top: 4px;
   font-family: var(--mui-font-family, inherit); color: var(--mui-palette-text-primary, inherit);
@@ -57,6 +58,7 @@ _AXIS_CSS = """
   font-size: 0.75rem; font-variant-numeric: tabular-nums;
   color: var(--mui-palette-text-secondary, rgba(127, 127, 127, 0.9));
 }
+@container (max-width: 560px) { .rt-ticks span:nth-child(2) { display: none; } }
 """
 
 _BAR_CSS = """
@@ -73,10 +75,39 @@ _BAR_CSS = """
 .rt-bar.failed { background: var(--mui-palette-error-main, #d32f2f); }
 """
 
+_HIDDEN_CSS = """
+:host { width: 100%; }
+.rt-hidden {
+  font-size: 0.8125rem; font-style: italic; font-family: var(--mui-font-family, inherit);
+  color: var(--mui-palette-text-secondary, rgba(127, 127, 127, 0.9));
+}
+"""
+
+_LABEL_CSS = """
+:host { width: 100%; }
+.rt-child-label {
+  font-family: var(--mui-font-family, inherit); font-size: 0.75rem; font-weight: 500;
+  color: var(--mui-palette-text-secondary, rgba(127, 127, 127, 0.9));
+}
+"""
+
 _TEXT_CSS = """
 :host { width: 100%; }
 .markdown { font-size: 0.875rem; }
 """
+
+
+def _release_with_session(view: Any):
+    """Release ``view`` when the session it was created in ends, without keeping it alive until then."""
+    doc = pn.state.curdoc
+    if doc is None or doc.session_context is None:
+        return
+    ref = weakref.ref(view)
+
+    def release(_context):
+        if (alive := ref()) is not None:
+            alive.release()
+    pn.state.on_session_destroyed(release)
 
 
 def _stat(label: str, value: str, sub: str = "") -> str:
@@ -105,81 +136,163 @@ class RunTrace(Viewer):
 
     show_totals = param.Boolean(default=True, doc="Whether to show the run's usage totals above the steps.")
 
-    def __init__(self, state: RunState | None = None, **params):
+    include_children = param.Boolean(default=False, doc="""
+        Whether the steps of the run's child runs, e.g. a sub-agent's, are
+        shown with the run's own, under a label naming the child run, and
+        counted in the totals.""")
+
+    redacted = param.Boolean(default=False, constant=True, doc="""
+        Whether to show the run's shape without its content: which tools
+        ran, the models, tokens, cost and timings stay, the question, the
+        agent's text, tool arguments and results, approval descriptions and
+        error messages are hidden.""")
+
+    row_limit = param.Integer(default=None, allow_None=True, bounds=(1, None), doc="""
+        Number of steps built at first, with a button building the next
+        as many, or None to build them all. Keeps a long run cheap to open.""")
+
+    def __init__(self, state: RunState | None = None, *, _hide_question: bool = False, **params):
         if state is not None:
             params["state"] = state
         super().__init__(**params)
         self._totals = pn.pane.HTML(sizing_mode="stretch_width", margin=(0, 0, 8, 0), stylesheets=[_TOTALS_CSS])
         self._axis = pn.pane.HTML(sizing_mode="stretch_width", margin=0, stylesheets=[_AXIS_CSS])
         self._rows = pn.Column(sizing_mode="stretch_width", margin=0)
-        self._layout = pn.Column(self._totals, self._axis, self._rows, sizing_mode="stretch_width", css_classes=["run-trace"])
+        self._more = pmui.Button(
+            label="", variant="text", size="small", visible=False, margin=(4, 0), css_classes=["rt-more"],
+        )
+        self._more.on_click(self._show_more)
+        self._limit = self.row_limit
+        self._layout = pn.Column(
+            self._totals, self._axis, self._rows, self._more, sizing_mode="stretch_width", css_classes=["run-trace"],
+        )
+        # A SpanView shows the question in its own header.
+        self._hide_question = _hide_question
+        # Called after every refresh, e.g. by a SpanView keeping its header current.
+        self._on_refresh: Any = None
         # Cards are kept per item and rows per item and depth, so expanded cards survive other runs and switching back.
         self._cards: dict[int, Any] = {}
         self._rows_by_key: dict[tuple[int, int], tuple[Any, pn.pane.HTML | None]] = {}
         # The item behind each cached id, as ids are reused once an item is gone, e.g. after a reset.
         self._cached: dict[int, Any] = {}
+        self._item_watchers: dict[int, list[tuple[Any, Any]]] = {}
+        self._labels: dict[str, pn.pane.HTML] = {}
         self._shown: list[tuple[Any, int]] | None = None
-        self._watched_run: tuple[Any, Any] | None = None
-        self.state.param.watch(self._update_rows, "items")
-        self.state.param.watch(self._watch_run, "runs")
+        self._own_items: list[Any] = []
+        self._step_watchers: list[tuple[Any, Any]] = []
+        self._ids: set[str] = set()
+        self._watched_runs: list[tuple[Any, Any]] = []
+        self._state_watchers = [
+            self.state.param.watch(self._update_rows, "items"),
+            self.state.param.watch(self._watch_runs, "runs"),
+        ]
+        self._released = False
         self._show_run()
+        _release_with_session(self)
 
     def __panel__(self):
         return self._layout
 
+    def release(self):
+        """
+        Stop following the state, e.g. once the view is closed for good.
+        A view that is not released keeps updating, and keeps its cards
+        alive, for as long as the state lives.
+        """
+        if self._released:
+            return
+        self._released = True
+        for watcher in self._state_watchers:
+            self.state.param.unwatch(watcher)
+        self._state_watchers = []
+        self._unwatch_runs()
+        self._forget(set())
+        self._unwatch_steps()
+        self._shown = None
+
     @property
     def run(self):
+        """The ``RunInfo`` of the run shown, or None."""
         return self.state.runs.get(self.run_id) if self.run_id else None
 
-    @param.depends("run_id", watch=True)
+    @property
+    def _run(self):
+        return self.run
+
+    @param.depends("run_id", "include_children", watch=True)
     def _show_run(self):
+        if self._released:
+            return
         self._shown = None
-        self._watch_run()
+        self._limit = self.row_limit
+        self._rebuild_items()
+        self._watch_runs()
         self._update_rows()
 
-    def _watch_run(self, *_):
-        run = self.run
-        if self._watched_run is not None:
-            if self._watched_run[0] is run:
-                return
-            self._watched_run[0].param.unwatch(self._watched_run[1])
-            self._watched_run = None
-        if run is not None:
-            self._watched_run = (run, run.param.watch(self._refresh, ["status", "ended_at", "usage", "input"]))
-        self._refresh()
+    def _tree_ids(self) -> list[str]:
+        if not self.run_id:
+            return []
+        if self.include_children and self.run_id in self.state.runs:
+            return self.state._run_tree(self.run_id)
+        return [self.run_id]
 
-    def _items(self) -> list[Any]:
-        return [i for i in self.state.items if i.run_id == self.run_id] if self.run_id else []
+    def _rebuild_items(self):
+        self._ids = set(self._tree_ids())
+        self._unwatch_steps()
+        self._own_items = []
+        self._add_items([i for i in self.state.items if i.run_id in self._ids])
+
+    def _add_items(self, items: list[Any]):
+        self._own_items += items
+        # Every step is watched, shown or not, so counts of failures in steps beyond the row limit stay current.
+        for item in items:
+            if isinstance(item, (ModelCallState, ToolCallState)):
+                self._step_watchers.append((item, item.param.watch(self._refresh_item, ["status", "ended_at"])))
+
+    def _unwatch_steps(self):
+        for item, watcher in self._step_watchers:
+            item.param.unwatch(watcher)
+        self._step_watchers = []
+
+    def _unwatch_runs(self):
+        for run, watcher in self._watched_runs:
+            run.param.unwatch(watcher)
+        self._watched_runs = []
+
+    def _watch_runs(self, *_):
+        ids = self._tree_ids()
+        runs = [self.state.runs[r] for r in ids if r in self.state.runs]
+        if [r for r, _ in self._watched_runs] != runs:
+            self._unwatch_runs()
+            self._watched_runs = [
+                (r, r.param.watch(self._refresh, ["status", "ended_at", "usage", "input", "error"])) for r in runs
+            ]
+        if set(ids) != self._ids:
+            # A child run started: its items may already be in the timeline.
+            self._rebuild_items()
+            self._update_rows()
+            return
+        self._refresh()
 
     def _nested(self) -> list[tuple[Any, int]]:
         """The run's items with their depth: tool calls sit under the model request that issued them."""
-        items = self._items()
-        issued = {t: m for m in items if isinstance(m, ModelCallState) for t in m.tool_call_ids}
-        children: dict[int, list[ToolCallState]] = {}
-        order: list[Any] = []
-        current = None
-        for item in items:
-            if isinstance(item, ModelCallState):
-                current = item
-                order.append(item)
-            elif isinstance(item, ToolCallState):
-                parent = issued.get(item.tool_call_id, current)
-                if parent is None:
-                    order.append(item)
-                else:
-                    children.setdefault(id(parent), []).append(item)
-            elif isinstance(item, MessageState) and item.role != "user" and item.kind in ("text", "error"):
-                order.append(item)
-        rows = []
-        for item in order:
-            rows.append((item, 0))
-            rows += [(child, 1) for child in children.get(id(item), [])]
-        return rows
+        return _nest_steps(self._own_items)
+
+    @property
+    def _step_count(self) -> int:
+        return len(self._nested())
+
+    def _totals_source(self) -> _RunTreeTotals:
+        return _RunTreeTotals(tuple(r for r, _ in self._watched_runs))
 
     def _forget(self, alive: set[int]):
         for key in [k for k in self._cached if k not in alive]:
             del self._cached[key]
-            self._cards.pop(key, None)
+            for obj, watcher in self._item_watchers.pop(key, []):
+                obj.param.unwatch(watcher)
+            card = self._cards.pop(key, None)
+            if hasattr(card, "_release"):
+                card._release()
             for row_key in [r for r in self._rows_by_key if r[0] == key]:
                 del self._rows_by_key[row_key]
 
@@ -196,20 +309,37 @@ class RunTrace(Viewer):
         if isinstance(item, MessageState):
             if item.kind == "error":
                 card = pmui.Alert(
-                    object=_escape_markdown(item.content), severity="error", variant="outlined",
-                    sizing_mode="stretch_width", margin=(4, 0),
+                    object="The run failed." if self.redacted else _escape_markdown(item.content), severity="error",
+                    variant="outlined", sizing_mode="stretch_width", margin=(4, 0),
+                )
+            elif self.redacted:
+                card = pn.pane.HTML(
+                    '<div class="rt-hidden">The agent replied; its text is hidden.</div>',
+                    sizing_mode="stretch_width", margin=(4, 0), stylesheets=[_HIDDEN_CSS],
                 )
             else:
                 card = untrusted_markdown(item.content, sizing_mode="stretch_width", margin=(4, 0), stylesheets=[_TEXT_CSS])
-                item.param.watch(lambda e, p=card: setattr(p, "object", e.new), "content")
+                self._watch_item(item, lambda e, p=card: setattr(p, "object", e.new), "content")
         else:
             if isinstance(item, ModelCallState):
-                card = ModelCallCard(item, state=self.state, show_tool_count=True)
+                card = ModelCallCard(item, state=self.state, show_tool_count=True, redacted=self.redacted)
             else:
-                card = ToolCallCard(item, state=self.state)
-            item.param.watch(self._refresh_item, ["status", "ended_at"])
+                card = ToolCallCard(item, state=self.state, redacted=self.redacted, _defer_result=True)
         self._cards[id(item)] = card
         return card
+
+    def _watch_item(self, item: Any, callback: Any, names: Any):
+        self._item_watchers.setdefault(id(item), []).append((item, item.param.watch(callback, names)))
+
+    def _label(self, run_id: str) -> pn.pane.HTML:
+        run = self.state.runs.get(run_id)
+        name = run.agent_name if run is not None and run.agent_name else run_id
+        if run_id not in self._labels:
+            self._labels[run_id] = pn.pane.HTML(
+                sizing_mode="stretch_width", margin=(6, 0, 0, 0), stylesheets=[_LABEL_CSS], css_classes=["rt-child"],
+            )
+        self._labels[run_id].object = f'<div class="rt-child-label">Sub-run · {escape(name)}</div>'
+        return self._labels[run_id]
 
     def _row(self, item: Any, depth: int) -> tuple[Any, pn.pane.HTML | None]:
         self._own(item)
@@ -227,25 +357,57 @@ class RunTrace(Viewer):
         return self._rows_by_key[key]
 
     def _update_rows(self, event=None):
+        if self._released:
+            return
         if event is not None and self._shown is not None:
             old, new = event.old, event.new
-            appended = len(new) >= len(old) and all(a is b for a, b in zip(old, new, strict=False))
-            if appended and all(i.run_id != self.run_id for i in new[len(old):]):
-                return
-            if not appended:
+            # Items are only appended or inserted one at a time, which moves the old last item if not at the end.
+            appended = len(new) >= len(old) and (not old or new[len(old) - 1] is old[-1])
+            if appended:
+                added = [i for i in new[len(old):] if i.run_id in self._ids]
+                if not added:
+                    return
+                self._add_items(added)
+            else:
                 self._forget({id(i) for i in new if self._cached.get(id(i)) is i})
+                self._rebuild_items()
         rows = self._nested()
+        hidden = 0
+        if self._limit is not None and len(rows) > self._limit:
+            hidden = len(rows) - self._limit
+            rows = rows[: self._limit]
         if self._shown is None or [(id(i), d) for i, d in rows] != [(id(i), d) for i, d in self._shown]:
-            self._rows.objects = [self._row(item, depth)[0] for item, depth in rows]
+            objects, current = [], self.run_id
+            for item, depth in rows:
+                if depth == 0 and item.run_id != current:
+                    current = item.run_id
+                    if current != self.run_id:
+                        objects.append(self._label(current))
+                objects.append(self._row(item, depth)[0])
+            self._rows.objects = objects
             self._shown = rows
+        step = min(hidden, self.row_limit or hidden)
+        label = f"Show {step} more step{'s' if step != 1 else ''}"
+        if step != hidden:
+            label += f" of {hidden}"
+        self._more.param.update(label=label, visible=bool(hidden))
         self._refresh()
 
+    def _show_more(self, *_):
+        if self._limit is not None:
+            self._limit += self.row_limit or self._limit
+            self._update_rows()
+
     def _refresh_item(self, *events):
+        if self._released:
+            return
         if self._shown is not None and any(i is events[0].obj for i, _ in self._shown):
             self._refresh()
+        elif self._on_refresh is not None:
+            self._on_refresh()
 
     def _window(self) -> tuple[float, float]:
-        run = self.run
+        run = self._run
         items = [i for i, _ in self._shown or [] if isinstance(i, (ModelCallState, ToolCallState))]
         starts = [i.started_at for i in items if i.started_at is not None]
         ends = [i.ended_at for i in items if i.ended_at is not None]
@@ -259,7 +421,9 @@ class RunTrace(Viewer):
         return start, max(end, start + 1e-6)
 
     def _refresh(self, *_):
-        run = self.run
+        if self._released:
+            return
+        run = self._run
         start, end = self._window()
         span = end - start
         for item, depth in self._shown or []:
@@ -282,14 +446,16 @@ class RunTrace(Viewer):
             )
         self._totals.visible = self.show_totals and run is not None
         if run is not None:
-            self._totals.object = self._totals_html(run)
+            self._totals.object = self._totals_html(self._totals_source())
         self._axis.object = self._axis_html(run, span)
+        if self._on_refresh is not None:
+            self._on_refresh()
 
     @param.depends("show_totals", watch=True)
     def _toggle_totals(self):
         self._refresh()
 
-    def _totals_html(self, run) -> str:
+    def _totals_html(self, run: _RunTreeTotals) -> str:
         models = ", ".join(run.models)
         cached = f"{format_tokens(run.cached_tokens)} from cache" if run.cached_tokens else ""
         model_time = f"{_format_duration(run.model_duration)} in the model" if run.model_duration is not None else ""
@@ -309,6 +475,8 @@ class RunTrace(Viewer):
         else:
             users = [i for i in self.state.items if isinstance(i, MessageState) and i.role == "user" and i.run_id == self.run_id]
             question = users[0].content if users else ""
+        if self.redacted or self._hide_question:
+            question = ""
         ticks = "".join(f"<span>{_format_duration(span * f) if f else '0s'}</span>" for f in (0, 0.5, 1))
         return (
             f'<div class="rt-axis"><span class="rt-question" title="{escape(question, quote=True)}">{escape(question)}</span>'

@@ -16,6 +16,7 @@ from ._toggle import DrawerResizeNotifier, DrawerToggle
 from .approval import ApprovalQueue
 from .artifacts import ArtifactPane
 from .chat import AgentChat
+from .span import SpanView
 
 _TABS = ("chat", "artifacts", "approvals")
 
@@ -87,6 +88,12 @@ class AgentDrawer(Viewer):
 
     chat_params = param.Dict(default={}, doc="Additional parameters passed to the AgentChat.")
 
+    redact_runs = param.Parameter(default=False, doc="""
+        Whether the runs ``show_run`` opens are shown redacted, without
+        their content (see ``SpanView.redacted``): a boolean, or a callable
+        taking a run id and returning one, e.g. a host's check of whether
+        the person viewing may see the data.""")
+
     def __init__(self, runner: Any = None, **params):
         if runner is not None:
             params["runner"] = runner
@@ -103,9 +110,14 @@ class AgentDrawer(Viewer):
 
         self._chat = AgentChat(
             state=self.state, runner=self.runner, can_approve=self.can_approve,
-            **{"feed_params": {"min_height": 0}, **self.chat_params},
+            **{"feed_params": {"min_height": 0}, "on_show_run": self.show_run, **self.chat_params},
         )
-        self._artifacts = ArtifactPane(state=self.state, on_apply=self.on_apply, show_list=False)
+        self._artifacts = ArtifactPane(state=self.state, on_apply=self.on_apply, show_list=False, on_show_run=self.show_run)
+        self._span: SpanView | None = None
+        self._span_dialog = pmui.Dialog(
+            title="How this was made", open=False, show_close_button=True, close_on_click=True, width_option="md",
+            css_classes=["span-dialog"],
+        )
         self._artifact_select = pmui.Select(
             label="Artifact", options={}, size="small", sizing_mode="stretch_width", margin=(8, 8, 0, 8),
         )
@@ -172,7 +184,7 @@ class AgentDrawer(Viewer):
                     "border-bottom": "1px solid var(--mui-palette-divider)"},
         )
         self._content = pmui.Column(
-            header, self._pending_bar, self._body, self._confirm, sizing_mode="stretch_both", margin=0, styles={"height": "100%"},
+            header, self._pending_bar, self._body, self._confirm, self._span_dialog, sizing_mode="stretch_both", margin=0, styles={"height": "100%"},
         )
 
         self._drawer = pmui.Drawer(
@@ -226,6 +238,35 @@ class AgentDrawer(Viewer):
     def content(self) -> pmui.Column:
         """The body of the drawer, for placing it in another container such as a page's contextbar."""
         return self._content
+
+    def show_run(self, run_id: str, *, redacted: bool | None = None):
+        """
+        Open a dialog showing how the run ``run_id`` was made: a
+        ``SpanView`` with its question, model requests, tool calls and the
+        versions it published. Clicking a version opens it in the
+        artifacts view. The chat's "Details" link and the history's "How
+        was this made?" action call this. ``redacted`` defaults to what
+        ``redact_runs`` says for the run.
+        """
+        if redacted is None:
+            policy = self.redact_runs
+            redacted = bool(policy(run_id) if callable(policy) else policy)
+        span = self._span
+        if span is None or span.state is not self.state or span.redacted != redacted:
+            if span is not None:
+                span.release()
+            self._span = SpanView(self.state, run_id=run_id, redacted=redacted, on_artifact=self._open_version)
+            self._span_dialog.objects = [self._span]
+        else:
+            span.run_id = run_id
+        self._span_dialog.open = True
+
+    def _open_version(self, artifact_id: str, version: int):
+        self._span_dialog.open = False
+        self.state.artifacts.active = artifact_id
+        self.param.update(open=True, tab="artifacts")
+        if (view := self._artifacts.views.get(artifact_id)) is not None:
+            view.show_version(version)
 
     def _ask_new_conversation(self):
         if any(artifact.is_document for artifact in self.state.artifacts):
