@@ -234,3 +234,17 @@ def test_a_title_with_markup_is_shown_as_text(page):
     assert title.locator("img, b").count() == 0
     page.wait_for_timeout(300)
     assert page.title() != "XSS"
+
+
+def test_actions_wrap_below_the_title_on_a_narrow_card(page):
+    actions = ActionRegistry()
+    actions.add(lambda name: None, name="place")
+    spec = ArtifactAction("place", "Add to dashboard", icon="add", arguments=lambda a: {"name": a.title})
+    _, chat = _chat(readonly=True, action_registry=actions, artifact_actions=[spec])
+    page.set_viewport_size({"width": 390, "height": 900})
+    serve_component(page, chat)
+    cell = page.locator(".artifact-cell").first
+    button = cell.get_by_role("button", name="Add to dashboard")
+    expect(button).to_be_visible()
+    box, card = button.bounding_box(), cell.bounding_box()
+    assert box["x"] + box["width"] <= card["x"] + card["width"]

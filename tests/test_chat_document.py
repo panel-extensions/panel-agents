@@ -374,3 +374,22 @@ def test_a_call_whose_artifacts_are_cells_folds_and_has_no_chip():
     chat = AgentChat(state, readonly=True)
     assert chat._groups == {}
     assert chat.view_for(state.tool_calls["c1"])._artifacts.visible
+
+
+def test_names_are_monospace_and_titles_in_words_are_not():
+    state = RunState.from_events([
+        *question("r1", "Revenue?"), table("r1", "paid_by_region"), ev.RunFinished(run_id="r1"),
+    ])
+    chat = AgentChat(state, layout="document", readonly=True)
+    cell = chat.cells["paid_by_region"]
+    assert cell._title.sx["fontFamily"] == "monospace"
+    state.publish_artifact("paid_by_region", pd.DataFrame({"x": [1]}), kind="table", title="12 outputs", run_id="r1")
+    assert "fontFamily" not in cell._title.sx
+
+
+def test_avatars_are_given_by_name():
+    state = RunState.from_events([*question("r1", "Revenue?", agent="Dashboard"), *answer("r1", "Done."), ev.RunFinished(run_id="r1")])
+    chat = AgentChat(state, layout="document", readonly=True, avatars={"Dashboard": "📊"})
+    user, reply = messages(chat)
+    assert reply.user == "Dashboard" and reply.avatar == "📊"
+    assert user.avatar != "📊"

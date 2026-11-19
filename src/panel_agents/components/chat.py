@@ -88,6 +88,11 @@ class AgentChat(Viewer):
 
     placeholder = param.String(default="Ask the agent…", doc="Placeholder of the input.")
 
+    avatars = param.Dict(default={}, doc="""
+        Avatars of the people and agents in the feed, keyed by the name
+        shown, e.g. ``{"Dashboard": "📊"}``: an emoji, text or image URL.
+        Names left out get panel-material-ui's default for the name.""")
+
     tool_labels = param.Dict(default={}, doc="""
         Labels for tool calls in the user's words, keyed by tool name: a
         string, or a callable taking the call's arguments and returning
@@ -358,6 +363,8 @@ class AgentChat(Viewer):
         }
         if created_at is not None:
             params["timestamp"] = dt.datetime.fromtimestamp(created_at)
+        if user in self.avatars:
+            params["avatar"] = self.avatars[user]
         if self.layout == "document":
             params["sizing_mode"] = "stretch_width"
         return params
