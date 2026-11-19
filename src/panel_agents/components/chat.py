@@ -22,6 +22,7 @@ from .approval import ApprovalCard
 from .approval import approval_factory as default_approval_factory
 from .artifact_cell import ArtifactAction, ArtifactCell
 from .model_call import USAGE_CSS, ModelCallCard, usage_summary, usage_tooltip
+from .model_picker import ModelPicker
 from .tool_call import ToolCallCard, _format_duration
 
 _Step = ToolCallState | ModelCallState
@@ -156,6 +157,19 @@ class AgentChat(Viewer):
     feed_params = param.Dict(default={}, doc="""
         Additional parameters passed to the underlying pmui ChatFeed or ChatInterface.""")
 
+    models = param.List(default=[], doc="""
+        Models a person may pick for the next request, in a small menu
+        below the input (see ``ModelPicker``): model ids, dicts of
+        ``ModelChoice`` fields or ``ModelChoice`` objects. The menu is
+        shown when there is more than one, and sets the runner's ``model``.""")
+
+    model_id = param.String(default=None, allow_None=True, doc="""
+        The id of the picked model, one of the ``models``' ids. Defaults to the first usable one.""")
+
+    remember_model = param.String(default=None, allow_None=True, doc="""
+        A localStorage key under which the browser remembers the picked
+        model for the next session, see ``ModelPicker.remember``.""")
+
     def __init__(self, state: RunState | None = None, **params):
         params.setdefault("approval_factory", default_approval_factory)
         if state is not None:
@@ -182,8 +196,16 @@ class AgentChat(Viewer):
                 on_submit=self._on_submit, show_rerun=False, show_undo=False, show_clear=False,
                 input_params={"placeholder": self.placeholder, "enable_upload": False}, **feed_params,
             )
+        self._model_picker: ModelPicker | None = None
         if not self.readonly:
             self._feed._widget.on_action("stop", self._on_stop)
+            self._model_picker = ModelPicker(
+                models=self.models, value=self.model_id, runner=self.runner, remember=self.remember_model,
+            )
+            self.model_id = self._model_picker.value
+            self._model_picker.param.watch(lambda e: setattr(self, "model_id", e.new), "value")
+            self._feed._widget.footer_objects = [self._model_picker]
+            self.param.watch(self._sync_model_picker, ["models", "model_id", "remember_model"])
         # Timeline items in order; only the ones shown get a view and a message.
         self._rendered: list[Any] = []
         self._index: dict[int, int] = {}
@@ -229,6 +251,20 @@ class AgentChat(Viewer):
         """Evaluate the inline artifacts' actions again, e.g. after the host's state changed."""
         for cell in self._cells.values():
             cell.refresh()
+
+    @property
+    def model_picker(self) -> ModelPicker | None:
+        """The menu of ``models`` below the input; None for a readonly chat."""
+        return self._model_picker
+
+    def _sync_model_picker(self, *events):
+        picker = self._model_picker
+        if picker is None:
+            return
+        names = {"models": "models", "model_id": "value", "remember_model": "remember"}
+        picker.param.update({
+            names[e.name]: e.new for e in events if getattr(picker, names[e.name]) is not e.new
+        })
 
     def view_for(self, item: MessageState | ModelCallState | ToolCallState) -> Any:
         """

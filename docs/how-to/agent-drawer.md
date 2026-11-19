@@ -27,6 +27,24 @@ pmui.Page(title="My app", header=[drawer.toggle], main=[drawer]).servable()
 - `chat_params` are passed to the `AgentChat`, for example `{"placeholder": "Ask about this dashboard"}`. The drawer frames the chat itself, so it draws the chat feed flat instead of as a raised card; `chat_params={"feed_params": {"card_params": {...}}}` changes that, and the other `feed_params` you pass are merged with the drawer's.
 - The New conversation button starts a new conversation. It clears the runner's history and the session's runs, artifacts and approvals, and is disabled while a run is in progress. When there are document artifacts, it asks first, because their versions could no longer be compared or reverted.
 
+## Let people pick the model
+
+Give the chat several models and it shows a small menu button below its input:
+
+```python
+from panel_agents import ModelChoice
+
+drawer = AgentDrawer(runner, chat_params={
+    "models": [
+        ModelChoice("openai:gpt-5-mini", label="GPT-5 mini", description="Fast and cheap"),
+        ModelChoice("anthropic:claude-sonnet-4-5", label="Claude Sonnet"),
+    ],
+    "remember_model": "my-app-model",
+})
+```
+
+A model is a pydantic-ai model string, a dict of `ModelChoice` fields or a `ModelChoice`; `ModelChoice(id, model=...)` runs a ready-made model object, e.g. one with a custom provider, under that id. Each id is offered once, models that share a label show their id too, and the button, named "Model" for screen readers, shows only when there are two or more models. The picked model becomes the runner's `model`, which `AgentRunner` reads when a request starts, so switching applies from the next request and never to one in progress: a run paused for an approval keeps its model, and `run(deferred_tool_results=...)` starts a new run with the model picked by then. A `model` passed in `run_kwargs` or to `run`, such as a `Cassette`, still wins. Each model's `description` is listed under its name, and a model the runner cannot use, typically because its provider's package or API key is missing, is listed disabled with the reason (`AgentRunner.unavailable_reason`) instead, without showing any key. `model_id` sets the initial pick (the first usable model by default), and with `remember_model` the browser keeps the last pick in localStorage under that key and starts the next session with it while it is still offered and usable. Every model request records its model, so the usage line, the model-call cards and the run's details show which model answered.
+
 `drawer.chat`, `drawer.artifacts` and `drawer.approvals` give access to the `AgentChat`, `ArtifactPane` and `ApprovalQueue` inside.
 
 ## Use a page's contextbar instead

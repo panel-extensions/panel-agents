@@ -10,7 +10,7 @@ PUBLIC = {
     "panel_agents": [
         "Action", "ActionRegistry", "AgentChat", "AgentDrawer", "ApprovalCard", "ApprovalPolicy", "ApprovalQueue",
         "ApprovalRequest", "ApprovalRule", "Artifact", "ArtifactAction", "ArtifactCell", "ArtifactPane", "ArtifactStore", "ArtifactVersion", "ArtifactView",
-        "AuditLog", "HistoryRecorder", "MessageState", "ModelCallCard", "ModelCallState", "Recorder", "RunInfo", "RunSpan", "RunState",
+        "AuditLog", "HistoryRecorder", "MessageState", "ModelCallCard", "ModelCallState", "ModelChoice", "ModelPicker", "Recorder", "RunInfo", "RunSpan", "RunState",
         "RunTrace", "SchemaForm", "SpanError", "SpanView", "ToolCallCard", "ToolCallState", "current_run_id", "current_tool_call_id", "dump_events", "events",
         "load_events", "load_history", "load_state", "register_diff", "register_renderer",
     ],
@@ -23,7 +23,8 @@ PUBLIC = {
     "panel_agents.audit": ["AuditLog"],
     "panel_agents.context": ["current_run_id", "current_tool_call_id"],
     "panel_agents.components": [
-        "AgentChat", "AgentDrawer", "ApprovalCard", "ApprovalQueue", "ArtifactAction", "ArtifactCell", "ArtifactPane", "ArtifactView", "ModelCallCard",
+        "AgentChat", "AgentDrawer", "ApprovalCard", "ApprovalQueue", "ArtifactAction", "ArtifactCell", "ArtifactPane", "ArtifactView", "ModelCallCard", "ModelChoice",
+        "ModelPicker",
         "RunTrace", "SchemaForm", "SpanView", "ToolCallCard", "approval_factory", "register_renderer", "render",
     ],
     "panel_agents.events": [
