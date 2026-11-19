@@ -1,6 +1,8 @@
 """The 1.x public API; changing these lists is a breaking change or a new feature."""
 
 import importlib
+import importlib.metadata
+import re
 
 import pytest
 
@@ -89,3 +91,9 @@ def test_version_numbers_are_one_based():
     state.apply_artifact_version("doc", 1)
     assert artifact.applied_version.version == 1
     assert state.events[-1].version == 1
+
+
+def test_pandas_is_a_declared_dependency():
+    # Panel 1.11 no longer installs pandas, and tables and records render with it.
+    requirements = importlib.metadata.requires("panel-agents") or []
+    assert any(re.match(r"pandas\b", r) and "extra ==" not in r for r in requirements)

@@ -9,9 +9,9 @@ pre-commit-install = "pre-commit install"
 pre-commit-run = "pre-commit run -a"
 
 [dependencies]
-python = ">=3.11"
-# Panel 1.10 caps panel-material-ui below 0.17; 1.11 (in beta) needs Python 3.12.
-panel = ">=1.9.0,<1.10|>=1.11.0b0"
+python = ">=3.12"
+# Panel 1.10 caps panel-material-ui below 0.17.
+panel = ">=1.11.0rc0"
 panel-material-ui = ">=0.17.0b3"
 pydantic = ">=2.12"
 pydantic-ai-slim = ">=2.60"
@@ -22,8 +22,6 @@ hatchling = "*"
 hatch-vcs = "*"
 setuptools-scm = "*"
 
-[feature.py311.dependencies]
-python = "3.11.*"
 [feature.py312.dependencies]
 python = "3.12.*"
 [feature.py313.dependencies]
@@ -34,14 +32,13 @@ python = "3.13.*"
 platforms = ["linux-64", "osx-arm64"]
 
 [feature.floor.dependencies]
-python = "3.11.*"
-panel = "1.9.0.*"
+python = "3.12.*"
+panel = "1.11.0rc0.*"
 panel-material-ui = "0.17.0b3.*"
 pydantic = "2.12.*"
 pydantic-ai-slim = "2.60.*"
 
 [environments]
-test-311 = ["py311", "test-core", "test-unit-task"]
 test-312 = ["py312", "test-core", "test-unit-task"]
 test-313 = ["py313", "test-core", "test-unit-task"]
 test-floor = ["floor", "test-core", "test-unit-task"]

@@ -284,7 +284,7 @@ def test_registry_built_off_loop_hands_calls_to_the_server_loop():
     from panel.tests.util import get_open_ports
 
     port = get_open_ports()[0]
-    # The cleanup_panel_servers fixture stops the server; stopping it here too raises on Panel 1.9.
+    # The cleanup_panel_servers fixture stops the server.
     pn.serve(app, port=port, threaded=True, show=False, start=True)
     for _ in range(100):
         try:

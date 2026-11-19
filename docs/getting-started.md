@@ -4,6 +4,8 @@ This tutorial builds a chat with a pydantic-ai agent, gives the agent a tool, an
 
 ## Install
 
+panel-agents needs Python 3.12 or newer and Panel 1.11 or newer.
+
 ```bash
 pip install "panel-agents[pydantic-ai]" "pydantic-ai-slim[anthropic]"
 export ANTHROPIC_API_KEY=...
