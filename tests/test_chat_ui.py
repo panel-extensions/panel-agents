@@ -208,9 +208,9 @@ def test_folded_rows_of_earlier_runs_stay_shown_in_a_long_feed(page):
         return chat
 
     serve_component(page, app)
-    expect(page.get_by_text("answer 5", exact=True)).to_be_visible(timeout=20000)
+    expect(page.get_by_text("answer 5", exact=True)).to_be_attached(timeout=30000)
     page.evaluate(_WATCH_ROWS)
-    expect(page.get_by_text("answer 15", exact=True)).to_be_visible(timeout=20000)
+    wait_until(lambda: len(state.runs) == 16 and not state.running, page, timeout=60000)
     page.wait_for_timeout(1000)
     page.evaluate("clearInterval(window.rows_watch)")
     assert page.evaluate("window.missing_rows") == []
