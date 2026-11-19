@@ -1,7 +1,7 @@
 import panel_material_ui as pmui
 import pytest
 
-from panel_agents import AgentDrawer, ApprovalPolicy, ApprovalRule, RunState
+from panel_agents import AgentChat, AgentDrawer, ApprovalPolicy, ApprovalRule, RunState
 from panel_agents import events as ev
 
 
@@ -197,3 +197,13 @@ def test_a_narrow_window_overlays_a_persistent_drawer():
     drawer.overlay_below = None
     drawer._resize.window_width = 800
     assert drawer._drawer.variant == "persistent"
+
+
+def test_the_drawer_frames_a_flat_chat():
+    card = AgentDrawer(Runner()).chat.feed._card
+    assert (card.elevation, card.raised, card.square) == (0, False, True)
+    assert AgentChat(runner=Runner()).feed._card.elevation == 1
+
+    drawer = AgentDrawer(Runner(), chat_params={"feed_params": {"card_params": {"elevation": 2}}, "user": "Ann"})
+    assert drawer.chat.feed._card.elevation == 2 and drawer.chat.user == "Ann"
+    assert drawer.chat.feed.min_height == 0
