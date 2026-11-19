@@ -43,7 +43,7 @@ _TOTALS_CSS = """
 """
 
 _AXIS_CSS = """
-:host { width: 100%; }
+:host { width: 100%; container-type: inline-size; }
 .rt-axis {
   display: flex; align-items: baseline; gap: 12px; margin-top: 4px;
   font-family: var(--mui-font-family, inherit); color: var(--mui-palette-text-primary, inherit);
@@ -57,6 +57,7 @@ _AXIS_CSS = """
   font-size: 0.75rem; font-variant-numeric: tabular-nums;
   color: var(--mui-palette-text-secondary, rgba(127, 127, 127, 0.9));
 }
+@container (max-width: 560px) { .rt-ticks span:nth-child(2) { display: none; } }
 """
 
 _BAR_CSS = """
