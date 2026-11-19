@@ -14,10 +14,13 @@ import panel_material_ui as pmui
 import param
 from panel.viewable import Viewer
 
+from ..actions import ActionRegistry
+from ..artifacts.model import Artifact, root_run_id
 from ..security import _escape_markdown, untrusted_markdown
 from ..state import MessageState, ModelCallState, RunState, ToolCallState
 from .approval import ApprovalCard
 from .approval import approval_factory as default_approval_factory
+from .artifact_cell import ArtifactAction, ArtifactCell
 from .model_call import USAGE_CSS, ModelCallCard, usage_summary, usage_tooltip
 from .tool_call import ToolCallCard, _format_duration
 
@@ -42,6 +45,11 @@ class AgentChat(Viewer):
     totals are shown under its last message. Submitted text is
     passed to ``runner.run`` (e.g. an ``AgentRunner``, which records the
     user message itself) or to a plain ``callback``. With ``readonly=True`` no input is shown, e.g. to replay a recording.
+
+    With ``layout="document"`` the feed reads as a document: a wide centred
+    column with every message on the left, and the artifacts each run
+    published shown inline as ``ArtifactCell``s under the run's last
+    message, with the ``artifact_actions`` that apply to them.
     """
 
     state = param.ClassSelector(class_=RunState, constant=True)
@@ -112,6 +120,34 @@ class AgentChat(Viewer):
         one is shown, e.g. opening a ``SpanView`` of the run, as
         ``AgentDrawer`` does.""")
 
+    layout = param.Selector(default="chat", objects=["chat", "document"], constant=True, doc="""
+        chat: user messages on the right, artifacts reachable from the
+        tool calls that published them. document: a wide centred column
+        with every message on the left and the artifacts a run published
+        shown inline under its last message.""")
+
+    inline_artifacts = param.Callable(default=None, allow_None=True, doc="""
+        Predicate ``(artifact) -> bool`` choosing the artifacts shown inline
+        in the document layout. Defaults to every artifact that does not
+        mirror a host document (``Artifact.is_document``).""")
+
+    cell_renderer = param.Callable(default=None, allow_None=True, doc="""
+        Callable ``(artifact) -> Viewable`` rendering the body of an inline
+        artifact, e.g. the live object an artifact's value refers to.
+        Defaults to the renderer registry.""")
+
+    action_registry = param.ClassSelector(class_=ActionRegistry, default=None, allow_None=True, doc="""
+        The registry running the ``artifact_actions`` of inline artifacts.""")
+
+    artifact_actions = param.List(default=[], item_type=ArtifactAction, doc="""
+        Actions offered on each inline artifact they apply to, e.g. "Add to
+        dashboard"; see ``ArtifactAction``.""")
+
+    max_cells = param.Integer(default=6, bounds=(1, None), doc="""
+        How many inline artifacts of a run are shown before the rest wait
+        behind a "Show more" button, so a run publishing many is quick to
+        show.""")
+
     feed_params = param.Dict(default={}, doc="""
         Additional parameters passed to the underlying pmui ChatFeed or ChatInterface.""")
 
@@ -132,6 +168,8 @@ class AgentChat(Viewer):
             "sizing_mode": "stretch_both", "show_activity_dot": False, "min_height": 300,
             **self.feed_params,
         }
+        if self.layout == "document":
+            feed_params["css_classes"] = [*feed_params.get("css_classes", []), "agent-chat-document"]
         if self.readonly:
             self._feed = pmui.ChatFeed(**feed_params)
         else:
@@ -156,12 +194,19 @@ class AgentChat(Viewer):
         self._watchers: list[tuple[param.Parameterized, Any]] = []
         self._footers: dict[str, pmui.ChatMessage] = {}
         self._run_watchers: dict[str, tuple[param.Parameterized, Any]] = {}
+        self._cells: dict[str, ArtifactCell] = {}
+        self._cell_rows: dict[str, _CellRow] = {}
+        self._usage_rows: dict[str, Any] = {}
+        self._store_watcher: tuple[param.Parameterized, Any] | None = None
         self.state.param.watch(self._update_items, "items")
         self.state.param.watch(self._watch_runs, "runs")
         self._watch_runs()
         self.state.param.watch(self._update_running, "running")
         self._update_items()
         self._update_running()
+        # After the items, so the rows of cells of a replayed state follow their runs' messages.
+        self.state.param.watch(self._watch_store, "artifacts")
+        self._watch_store()
 
     def __panel__(self):
         return self._feed
@@ -169,6 +214,16 @@ class AgentChat(Viewer):
     @property
     def feed(self) -> pmui.ChatFeed:
         return self._feed
+
+    @property
+    def cells(self) -> dict[str, ArtifactCell]:
+        """The inline artifact cells built so far, keyed by artifact id."""
+        return dict(self._cells)
+
+    def refresh_actions(self):
+        """Evaluate the inline artifacts' actions again, e.g. after the host's state changed."""
+        for cell in self._cells.values():
+            cell.refresh()
 
     def view_for(self, item: MessageState | ModelCallState | ToolCallState) -> Any:
         """
@@ -257,6 +312,9 @@ class AgentChat(Viewer):
             elif (message := self._build(item)) is not None:
                 self._messages[id(item)] = message
         self._regroup(new=new, tail_from=tail_from)
+        if self._store_watcher is not None and not self._cell_rows:
+            # A cleared feed lays out the rows of cells again.
+            self._update_cells()
 
     def _clear(self):
         for obj, watcher in self._watchers:
@@ -275,6 +333,11 @@ class AgentChat(Viewer):
         self._groups = {}
         self._group_of = {}
         self._footers = {}
+        for row in self._cell_rows.values():
+            row.release()
+        self._cells = {}
+        self._cell_rows = {}
+        self._usage_rows = {}
         self._feed.clear()
 
     def _watch(self, obj, callback, names):
@@ -287,7 +350,7 @@ class AgentChat(Viewer):
     def _message_params(self, user: str, created_at: float | None, compact: bool = False) -> dict[str, Any]:
         params: dict[str, Any] = {
             "user": user,
-            "placement": "right" if user == self.user else "left",
+            "placement": "right" if user == self.user and self.layout == "chat" else "left",
             "show_reaction_icons": False,
             "show_copy_icon": False,
             # The hover timestamp row adds a gap that would space out runs of tool calls.
@@ -295,6 +358,8 @@ class AgentChat(Viewer):
         }
         if created_at is not None:
             params["timestamp"] = dt.datetime.fromtimestamp(created_at)
+        if self.layout == "document":
+            params["sizing_mode"] = "stretch_width"
         return params
 
     def _build_step(self, item: _Step) -> pmui.ChatMessage:
@@ -305,7 +370,7 @@ class AgentChat(Viewer):
         else:
             card = ToolCallCard(
                 item, state=self.state, approval_factory=self._approval_factory(),
-                label=self.tool_labels.get(item.tool_name),
+                label=self.tool_labels.get(item.tool_name), show_artifact=self._chip_shown,
             )
             self._watch(self, lambda e, c=card: setattr(c, "approval_factory", self._approval_factory()), ["approval_factory", "can_approve"])
             self._watch(self, lambda e, c=card, i=item: setattr(c, "label", self.tool_labels.get(i.tool_name)), "tool_labels")
@@ -383,7 +448,11 @@ class AgentChat(Viewer):
             return False
         if item.approval is not None and item.approval.status != "approved":
             return False
-        return not self.state.artifacts.published_by(item.tool_call_id)
+        # A call is shown for its artifacts' chips; artifacts shown inline as cells need none.
+        return not any(self._chip_shown(a) for a, _ in self.state.artifacts.published_by(item.tool_call_id))
+
+    def _chip_shown(self, artifact: Artifact) -> bool:
+        return self.layout != "document" or not self._inline(artifact)
 
     def _breaks_group(self, item) -> bool:
         message = self._messages.get(id(item))
@@ -462,6 +531,10 @@ class AgentChat(Viewer):
             message = self._messages[id(item)]
             index = self._index[id(item)]
             position = len(objects) if index >= tail_from else self._position(objects, present, index)
+            # A run's row of cells ends the run, as it does when the run is replayed.
+            row = self._cell_rows.get(root_run_id(self.state.runs, getattr(item, "run_id", None)))
+            if row is not None and id(row.message) in present:
+                position = min(position, objects.index(row.message))
             objects.insert(position, message)
             present.add(id(message))
             messages.append(message)
@@ -471,6 +544,9 @@ class AgentChat(Viewer):
                 position = objects.index(first)
             else:
                 position = self._position(objects, present, self._index[id(group.calls[0])], own_row=False)
+            row = self._cell_rows.get(root_run_id(self.state.runs, group.calls[0].run_id))
+            if row is not None and id(row.message) in present:
+                position = min(position, objects.index(row.message))
             objects.insert(position, group.message)
             present.add(id(group.message))
         for group in removed:
@@ -508,6 +584,82 @@ class AgentChat(Viewer):
             run, watcher = self._run_watchers.pop(run_id)
             run.param.unwatch(watcher)
 
+    def _watch_store(self, *_):
+        if self._store_watcher is not None:
+            store, watcher = self._store_watcher
+            store.param.unwatch(watcher)
+        store = self.state.artifacts
+        self._store_watcher = (store, store.param.watch(self._update_cells, "artifacts"))
+        self._update_cells()
+
+    def _inline(self, artifact: Artifact) -> bool:
+        if self.inline_artifacts is not None:
+            return bool(self.inline_artifacts(artifact))
+        return not artifact.is_document
+
+    def _inline_by_run(self) -> dict[str, list[Artifact]]:
+        """The inline artifacts of each top-level run, in the order they were first published."""
+        runs = self.state.runs
+        found: dict[str, list[Artifact]] = {}
+        for artifact in self.state.artifacts:
+            first = artifact.versions[0] if artifact.versions else None
+            run_id = root_run_id(runs, first.run_id) if first is not None else None
+            if run_id is not None and self._inline(artifact):
+                found.setdefault(run_id, []).append(artifact)
+        return found
+
+    def _update_cells(self, *_):
+        """
+        Add the cells of newly published inline artifacts. A run's row of
+        cells is put after the run's messages shown when its first artifact
+        is published and stays there, while the run's later messages go in
+        before it, so the cells end the run as they do in a replay. Later
+        cells are appended to the row, so no cell is moved or rendered again.
+        """
+        if self.layout != "document":
+            return
+        for run_id, artifacts in self._inline_by_run().items():
+            row = self._cell_rows.get(run_id)
+            if row is None:
+                row = self._cell_rows[run_id] = _CellRow(self, run_id)
+                objects = list(self._feed.objects)
+                objects.insert(self._row_position(objects, run_id), row.message)
+                self._feed.objects = objects
+            row.update(artifacts)
+
+    def _row_position(self, objects: list, run_id: str) -> int:
+        """Where a run's row of cells goes: after the last of the run's messages and group rows in the feed."""
+        present = {id(obj): k for k, obj in enumerate(objects)}
+        for item in reversed(self._run_items.get(run_id, ())):
+            for message in (self._messages.get(id(item)), getattr(self._groups.get(id(item)), "message", None)):
+                if message is not None and id(message) in present:
+                    return present[id(message)] + 1
+        return len(objects)
+
+    def _make_cell(self, artifact: Artifact) -> ArtifactCell:
+        cell = self._cells[artifact.artifact_id] = ArtifactCell(
+            artifact, renderer=self.cell_renderer, actions=self.action_registry,
+            artifact_actions=self.artifact_actions, styles={"flex": "1 1 420px", "min-width": "0"},
+        )
+        return cell
+
+    @param.depends("cell_renderer", "action_registry", "artifact_actions", watch=True)
+    def _propagate_cells(self):
+        for cell in self._cells.values():
+            cell.param.update(
+                renderer=self.cell_renderer, actions=self.action_registry, artifact_actions=self.artifact_actions,
+            )
+
+    @param.depends("inline_artifacts", "max_cells", watch=True)
+    def _update_inline(self):
+        # Which artifacts are inline changed, so the rows are laid out anew.
+        for row in self._cell_rows.values():
+            row.release()
+        self._cell_rows = {}
+        self._cells = {}
+        self._feed.objects = [o for o in self._feed.objects if "run-artifacts-message" not in o.css_classes]
+        self._update_cells()
+
     def _update_usage(self):
         """Show each finished run's usage totals under the last message of the run that is shown."""
         wanted = {}
@@ -523,30 +675,36 @@ class AgentChat(Viewer):
                 message.footer_objects = []
                 del self._footers[run_id]
         for run_id, message in wanted.items():
-            run = self.state.runs[run_id]
-            footer = (
-                f'<div class="usage" title="{escape(usage_tooltip(run), quote=True)}">{escape(usage_summary(run))}</div>'
-                if self.show_usage and run.usage else ""
-            )
-            panes = message.footer_objects
-            if panes and getattr(panes[0], "_usage", None) == (footer, linked):
-                continue
-            usage = pn.pane.HTML(
-                footer, margin=(0, 10), stylesheets=[USAGE_CSS], css_classes=["run-usage"], visible=bool(footer),
-            )
-            if linked:
-                link = pmui.Button(
-                    label="Details", variant="text", size="small", margin=0, css_classes=["run-details"],
-                    description="How this answer was made: every model request and tool call of the run",
-                    sx={"minWidth": 0, "py": 0, "px": "4px", "fontSize": "0.75rem", "textTransform": "none"},
-                )
-                link.on_click(lambda _, rid=run_id: self._show_run(rid))
-                row = pn.Row(usage, link, margin=0, styles={"align-items": "center"})
-            else:
-                row = usage
-            row._usage = (footer, linked)
-            message.footer_objects = [row]
+            row = self._usage_row(run_id, linked)
+            if not message.footer_objects or message.footer_objects[0] is not row:
+                message.footer_objects = [row]
             self._footers[run_id] = message
+
+    def _usage_row(self, run_id: str, linked: bool):
+        run = self.state.runs[run_id]
+        footer = (
+            f'<div class="usage" title="{escape(usage_tooltip(run), quote=True)}">{escape(usage_summary(run))}</div>'
+            if self.show_usage and run.usage else ""
+        )
+        row = self._usage_rows.get(run_id)
+        if row is not None and row._usage == (footer, linked):
+            return row
+        usage = pn.pane.HTML(
+            footer, margin=(0, 10), stylesheets=[USAGE_CSS], css_classes=["run-usage"], visible=bool(footer),
+        )
+        if linked:
+            link = pmui.Button(
+                label="Details", variant="text", size="small", margin=0, css_classes=["run-details"],
+                description="How this answer was made: every model request and tool call of the run",
+                sx={"minWidth": 0, "py": 0, "px": "4px", "fontSize": "0.75rem", "textTransform": "none"},
+            )
+            link.on_click(lambda _, rid=run_id: self._show_run(rid))
+            row = pn.Row(usage, link, margin=0, styles={"align-items": "center"})
+        else:
+            row = usage
+        row._usage = (footer, linked)
+        self._usage_rows[run_id] = row
+        return row
 
     def _show_run(self, run_id: str):
         if self.on_show_run is not None:
@@ -642,6 +800,64 @@ class _StepGroup:
         )
         for message in self.members:
             message.visible = self.expanded
+
+
+class _CellRow:
+    """
+    The cells of one run's inline artifacts, in a message after the run's
+    messages. Cells are only ever appended; past ``max_cells`` the rest
+    wait behind a "Show more" button and are built when it is pressed.
+    """
+
+    def __init__(self, chat: AgentChat, run_id: str):
+        self.chat = chat
+        self.cells: list[ArtifactCell] = []
+        self.pending: list[Artifact] = []
+        self.expanded = False
+        # The margin lines the cells up with the text of the messages.
+        self.flex = pn.FlexBox(
+            sizing_mode="stretch_width", margin=(0, 10), gap="12px", align_items="flex-start",
+            css_classes=["run-artifacts"],
+        )
+        self.more = pmui.Button(
+            variant="text", size="small", icon="expand_more", visible=False, margin=(4, 4),
+            sx={"textTransform": "none"}, css_classes=["run-artifacts-more"],
+        )
+        self.more.on_click(lambda _: self.expand())
+        self.message = pmui.ChatMessage(
+            pn.Column(self.flex, self.more, sizing_mode="stretch_width", margin=0),
+            **chat._message_params(chat._agent_name(run_id), None, compact=True),
+            css_classes=["run-artifacts-message"],
+        )
+
+    def update(self, artifacts: list[Artifact]):
+        known = {cell.artifact.artifact_id for cell in self.cells} | {a.artifact_id for a in self.pending}
+        new = [a for a in artifacts if a.artifact_id not in known]
+        if not new:
+            return
+        built = []
+        for artifact in new:
+            if self.expanded or (not self.pending and len(self.cells) + len(built) < self.chat.max_cells):
+                built.append(self.chat._make_cell(artifact))
+            else:
+                self.pending.append(artifact)
+        self._add(built)
+
+    def expand(self):
+        self.expanded = True
+        pending, self.pending = self.pending, []
+        self._add([self.chat._make_cell(artifact) for artifact in pending])
+
+    def _add(self, built: list[ArtifactCell]):
+        if built:
+            self.cells += built
+            self.flex.extend([cell.__panel__() for cell in built])
+        n = len(self.pending)
+        self.more.param.update(label=f"Show {n} more", visible=bool(n))
+
+    def release(self):
+        for cell in self.cells:
+            cell.release()
 
 
 def _show_thinking(item: MessageState) -> bool:
