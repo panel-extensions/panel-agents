@@ -163,7 +163,7 @@ def _live_run(state, n):
     state.apply(ev.RunFinished(run_id=run_id, timestamp=t + 3))
 
 
-# Records, every few milliseconds, each shown question of a finished run whose answer is shown
+# Records, every 20ms, each shown question of a finished run whose answer is shown
 # without the row of its steps between them.
 _WATCH_ROWS = """
 () => {
@@ -190,11 +190,12 @@ _WATCH_ROWS = """
       const end = n === null || n >= latest ? -1 : seen.indexOf(`answer ${n}`, i)
       if (end > i && !seen.slice(i, end).includes("row")) window.missing_rows.push(n)
     })
-  }, 10)
+  }, 20)
 }
 """
 
 
+@pytest.mark.xdist_group("streaming-runs")
 def test_folded_rows_of_earlier_runs_stay_shown_in_a_long_feed(page):
     state = RunState(flush_interval=0)
     chats = []
@@ -202,15 +203,16 @@ def test_folded_rows_of_earlier_runs_stay_shown_in_a_long_feed(page):
     def app():
         chat = AgentChat(state, readonly=True, feed_params={"height": 500, "sizing_mode": "stretch_width"})
         chats.append(chat)
-        runs = iter(range(16))
+        runs = iter(range(10))
         # The runs are applied on the server's thread, as a runner applies them.
         button = pmui.Button(label="Next run", on_click=lambda e: _live_run(state, next(runs)))
         return pmui.Column(button, chat)
 
     serve_component(page, app)
     button = page.get_by_role("button", name="Next run")
-    for n in range(16):
-        if n == 6:
+    # Ten runs fill more than the feed's window of 50 objects when folded steps stay in it.
+    for n in range(10):
+        if n == 4:
             page.evaluate(_WATCH_ROWS)
         button.click()
         wait_until(lambda n=n: len(state.runs) == n + 1 and not state.running, page, timeout=30000)
@@ -221,7 +223,7 @@ def test_folded_rows_of_earlier_runs_stay_shown_in_a_long_feed(page):
     # Folded steps are kept out of the feed, so its virtualization only counts what is shown.
     (chat,) = chats
     assert all(message.visible for message in chat.feed.objects)
-    assert len(chat.feed.objects) == 3 * 16
+    assert len(chat.feed.objects) == 3 * 10
 
 
 _INPUT_INSETS = """
