@@ -214,6 +214,11 @@ class AgentChat(Viewer):
         self._messages: dict[int, pmui.ChatMessage] = {}
         # Steps (tool and model calls) that are not shown are built once they are, e.g. when their group expands.
         self._unbuilt: dict[int, _Step] = {}
+        # Messages shown or hidden since the feed was last laid out. Hidden messages are kept out of the
+        # feed: its virtualization counts them, and once a window of them shifts the feed re-renders
+        # every child, blanking the group rows and links that React renders for a moment.
+        self._toggled: dict[int, tuple[pmui.ChatMessage, Any]] = {}
+        self._hooked: set[int] = set()
         self._built_models: dict[int, ModelCallState] = {}
         # Step groups keyed by their first step, and the group of each folded step.
         self._groups: dict[int, _StepGroup] = {}
@@ -351,7 +356,7 @@ class AgentChat(Viewer):
                 self._unbuilt[id(item)] = item
                 self._watch(item, self._regroup, "status")
             elif (message := self._build(item)) is not None:
-                self._messages[id(item)] = message
+                self._own(item, message)
         self._regroup(new=new, tail_from=tail_from)
         if self._store_watcher is not None and not self._cell_rows:
             # A cleared feed lays out the rows of cells again.
@@ -369,6 +374,8 @@ class AgentChat(Viewer):
         self._run_items = {}
         self._views = {}
         self._messages = {}
+        self._toggled = {}
+        self._hooked = set()
         self._unbuilt = {}
         self._built_models = {}
         self._groups = {}
@@ -383,6 +390,14 @@ class AgentChat(Viewer):
 
     def _watch(self, obj, callback, names):
         self._watchers.append((obj, obj.param.watch(callback, names)))
+
+    def _own(self, item, message: pmui.ChatMessage):
+        self._messages[id(item)] = message
+
+        def toggled(*_):
+            self._toggled[id(message)] = (message, item)
+
+        self._watch(message, toggled, "visible")
 
     def _agent_name(self, run_id: str | None) -> str:
         run = self.state.runs.get(run_id) if run_id else None
@@ -419,7 +434,7 @@ class AgentChat(Viewer):
             self._watch(self, lambda e, c=card, i=item: setattr(c, "label", self.tool_labels.get(i.tool_name)), "tool_labels")
         self._views[id(item)] = card
         message = pmui.ChatMessage(card, visible=self._step_visible(item), **params)
-        self._messages[id(item)] = message
+        self._own(item, message)
         self._unbuilt.pop(id(item), None)
         return message
 
@@ -479,7 +494,10 @@ class AgentChat(Viewer):
             pane.object = item.content
             step.status = "success" if item.finished else "running"
             # Some providers only return encrypted reasoning, which leaves nothing to show.
-            message.visible = _show_thinking(item)
+            shown = _show_thinking(item)
+            if message.visible != shown:
+                message.visible = shown
+                self._regroup()
 
         self._watch(item, update, ["content", "finished"])
         return message
@@ -559,18 +577,28 @@ class AgentChat(Viewer):
 
     def _place(self, items, tail_from, added, removed):
         """
-        Put the messages of newly built items and new group rows into the
-        feed and take removed rows out, assigning the feed's objects at
-        most once. Items from ``tail_from`` on are appended, like
-        ChatFeed.send, after anything else in the feed.
+        Put the messages of newly built and newly shown items and new
+        group rows into the feed and take hidden messages and removed rows
+        out, assigning the feed's objects at most once. Items from
+        ``tail_from`` on are appended, like ChatFeed.send, after anything
+        else in the feed.
         """
-        if not (items or added or removed):
+        toggled, self._toggled = self._toggled, {}
+        if not (items or added or removed or toggled):
             return
         objects = list(self._feed.objects)
+        count = len(objects)
+        if hidden := {key for key, (message, _) in toggled.items() if not message.visible}:
+            objects = [obj for obj in objects if id(obj) not in hidden]
+        changed = len(objects) != count
         present = {id(obj) for obj in objects}
         tail_from = len(self._rendered) if tail_from is None else tail_from
-        messages = []
-        for item in sorted(items, key=lambda i: self._index[id(i)]):
+        shown = {id(item): item for item in items if self._messages[id(item)].visible}
+        for message, item in toggled.values():
+            if message.visible and id(message) not in present:
+                shown[id(item)] = item
+        inserted = []
+        for item in sorted(shown.values(), key=lambda i: self._index[id(i)]):
             message = self._messages[id(item)]
             index = self._index[id(item)]
             position = len(objects) if index >= tail_from else self._position(objects, present, index)
@@ -580,7 +608,7 @@ class AgentChat(Viewer):
                 position = min(position, objects.index(row.message))
             objects.insert(position, message)
             present.add(id(message))
-            messages.append(message)
+            inserted.append(message)
         for group in added:
             first = self._messages.get(id(group.calls[0]))
             if first is not None and id(first) in present:
@@ -595,14 +623,26 @@ class AgentChat(Viewer):
         for group in removed:
             if id(group.message) in present:
                 objects.remove(group.message)
+                changed = True
+        if not (changed or inserted or added):
+            return
         self._feed.objects = objects
-        for message in messages:
-            self._feed._run_post_hook(message)
+        for message in inserted:
+            if id(message) not in self._hooked:
+                self._hooked.add(id(message))
+                self._feed._run_post_hook(message)
 
     def _position(self, objects, present, index: int, own_row: bool = True) -> int:
         """Where a message for the item at ``index`` goes: after what earlier items put in the feed."""
+        runs = self.state.runs
+        own = root_run_id(runs, getattr(self._rendered[index], "run_id", None))
         for j in range(index, -1, -1):
             item = self._rendered[j]
+            # An earlier run ends with its row of cells.
+            if j < index and (run := root_run_id(runs, getattr(item, "run_id", None))) != own:
+                row = self._cell_rows.get(run)
+                if row is not None and id(row.message) in present:
+                    return objects.index(row.message) + 1
             message = self._messages.get(id(item)) if j < index else None
             if message is not None and id(message) in present:
                 return objects.index(message) + 1
@@ -813,9 +853,11 @@ class _StepGroup:
 
     def toggle(self):
         self.expanded = not self.expanded
-        if self.expanded:
-            self.chat._materialize([c for c in self.calls if id(c) in self.chat._unbuilt])
+        built = [c for c in self.calls if id(c) in self.chat._unbuilt] if self.expanded else []
+        for call in built:
+            self.chat._build_step(call)
         self._sync()
+        self.chat._place(built, None, (), ())
         self.chat._update_usage()
 
     def release(self):
