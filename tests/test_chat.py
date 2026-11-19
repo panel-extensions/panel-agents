@@ -55,9 +55,9 @@ def test_streams_into_existing_message():
     state.apply(ev.TextMessageStart(message_id="m1", run_id="r1"))
     message = chat.view_for(state.messages["m1"])
     pane = message.object
-    # A message with nothing to show yet is kept out of the feed.
+    # A running run's message goes in hidden, so it is in place when it starts streaming.
     assert not message.visible
-    assert chat.feed.objects == []
+    assert chat.feed.objects == [message]
     state.apply(ev.TextMessageContent(message_id="m1", delta="Hel", run_id="r1"))  # codespell:ignore
     assert message.visible
     state.apply(ev.TextMessageContent(message_id="m1", delta="lo", run_id="r1"))
@@ -236,7 +236,9 @@ def test_finished_calls_fold_into_one_row_that_expands():
     assert group.button.description == "3 steps, 3.0s, expand"
     members = [chat._messages[id(state.tool_calls[c])] for c in "abc"]
     assert not any(m.visible for m in members)
-    # Folded calls are kept out of the feed, whose virtualization would count them.
+    # Folded calls leave the feed, whose virtualization would count them, once their run has ended.
+    assert all(m in chat.feed.objects for m in members)
+    state.apply(ev.RunFinished(run_id="r1"))
     assert not any(m in chat.feed.objects for m in members)
     group.toggle()
     assert all(m.visible for m in members)

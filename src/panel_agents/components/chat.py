@@ -12,6 +12,7 @@ from typing import Any
 import panel as pn
 import panel_material_ui as pmui
 import param
+from panel.io.state import set_curdoc
 from panel.viewable import Viewer
 
 from ..actions import ActionRegistry
@@ -222,6 +223,8 @@ class AgentChat(Viewer):
         # feed: its virtualization counts them, and once a window of them shifts the feed re-renders
         # every child, blanking the group rows and links that React renders for a moment.
         self._toggled: dict[int, tuple[pmui.ChatMessage, Any]] = {}
+        # Hidden messages still in the feed, taken out once their run has finished, see _drop_settled.
+        self._leaving: dict[int, tuple[pmui.ChatMessage, Any]] = {}
         self._hooked: set[int] = set()
         self._built_models: dict[int, ModelCallState] = {}
         # Step groups keyed by their first step, and the group of each folded step.
@@ -386,6 +389,7 @@ class AgentChat(Viewer):
         self._views = {}
         self._messages = {}
         self._toggled = {}
+        self._leaving = {}
         self._hooked = set()
         self._unbuilt = {}
         self._built_models = {}
@@ -578,6 +582,7 @@ class AgentChat(Viewer):
         built = {id(item) for item in shown}
         placed = [item for item in new if id(item) in self._messages and id(item) not in built] + shown
         self._place(placed, tail_from, added, [self._groups.pop(key) for key in stale])
+        self._drop_settled()
         self._update_usage()
 
     def _materialize(self, items: list[_Step]):
@@ -589,8 +594,9 @@ class AgentChat(Viewer):
     def _place(self, items, tail_from, added, removed):
         """
         Put the messages of newly built and newly shown items and new
-        group rows into the feed and take hidden messages and removed rows
-        out, assigning the feed's objects at most once. Items from
+        group rows into the feed and take removed rows out, assigning the
+        feed's objects at most once. Hidden messages are noted for
+        _drop_settled to take out. Items from
         ``tail_from`` on are appended, like ChatFeed.send, after anything
         else in the feed.
         """
@@ -598,13 +604,16 @@ class AgentChat(Viewer):
         if not (items or added or removed or toggled):
             return
         objects = list(self._feed.objects)
-        count = len(objects)
-        if hidden := {key for key, (message, _) in toggled.items() if not message.visible}:
-            objects = [obj for obj in objects if id(obj) not in hidden]
-        changed = len(objects) != count
+        for key, entry in toggled.items():
+            if entry[0].visible:
+                self._leaving.pop(key, None)
+            else:
+                self._leaving[key] = entry
+        changed = False
         present = {id(obj) for obj in objects}
         tail_from = len(self._rendered) if tail_from is None else tail_from
-        shown = {id(item): item for item in items if self._messages[id(item)].visible}
+        # A running run's messages go in hidden as well, so they are in place before their cards change.
+        shown = {id(item): item for item in items if self._messages[id(item)].visible or not self._settled(item)}
         for message, item in toggled.values():
             if message.visible and id(message) not in present:
                 shown[id(item)] = item
@@ -620,6 +629,8 @@ class AgentChat(Viewer):
             objects.insert(position, message)
             present.add(id(message))
             inserted.append(message)
+            if not message.visible:
+                self._leaving[id(message)] = (message, item)
         for group in added:
             first = self._messages.get(id(group.calls[0]))
             if first is not None and id(first) in present:
@@ -642,6 +653,43 @@ class AgentChat(Viewer):
             if id(message) not in self._hooked:
                 self._hooked.add(id(message))
                 self._feed._run_post_hook(message)
+
+    def _settled(self, item) -> bool:
+        run = self.state.runs.get(root_run_id(self.state.runs, getattr(item, "run_id", None)))
+        return run is None or run.status != "running"
+
+    def _drop_settled(self):
+        """
+        Take the hidden messages of finished runs out of the feed. A running
+        run's messages stay until it ends: their cards keep changing, and a
+        change to a message's frontend model sent in the update that takes
+        the message out reaches a frontend that no longer knows it. In a
+        served session they are taken out in the next update for the same
+        reason.
+        """
+        if not any(self._settled(item) for _, item in self._leaving.values()):
+            return
+        doc = pn.state.curdoc
+        if doc is None or doc.session_context is None:
+            self._drop_hidden()
+        else:
+            # Each drop takes out what is due when it runs, so one more than needed is harmless.
+            def drop():
+                with set_curdoc(doc):
+                    self._drop_hidden()
+
+            doc.add_next_tick_callback(drop)
+
+    def _drop_hidden(self):
+        drop = {
+            key for key, (message, item) in self._leaving.items()
+            if not message.visible and self._settled(item)
+        }
+        for key in drop:
+            del self._leaving[key]
+        objects = [obj for obj in self._feed.objects if id(obj) not in drop]
+        if len(objects) != len(self._feed.objects):
+            self._feed.objects = objects
 
     def _position(self, objects, present, index: int, own_row: bool = True) -> int:
         """Where a message for the item at ``index`` goes: after what earlier items put in the feed."""
@@ -869,6 +917,7 @@ class _StepGroup:
             self.chat._build_step(call)
         self._sync()
         self.chat._place(built, None, (), ())
+        self.chat._drop_settled()
         self.chat._update_usage()
 
     def release(self):

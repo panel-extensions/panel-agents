@@ -218,6 +218,43 @@ def test_the_input_offers_stop_only_while_a_run_goes_on(page):
     expect(page.get_by_role("button", name="Send message")).to_be_visible()
 
 
+@pytest.mark.xdist_group("streaming-runs")
+def test_a_feed_that_batches_a_runners_events_shows_the_answer(page):
+    # As FlowDash's Explore view does: a second, document feed gets the runner's
+    # events in batches a little later, in its own state.
+    runner, _ = _streaming_chat(2)
+    state = RunState(flush_interval=0)
+    errors = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+
+    def app():
+        doc = pn_state.curdoc
+        pending = []
+
+        def flush():
+            events = pending[:]
+            pending.clear()
+            state.apply_many(events)
+
+        def forward(event):
+            pending.append(event)
+            if len(pending) == 1:
+                doc.add_timeout_callback(flush, 50)
+
+        runner.state.subscribe(forward)
+        return AgentChat(state, runner=runner, layout="document", feed_params={"height": 800}, max_cells=20)
+
+    serve_component(page, app)
+    box = page.get_by_placeholder("Ask the agent…")
+    box.fill("tables 2")
+    box.press("Enter")
+    _wait_for_run(page, runner)
+    expect(page.get_by_text("Here are the tables.")).to_be_visible(timeout=30000)
+    expect(page.locator(".artifact-cell")).to_have_count(2)
+    page.wait_for_timeout(500)
+    assert errors == []
+
+
 def test_a_title_with_markup_is_shown_as_text(page):
     state = RunState(flush_interval=0)
     state.apply(ev.RunStarted(run_id="r1"))
