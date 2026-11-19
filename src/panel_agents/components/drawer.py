@@ -108,9 +108,15 @@ class AgentDrawer(Viewer):
             runner.param.watch(lambda e: setattr(self, "can_approve", e.new.can_approve if e.new is not None else None), "approval_policy")
         self._pending_seen = len(self.state.pending_approvals)
 
+        chat_params = dict(self.chat_params)
+        # The drawer is the chat's frame, so the feed's own card is flat rather than a raised card inside it.
+        feed_params = {
+            "min_height": 0, "card_params": {"elevation": 0, "raised": False, "square": True},
+            **chat_params.pop("feed_params", {}),
+        }
         self._chat = AgentChat(
             state=self.state, runner=self.runner, can_approve=self.can_approve,
-            **{"feed_params": {"min_height": 0}, "on_show_run": self.show_run, **self.chat_params},
+            **{"feed_params": feed_params, "on_show_run": self.show_run, **chat_params},
         )
         self._artifacts = ArtifactPane(state=self.state, on_apply=self.on_apply, show_list=False, on_show_run=self.show_run)
         self._span: SpanView | None = None
