@@ -77,12 +77,12 @@ def test_chat_shows_streamed_text(page):
 
     state.apply(ev.RunStarted(run_id="r1", agent_name="Analyst"))
     state.apply(ev.TextMessageStart(message_id="m1", run_id="r1"))
+    state.apply(ev.TextMessageContent(message_id="m1", delta="EMEA grew ", run_id="r1"))
     # The test changes the state from outside the server's thread: an update made while the new
     # message is still being rendered can be lost, so wait until it is. A message registers its
     # model only after its children's, so waiting for the text pane alone leaves a window.
     message = chat.view_for(state.messages["m1"])
     wait_until(lambda: bool(message._models), page)
-    state.apply(ev.TextMessageContent(message_id="m1", delta="EMEA grew ", run_id="r1"))
     expect(page.locator(".markdown", has_text="EMEA grew")).to_be_visible()
     state.apply(ev.TextMessageContent(message_id="m1", delta="by **12%**.", run_id="r1"))
     expect(page.locator(".markdown", has_text="EMEA grew by 12%.")).to_be_visible()
@@ -137,6 +137,83 @@ def test_finished_steps_fold_into_a_row_that_expands(page):
     expect(page.get_by_text("Read the report")).to_be_visible()
     expect(page.get_by_text("list_regions")).to_be_visible()
     expect(page.get_by_role("button", name="2 steps, 1.0s, collapse")).to_be_visible()
+
+
+def _live_run(state, n):
+    """A run applied as it streams: its model requests and tool calls are shown, then fold into a row."""
+    run_id, t = f"r{n}", 1_700_000_000.0 + 10 * n
+    state.add_user_message(f"question {n}", run_id=run_id)
+    state.apply(ev.RunStarted(run_id=run_id, timestamp=t))
+    state.apply(ev.ModelRequestStarted(request_id=f"{run_id}-q1", model="m", run_id=run_id, timestamp=t))
+    for k in range(2):
+        state.apply_many([
+            ev.ToolCallStart(tool_call_id=f"{run_id}-c{k}", tool_name="lookup", run_id=run_id, timestamp=t + 1),
+            ev.ToolCallEnd(tool_call_id=f"{run_id}-c{k}", run_id=run_id),
+        ])
+    state.apply(ev.Usage(request_id=f"{run_id}-q1", model="m", duration=1, run_id=run_id, timestamp=t + 1))
+    for k in range(2):
+        state.apply(ev.ToolCallResult(tool_call_id=f"{run_id}-c{k}", content="ok", run_id=run_id, timestamp=t + 2))
+    state.apply(ev.ModelRequestStarted(request_id=f"{run_id}-q2", model="m", run_id=run_id, timestamp=t + 2))
+    state.apply_many([
+        ev.TextMessageStart(message_id=f"{run_id}-a", run_id=run_id, timestamp=t + 3),
+        ev.TextMessageContent(message_id=f"{run_id}-a", delta=f"answer {n}", run_id=run_id),
+        ev.TextMessageEnd(message_id=f"{run_id}-a", run_id=run_id),
+    ])
+    state.apply(ev.Usage(request_id=f"{run_id}-q2", model="m", duration=1, run_id=run_id, timestamp=t + 3))
+    state.apply(ev.RunFinished(run_id=run_id, timestamp=t + 3))
+
+
+# Records, every few milliseconds, each shown question of a finished run whose answer is shown
+# without the row of its steps between them.
+_WATCH_ROWS = """
+() => {
+  window.missing_rows = []
+  const sequence = () => {
+    const seen = []
+    const walk = (root) => {
+      for (const el of root.querySelectorAll("*")) {
+        if (el.shadowRoot) walk(el.shadowRoot)
+        if (!el.getClientRects().length) continue
+        const text = (el.innerText || "").trim()
+        if (el.tagName === "BUTTON" && /\\d+ steps?/.test(text)) seen.push("row")
+        else if (!el.children.length && /^(question|answer) \\d+$/.test(text)) seen.push(text)
+      }
+    }
+    walk(document)
+    return seen
+  }
+  window.rows_watch = setInterval(() => {
+    const seen = sequence()
+    seen.forEach((text, i) => {
+      const n = text.startsWith("question ") ? Number(text.slice(9)) : null
+      const end = n === null || n >= window.running ? -1 : seen.indexOf(`answer ${n}`, i)
+      if (end > i && !seen.slice(i, end).includes("row")) window.missing_rows.push(n)
+    })
+  }, 10)
+}
+"""
+
+
+def test_folded_rows_of_earlier_runs_stay_shown_in_a_long_feed(page):
+    state = RunState(flush_interval=0)
+    chat = AgentChat(state, readonly=True, feed_params={"height": 500})
+    serve_component(page, chat)
+
+    for n in range(8):
+        _live_run(state, n)
+        expect(page.get_by_text(f"answer {n}", exact=True)).to_be_attached()
+    expect(page.get_by_role("button", name="2 steps, 3.0s, expand").last).to_be_visible()
+
+    page.evaluate(_WATCH_ROWS)
+    for n in range(8, 12):
+        page.evaluate(f"window.running = {n}")
+        _live_run(state, n)
+        expect(page.get_by_text(f"answer {n}", exact=True)).to_be_visible()
+        page.wait_for_timeout(500)
+    page.evaluate("clearInterval(window.rows_watch)")
+    assert page.evaluate("window.missing_rows") == []
+    # Folded steps are kept out of the feed, so its virtualization only counts what is shown.
+    assert len(chat.feed.objects) == 3 * 12
 
 
 _INPUT_INSETS = """

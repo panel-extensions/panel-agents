@@ -53,9 +53,11 @@ def test_streams_into_existing_message():
     chat = AgentChat(state)
     state.apply(ev.RunStarted(run_id="r1"))
     state.apply(ev.TextMessageStart(message_id="m1", run_id="r1"))
-    (message,) = chat.feed.objects
+    message = chat.view_for(state.messages["m1"])
     pane = message.object
+    # A message with nothing to show yet is kept out of the feed.
     assert not message.visible
+    assert chat.feed.objects == []
     state.apply(ev.TextMessageContent(message_id="m1", delta="Hel", run_id="r1"))  # codespell:ignore
     assert message.visible
     state.apply(ev.TextMessageContent(message_id="m1", delta="lo", run_id="r1"))
@@ -232,11 +234,17 @@ def test_finished_calls_fold_into_one_row_that_expands():
     (group,) = group_rows(chat)
     assert group.button.label == "3 steps · 3.0s"
     assert group.button.description == "3 steps, 3.0s, expand"
-    assert chat.feed.objects.index(group.message) < chat.feed.objects.index(chat._messages[id(state.tool_calls["a"])])
-    assert not any(chat._messages[id(state.tool_calls[c])].visible for c in "abc")
+    members = [chat._messages[id(state.tool_calls[c])] for c in "abc"]
+    assert not any(m.visible for m in members)
+    # Folded calls are kept out of the feed, whose virtualization would count them.
+    assert not any(m in chat.feed.objects for m in members)
     group.toggle()
-    assert all(chat._messages[id(state.tool_calls[c])].visible for c in "abc")
+    assert all(m.visible for m in members)
+    row = chat.feed.objects.index(group.message)
+    assert chat.feed.objects[row + 1:row + 4] == members
     assert group.button.description.endswith("collapse")
+    group.toggle()
+    assert chat.feed.objects == [group.message]
 
 
 def test_failed_running_and_artifact_calls_are_never_folded():
@@ -370,11 +378,12 @@ def test_view_for_builds_a_folded_call_hidden_in_place():
     assert isinstance(card, ToolCallCard)
     message = chat._messages[id(second)]
     assert not message.visible
-    objects = chat.feed.objects
-    assert objects.index(group.message) < objects.index(message) < objects.index(chat._messages[id(state.tool_calls["r1-c2"])])
+    assert message not in chat.feed.objects
     group.toggle()
+    objects = chat.feed.objects
     first = chat._messages[id(state.tool_calls["r1-c0"])]
-    assert chat.feed.objects.index(first) == chat.feed.objects.index(message) - 1
+    assert objects.index(group.message) + 1 == objects.index(first) == objects.index(message) - 1
+    assert objects.index(message) < objects.index(chat._messages[id(state.tool_calls["r1-c2"])])
 
 
 def test_ungrouping_builds_and_shows_folded_calls_in_order():
@@ -388,8 +397,7 @@ def test_ungrouping_builds_and_shows_folded_calls_in_order():
     assert [objects.index(m) for m in calls] == [2, 3, 4]
     chat.group_tool_calls = True
     (group,) = group_rows(chat)
-    assert objects == chat.feed.objects[:2] + chat.feed.objects[3:]
-    assert chat.feed.objects.index(group.message) == 2
+    assert chat.feed.objects == [*objects[:2], group.message, *objects[4:]]
 
 
 class _Counted:
