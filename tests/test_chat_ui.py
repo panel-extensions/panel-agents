@@ -184,9 +184,10 @@ _WATCH_ROWS = """
   }
   window.rows_watch = setInterval(() => {
     const seen = sequence()
+    const latest = Math.max(-1, ...seen.filter((t) => t.startsWith("question ")).map((t) => Number(t.slice(9))))
     seen.forEach((text, i) => {
       const n = text.startsWith("question ") ? Number(text.slice(9)) : null
-      const end = n === null || n >= window.running ? -1 : seen.indexOf(`answer ${n}`, i)
+      const end = n === null || n >= latest ? -1 : seen.indexOf(`answer ${n}`, i)
       if (end > i && !seen.slice(i, end).includes("row")) window.missing_rows.push(n)
     })
   }, 10)
@@ -196,24 +197,27 @@ _WATCH_ROWS = """
 
 def test_folded_rows_of_earlier_runs_stay_shown_in_a_long_feed(page):
     state = RunState(flush_interval=0)
-    chat = AgentChat(state, readonly=True, feed_params={"height": 500})
-    serve_component(page, chat)
+    chats = []
 
-    for n in range(8):
-        _live_run(state, n)
-        expect(page.get_by_text(f"answer {n}", exact=True)).to_be_attached()
-    expect(page.get_by_role("button", name="2 steps, 3.0s, expand").last).to_be_visible()
+    def app():
+        chat = AgentChat(state, readonly=True, feed_params={"height": 500, "sizing_mode": "stretch_width"})
+        chats.append(chat)
+        # The runs are applied on the server's thread, as a runner applies them.
+        runs = iter(range(16))
+        pn_state.add_periodic_callback(lambda: _live_run(state, next(runs)), period=1000, count=16)
+        return chat
 
+    serve_component(page, app)
+    expect(page.get_by_text("answer 5", exact=True)).to_be_visible(timeout=20000)
     page.evaluate(_WATCH_ROWS)
-    for n in range(8, 12):
-        page.evaluate(f"window.running = {n}")
-        _live_run(state, n)
-        expect(page.get_by_text(f"answer {n}", exact=True)).to_be_visible()
-        page.wait_for_timeout(500)
+    expect(page.get_by_text("answer 15", exact=True)).to_be_visible(timeout=20000)
+    page.wait_for_timeout(1000)
     page.evaluate("clearInterval(window.rows_watch)")
     assert page.evaluate("window.missing_rows") == []
     # Folded steps are kept out of the feed, so its virtualization only counts what is shown.
-    assert len(chat.feed.objects) == 3 * 12
+    (chat,) = chats
+    assert all(message.visible for message in chat.feed.objects)
+    assert len(chat.feed.objects) == 3 * 16
 
 
 _INPUT_INSETS = """
