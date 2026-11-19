@@ -9,7 +9,7 @@ PUBLIC = {
         "Action", "ActionRegistry", "AgentChat", "AgentDrawer", "ApprovalCard", "ApprovalPolicy", "ApprovalQueue",
         "ApprovalRequest", "ApprovalRule", "Artifact", "ArtifactPane", "ArtifactStore", "ArtifactVersion", "ArtifactView",
         "AuditLog", "HistoryRecorder", "MessageState", "ModelCallCard", "ModelCallState", "Recorder", "RunInfo", "RunState",
-        "RunTrace", "ToolCallCard", "ToolCallState", "current_run_id", "current_tool_call_id", "dump_events", "events",
+        "RunTrace", "SchemaForm", "ToolCallCard", "ToolCallState", "current_run_id", "current_tool_call_id", "dump_events", "events",
         "load_events", "load_history", "load_state", "register_diff", "register_renderer",
     ],
     "panel_agents.actions": ["Action", "ActionRegistry"],
@@ -22,7 +22,7 @@ PUBLIC = {
     "panel_agents.context": ["current_run_id", "current_tool_call_id"],
     "panel_agents.components": [
         "AgentChat", "AgentDrawer", "ApprovalCard", "ApprovalQueue", "ArtifactPane", "ArtifactView", "ModelCallCard",
-        "RunTrace", "ToolCallCard", "approval_factory", "register_renderer", "render",
+        "RunTrace", "SchemaForm", "ToolCallCard", "approval_factory", "register_renderer", "render",
     ],
     "panel_agents.events": [
         "ApprovalRequested", "ApprovalResolved", "ArtifactApplied", "ArtifactPublished", "ArtifactVersionsDropped", "Custom", "Event",

@@ -1,3 +1,4 @@
+from ._schema_form import SchemaForm
 from .approval import ApprovalCard, ApprovalQueue, approval_factory
 from .artifacts import ArtifactPane, ArtifactView
 from .chat import AgentChat
@@ -16,6 +17,7 @@ __all__ = [
     "ArtifactView",
     "ModelCallCard",
     "RunTrace",
+    "SchemaForm",
     "ToolCallCard",
     "approval_factory",
     "register_renderer",
