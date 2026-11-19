@@ -221,7 +221,6 @@ class AgentChat(Viewer):
         self._toggled: dict[int, tuple[pmui.ChatMessage, Any]] = {}
         # Hidden messages still in the feed, taken out once their run has finished, see _drop_settled.
         self._leaving: dict[int, tuple[pmui.ChatMessage, Any]] = {}
-        self._drop_scheduled = False
         self._hooked: set[int] = set()
         self._built_models: dict[int, ModelCallState] = {}
         # Step groups keyed by their first step, and the group of each folded step.
@@ -662,9 +661,8 @@ class AgentChat(Viewer):
         doc = pn.state.curdoc
         if doc is None or doc.session_context is None:
             self._drop_hidden()
-        elif not self._drop_scheduled:
-            self._drop_scheduled = True
-
+        else:
+            # Each drop takes out what is due when it runs, so one more than needed is harmless.
             def drop():
                 with set_curdoc(doc):
                     self._drop_hidden()
@@ -672,7 +670,6 @@ class AgentChat(Viewer):
             doc.add_next_tick_callback(drop)
 
     def _drop_hidden(self):
-        self._drop_scheduled = False
         drop = {
             key for key, (message, item) in self._leaving.items()
             if not message.visible and self._settled(item)
