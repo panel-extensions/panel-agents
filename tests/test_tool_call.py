@@ -70,6 +70,16 @@ def test_success_renders_result_and_duration(state):
     assert card._result[0] is rendered
 
 
+def test_a_records_result_renders_as_a_table(state):
+    call = start(state)
+    card = ToolCallCard(call, state=state)
+    finish(state, [{"state": "TX", "turbines": 3}, {"state": "IA", "turbines": 2}])
+    assert card._step.status == "success"
+    (table,) = card._result
+    assert type(table) is pn.pane.DataFrame
+    assert list(table.object.columns) == ["state", "turbines"]
+
+
 def test_failure_expands_and_shows_error(state):
     call = start(state)
     card = ToolCallCard(call, state=state)

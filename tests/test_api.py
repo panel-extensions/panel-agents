@@ -1,8 +1,8 @@
 """The 1.x public API; changing these lists is a breaking change or a new feature."""
 
 import importlib
-import subprocess
-import sys
+import importlib.metadata
+import re
 
 import pytest
 
@@ -93,11 +93,7 @@ def test_version_numbers_are_one_based():
     assert state.events[-1].version == 1
 
 
-def test_imports_without_pandas():
-    # Panel 1.11 no longer installs pandas, and panel-agents does not require it.
-    code = (
-        "import sys; sys.modules['pandas'] = None\n"
-        "import panel_agents, panel_agents.components, panel_agents.recording\n"
-        "from panel_agents import AgentDrawer, ArtifactView, RunState, SchemaForm\n"
-    )
-    subprocess.run([sys.executable, "-c", code], check=True)
+def test_pandas_is_a_declared_dependency():
+    # Panel 1.11 no longer installs pandas, and tables and records render with it.
+    requirements = importlib.metadata.requires("panel-agents") or []
+    assert any(re.match(r"pandas\b", r) and "extra ==" not in r for r in requirements)
