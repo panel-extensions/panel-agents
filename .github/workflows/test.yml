@@ -95,7 +95,7 @@ jobs:
         run: |
           MATRIX=$(jq -nsc '{
               "os": ["ubuntu-latest", "macos-latest", "windows-latest"],
-              "environment": ["test-311", "test-313"],
+              "environment": ["test-312", "test-313"],
               "include": [{"os": "ubuntu-latest", "environment": "test-floor"}]
           }')
           echo "MATRIX=$MATRIX" >> $GITHUB_ENV
@@ -104,7 +104,7 @@ jobs:
         run: |
           MATRIX=$(jq -nsc '{
               "os": ["ubuntu-latest", "macos-latest", "windows-latest"],
-              "environment": ["test-311", "test-312", "test-313"],
+              "environment": ["test-312", "test-313"],
               "include": [{"os": "ubuntu-latest", "environment": "test-floor"}]
           }')
           echo "MATRIX=$MATRIX" >> $GITHUB_ENV
@@ -113,7 +113,7 @@ jobs:
         run: |
           MATRIX=$(jq -nsc '{
               "os": ["ubuntu-latest"],
-              "environment": ["test-311"]
+              "environment": ["test-312"]
           }')
           echo "MATRIX=$MATRIX" >> $GITHUB_ENV
   pixi_lock:
