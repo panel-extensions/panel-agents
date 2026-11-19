@@ -215,6 +215,23 @@ def _shorten(text: str, limit: int = 80) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+_MISSING_KEY = re.compile(r"`?([A-Z][A-Z0-9_]*_API_KEY)`? environment variable")
+
+
+def _reason(error: Exception) -> str:
+    """
+    Why a model cannot be used, in a line for the person picking it: a
+    missing API key is named in a short sentence, other errors give their
+    first line without an installation hint after a dash.
+    """
+    _log.debug("Model unavailable: %s", error)
+    if (key := _MISSING_KEY.search(str(error))) is not None:
+        return f"Set {key.group(1)} to use this model"
+    lines = str(error).strip().splitlines()
+    reason = lines[0].split(" \u2014 ")[0].rstrip(" ,;") if lines else ""
+    return reason or type(error).__name__
+
+
 def _with_defaults(args: dict[str, Any], schema: dict[str, Any] | None) -> dict[str, Any]:
     # Edited arguments are checked as the tool will see them, with omitted defaults filled in.
     properties = (schema or {}).get("properties", {})
@@ -568,6 +585,16 @@ class AgentRunner(param.Parameterized):
 
     run_kwargs = param.Dict(default={}, doc="Extra keyword arguments passed to ``Agent.run_stream_events``.")
 
+    model = param.Parameter(default=None, doc="""
+        The model the next run uses instead of the agent's own: a
+        pydantic-ai model string such as ``"openai:gpt-5"`` or a model
+        object, or None for the agent's model. It is read when a run
+        starts, so changing it never affects a run in progress. A ``model``
+        given in ``run_kwargs`` or to ``run``, e.g. a ``Cassette``, takes
+        precedence. A run that pauses for an approval keeps its model; one
+        continued with ``deferred_tool_results`` is a new call to ``run`` and
+        uses the model set by then. ``ModelPicker`` sets it.""")
+
     approval_policy = param.ClassSelector(class_=ApprovalPolicy, default=None, allow_None=True, doc="""
         Rules deciding which tool calls need approval and who may give
         it. Applies to every tool the agent can call during a run.""")
@@ -716,6 +743,8 @@ class AgentRunner(param.Parameterized):
             model_prompt = "\n".join(f"[{note}]" for note in self._notes) + "\n\n" + prompt
             self._notes.clear()
         run_kwargs = {**self.run_kwargs, **kwargs, "run_id": run_id}
+        if self.model is not None:
+            run_kwargs.setdefault("model", self.model)
         capability = self._capability = _RunCapability(runner=self)
         capabilities = [*run_kwargs.pop("capabilities", []), capability]
         try:
@@ -797,6 +826,29 @@ class AgentRunner(param.Parameterized):
                 raise stream.error
             return None
         return result.output if result is not None else None
+
+    def unavailable_reason(self, model: Any) -> str | None:
+        """
+        Why ``model`` cannot be used, or None if it can.
+
+        A model string is resolved the way pydantic-ai resolves it when a
+        run starts, which fails when the provider's package or API key is
+        missing or the model is unknown. A missing key is named in a short
+        sentence, e.g. "Set OPENAI_API_KEY to use this model"; otherwise
+        the reason is the error's first line without an installation hint
+        after a dash. It never holds a key's value; the full error is
+        logged at debug level.
+        Model objects are assumed usable.
+        """
+        if not isinstance(model, str):
+            return None
+        from pydantic_ai.models import infer_model
+
+        try:
+            infer_model(model)
+        except Exception as e:
+            return _reason(e)
+        return None
 
     def cancel(self):
         """Cancel the current run; it ends with a RunError coded ``cancelled``."""
