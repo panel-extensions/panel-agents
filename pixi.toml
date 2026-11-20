@@ -12,7 +12,7 @@ pre-commit-run = "pre-commit run -a"
 python = ">=3.12"
 # Panel 1.10 caps panel-material-ui below 0.17.
 panel = ">=1.11.0rc0"
-panel-material-ui = ">=0.17.0b3"
+panel-material-ui = ">=0.17.0rc1"
 pydantic = ">=2.12"
 pydantic-ai-slim = ">=2.60"
 pandas = "*"
@@ -34,7 +34,7 @@ platforms = ["linux-64", "osx-arm64"]
 [feature.floor.dependencies]
 python = "3.12.*"
 panel = "1.11.0rc0.*"
-panel-material-ui = "0.17.0b3.*"
+panel-material-ui = "0.17.0rc1.*"
 pydantic = "2.12.*"
 pydantic-ai-slim = "2.60.*"
 
