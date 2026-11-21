@@ -53,6 +53,9 @@ class ModelChoice:
 _MENU_ESM = """
 const CARET = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>'
 
+const WARNING = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">'
+  + '<path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>'
+
 export function render({ model, el }) {
   const button = document.createElement("button")
   button.type = "button"
@@ -68,10 +71,38 @@ export function render({ model, el }) {
   list.setAttribute("role", "listbox")
   list.hidden = true
   // With a single model there is nothing to pick, so it is named in plain text where the button would be.
+  // It takes the focus, so keyboard and screen reader users reach its id and why it is unavailable.
   const fixed = document.createElement("span")
   fixed.className = "pa-model-fixed"
   fixed.hidden = true
-  el.append(button, fixed, list)
+  fixed.tabIndex = 0
+  const tip = document.createElement("span")
+  tip.className = "pa-model-tip"
+  tip.id = `pa-model-tip-${Math.random().toString(36).slice(2)}`
+  tip.setAttribute("role", "tooltip")
+  tip.hidden = true
+  fixed.setAttribute("aria-describedby", tip.id)
+  el.append(button, fixed, tip, list)
+
+  const showTip = () => {
+    if (fixed.hidden || !tip.textContent) { return }
+    const rect = fixed.getBoundingClientRect()
+    tip.hidden = false
+    const width = tip.getBoundingClientRect().width
+    tip.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))}px`
+    tip.style.bottom = `${window.innerHeight - rect.top + 4}px`
+  }
+  const hideTip = () => { tip.hidden = true }
+  fixed.addEventListener("mouseenter", showTip)
+  fixed.addEventListener("mouseleave", () => { if (el.getRootNode().activeElement !== fixed) { hideTip() } })
+  fixed.addEventListener("focus", showTip)
+  fixed.addEventListener("blur", hideTip)
+  fixed.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !tip.hidden) {
+      e.stopPropagation()
+      hideTip()
+    }
+  })
 
   const items = () => [...list.querySelectorAll('[role="option"]')]
 
@@ -82,6 +113,9 @@ export function render({ model, el }) {
     const option = model.options.find(o => o.id === model.value)
     current.textContent = option ? option.label : ""
     const only = count === 1 ? model.options[0] : null
+    // Keep the focus where it was when the button turns into the label, or back.
+    const active = el.getRootNode().activeElement
+    const refocus = (only && active === button) || (!only && active === fixed)
     button.hidden = Boolean(only)
     fixed.hidden = !only
     if (only) {
@@ -89,9 +123,23 @@ export function render({ model, el }) {
       const name = document.createElement("span")
       name.className = "pa-model-sr"
       name.textContent = `${model.label}: `
-      fixed.replaceChildren(name, only.label)
-      fixed.title = [only.id, only.reason || only.description].filter(Boolean).join("\\n")
+      const parts = [name, only.label]
+      if (only.reason) {
+        const state = document.createElement("span")
+        state.className = "pa-model-state"
+        state.insertAdjacentHTML("beforeend", WARNING)
+        state.append("unavailable")
+        parts.push(" ", state)
+      }
+      fixed.replaceChildren(...parts)
+      fixed.classList.toggle("pa-model-unavailable", Boolean(only.reason))
+      const details = [only.label === only.id ? null : only.id, only.reason || only.description]
+      tip.textContent = details.filter(Boolean).join(" · ")
+      if (!tip.textContent) { hideTip() }
+    } else {
+      hideTip()
     }
+    if (refocus) { (only ? fixed : button).focus() }
     button.setAttribute("aria-label", `${model.label}: ${option ? option.label : "none"}`)
     list.setAttribute("aria-label", model.label)
     list.replaceChildren(...model.options.map(o => {
@@ -206,7 +254,24 @@ _MENU_CSS = """
   color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
   font: 400 0.8125rem/1.5 var(--mui-font-family, Roboto, sans-serif);
 }
-.pa-model-fixed[hidden], .pa-model-button[hidden] { display: none; }
+.pa-model-fixed[hidden], .pa-model-button[hidden], .pa-model-tip[hidden] { display: none; }
+/* Drawn inside the label, since the composer clips anything around it. */
+.pa-model-fixed:focus-visible {
+  outline: none; border-radius: 2px; box-shadow: inset 0 -2px 0 currentColor;
+  background: var(--mui-palette-action-focus, rgba(0, 0, 0, 0.12));
+}
+.pa-model-unavailable { color: var(--mui-palette-text-disabled, rgba(0, 0, 0, 0.38)); }
+.pa-model-state {
+  display: inline-flex; align-items: center; gap: 2px; margin-left: 2px; vertical-align: top;
+  color: var(--mui-palette-warning-main, #ed6c02);
+}
+.pa-model-state svg { align-self: center; }
+.pa-model-tip {
+  position: fixed; z-index: 1500; max-width: 320px; padding: 4px 8px; box-sizing: border-box;
+  border-radius: var(--mui-shape-borderRadius, 4px); pointer-events: none; overflow-wrap: anywhere;
+  background: var(--mui-palette-grey-700, rgba(97, 97, 97, 0.92)); color: var(--mui-palette-common-white, #fff);
+  font: 500 0.6875rem/1.4 var(--mui-font-family, Roboto, sans-serif);
+}
 .pa-model-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .pa-model-button:hover { color: var(--mui-palette-text-primary, rgba(0, 0, 0, 0.87)); }
 .pa-model-button:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
@@ -263,8 +328,10 @@ class ModelPicker(Viewer):
     missing, are listed disabled with the reason under their label, and a
     model's ``description`` is shown under its label too.
     With a single model there is nothing to pick, so the picker shows that
-    model's name as plain text, with its id as a tooltip, and with no
-    models it is hidden.
+    model's name as plain text, marked when it cannot be used. The text
+    takes the keyboard focus and shows the model's id and description, or
+    why it is unavailable, as a tooltip that screen readers announce. With
+    no models the picker is hidden.
     """
 
     models = param.List(default=[], doc="""

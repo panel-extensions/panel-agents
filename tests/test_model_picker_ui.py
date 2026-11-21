@@ -55,10 +55,46 @@ def test_one_model_is_named_without_a_menu(page):
     label = page.locator(".pa-model-fixed")
     expect(label).to_be_visible()
     expect(label).to_have_text("Model: Alpha")
-    expect(label).to_have_attribute("title", "alpha-model")
+    # The id is a tooltip that keyboard and screen reader users reach too.
+    tip = page.locator(".pa-model-tip")
+    expect(tip).to_have_attribute("role", "tooltip")
+    expect(label).to_have_attribute("aria-describedby", tip.get_attribute("id"))
+    expect(tip).to_be_hidden()
+    expect(tip).to_have_text("alpha-model")
+    label.focus()
+    expect(tip).to_be_visible()
+    label.press("Escape")
+    expect(tip).to_be_hidden()
+    label.blur()
+    label.hover()
+    expect(tip).to_be_visible()
     expect(page.get_by_role("button", name=re.compile("^Model"))).to_have_count(0)
     send(page, "Hi")
     expect(page.get_by_text("Answered by alpha-model.")).to_be_visible()
+
+
+def test_an_unusable_single_model_looks_unavailable_and_says_why(page):
+    serve_component(page, drawer(["bogus:model"]))
+    label = page.locator(".pa-model-fixed")
+    expect(label).to_have_text("Model: bogus:model unavailable")
+    expect(label).to_have_class(re.compile(r"\bpa-model-unavailable\b"))
+    label.focus()
+    tip = page.locator(".pa-model-tip")
+    expect(tip).to_be_visible()
+    expect(tip).to_have_text("Unavailable: Unknown model: bogus:model")
+    expect(label).to_have_attribute("aria-describedby", tip.get_attribute("id"))
+
+
+def test_the_focus_stays_when_the_menu_turns_into_the_label(page):
+    component = drawer(["alpha-model", "beta-model"])
+    serve_component(page, component)
+    button = page.get_by_role("button", name="Model: Alpha")
+    button.focus()
+    component.chat.models = component.chat.models[:1]
+    label = page.locator(".pa-model-fixed")
+    expect(label).to_be_focused()
+    component.chat.models = [*component.chat.models, ModelChoice("beta-model", label="Beta", model=MODELS["beta-model"])]
+    expect(page.get_by_role("button", name="Model: Alpha")).to_be_focused()
 
 
 def test_the_label_turns_into_a_menu_when_models_are_added(page):
