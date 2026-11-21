@@ -67,15 +67,31 @@ export function render({ model, el }) {
   list.className = "pa-model-list"
   list.setAttribute("role", "listbox")
   list.hidden = true
-  el.append(button, list)
+  // With a single model there is nothing to pick, so it is named in plain text where the button would be.
+  const fixed = document.createElement("span")
+  fixed.className = "pa-model-fixed"
+  fixed.hidden = true
+  el.append(button, fixed, list)
 
   const items = () => [...list.querySelectorAll('[role="option"]')]
 
   const update = () => {
     // A host may not apply the component's visibility, e.g. in a chat input's footer, so it hides itself too.
-    el.style.display = model.options.length > 1 ? "" : "none"
+    const count = model.options.length
+    el.style.display = count ? "" : "none"
     const option = model.options.find(o => o.id === model.value)
     current.textContent = option ? option.label : ""
+    const only = count === 1 ? model.options[0] : null
+    button.hidden = Boolean(only)
+    fixed.hidden = !only
+    if (only) {
+      close(false)
+      const name = document.createElement("span")
+      name.className = "pa-model-sr"
+      name.textContent = `${model.label}: `
+      fixed.replaceChildren(name, only.label)
+      fixed.title = [only.id, only.reason || only.description].filter(Boolean).join("\\n")
+    }
     button.setAttribute("aria-label", `${model.label}: ${option ? option.label : "none"}`)
     list.setAttribute("aria-label", model.label)
     list.replaceChildren(...model.options.map(o => {
@@ -184,6 +200,14 @@ _MENU_CSS = """
   font: 400 0.8125rem/1.5 var(--mui-font-family, Roboto, sans-serif);
 }
 .pa-model-current { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pa-model-fixed {
+  display: inline-block; max-width: 220px; padding: 2px 2px 2px 0; cursor: default;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: top;
+  color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
+  font: 400 0.8125rem/1.5 var(--mui-font-family, Roboto, sans-serif);
+}
+.pa-model-fixed[hidden], .pa-model-button[hidden] { display: none; }
+.pa-model-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .pa-model-button:hover { color: var(--mui-palette-text-primary, rgba(0, 0, 0, 0.87)); }
 .pa-model-button:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
 .pa-model-list {
@@ -206,7 +230,8 @@ _MENU_CSS = """
 
 class ModelMenu(JSComponent):
     """
-    The picker's button and list of models. A native button and listbox,
+    The picker's button and list of models, or with a single model just
+    its name. A native button and listbox,
     so it has an accessible name and lists each model's description, or
     why it cannot be used, under its label. It also keeps the pick in the
     browser's localStorage under ``storage_key``.
@@ -237,7 +262,9 @@ class ModelPicker(Viewer):
     ``unavailable_reason`` finds unusable, e.g. because the provider's API key is
     missing, are listed disabled with the reason under their label, and a
     model's ``description`` is shown under its label too.
-    The picker is hidden unless there is more than one model to choose from.
+    With a single model there is nothing to pick, so the picker shows that
+    model's name as plain text, with its id as a tooltip, and with no
+    models it is hidden.
     """
 
     models = param.List(default=[], doc="""
@@ -307,7 +334,7 @@ class ModelPicker(Viewer):
             options.append(option)
         usable = self._usable
         value = self.value if self.value in usable else (usable[0] if usable else None)
-        self._menu.param.update(options=options, value=value, visible=len(self._choices) > 1)
+        self._menu.param.update(options=options, value=value, visible=bool(self._choices))
         if value != self.value:
             self.value = value
         else:

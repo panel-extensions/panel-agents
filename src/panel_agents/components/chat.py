@@ -281,7 +281,7 @@ class AgentChat(Viewer):
 
     def _sync_footer(self):
         # An empty footer row still takes space in the input and pushes the text off center.
-        footer = [self._model_picker.__panel__()] if len(self._model_picker.choices) > 1 else []
+        footer = [self._model_picker.__panel__()] if self._model_picker.choices else []
         if self._feed._widget.footer_objects != footer:
             self._feed._widget.footer_objects = footer
 
