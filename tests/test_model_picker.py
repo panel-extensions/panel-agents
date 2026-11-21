@@ -131,21 +131,23 @@ def test_models_sharing_a_label_or_id_stay_apart():
     ])
     assert [o["label"] for o in picker._menu.options] == ["Fast (openai:a)", "Fast (anthropic:b)", "openai:c"]
     assert [c.id for c in picker.choices] == ["openai:a", "anthropic:b", "openai:c"]
-    assert not ModelPicker(models=["test", "test"])._menu.visible
+    single = ModelPicker(models=["test", "test"])
+    assert single._menu.visible and single._menu.options == [{"id": "test", "label": "test"}]
 
 
-def test_the_picker_shows_only_with_a_choice():
+def test_the_picker_shows_a_single_model_and_hides_without_one():
     runner = make_runner(Agent(answering("a")))
     chat = AgentChat(runner=runner)
     assert chat.model_picker._menu.visible is False and runner.model is None
     assert chat.feed._widget.footer_objects == []
     chat.models = ["test"]
-    assert chat.model_picker._menu.visible is False and chat.model_id == "test"
-    assert chat.feed._widget.footer_objects == []
+    assert chat.model_picker._menu.visible and chat.model_id == "test" and runner.model == "test"
+    assert chat.feed._widget.footer_objects == [chat.model_picker._menu]
     chat.models = ["test", "bogus:x"]
     assert chat.model_picker._menu.visible
     assert chat.feed._widget.footer_objects == [chat.model_picker._menu]
-    chat.models = ["test"]
+    chat.models = []
+    assert chat.model_picker._menu.visible is False
     assert chat.feed._widget.footer_objects == []
     assert AgentChat(state=RunState(), readonly=True, models=["test", "bogus:x"]).model_picker is None
 

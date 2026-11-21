@@ -50,11 +50,27 @@ def send(page, text):
     box.press("Enter")
 
 
-def test_one_model_shows_no_picker(page):
+def test_one_model_is_named_without_a_menu(page):
     serve_component(page, drawer(["alpha-model"]))
+    label = page.locator(".pa-model-fixed")
+    expect(label).to_be_visible()
+    expect(label).to_have_text("Model: Alpha")
+    expect(label).to_have_attribute("title", "alpha-model")
+    expect(page.get_by_role("button", name=re.compile("^Model"))).to_have_count(0)
     send(page, "Hi")
     expect(page.get_by_text("Answered by alpha-model.")).to_be_visible()
-    expect(page.get_by_role("button", name=re.compile("^Model"))).to_have_count(0)
+
+
+def test_the_label_turns_into_a_menu_when_models_are_added(page):
+    component = drawer(["alpha-model"])
+    serve_component(page, component)
+    expect(page.locator(".pa-model-fixed")).to_be_visible()
+    component.chat.models = [*component.chat.models, ModelChoice("beta-model", label="Beta", model=MODELS["beta-model"])]
+    expect(page.get_by_role("button", name="Model: Alpha")).to_be_visible()
+    expect(page.locator(".pa-model-fixed")).to_be_hidden()
+    component.chat.models = []
+    expect(page.get_by_role("button", name="Model: Alpha")).to_be_hidden()
+    expect(page.locator(".pa-model-fixed")).to_be_hidden()
 
 
 @pytest.mark.parametrize("layout", ["chat", "document"])
@@ -157,7 +173,7 @@ COMPOSER_GAPS = """
     return {top: r.top + parseFloat(s.paddingTop), bottom: r.bottom - parseFloat(s.paddingBottom)};
   };
   const text = content(all.find(e => e.tagName === 'TEXTAREA' && e.offsetHeight));
-  const picker = all.find(e => e.classList.contains('pa-model-button'));
+  const picker = all.find(e => (e.classList.contains('pa-model-button') || e.classList.contains('pa-model-fixed')) && e.offsetHeight);
   const last = picker ? content(picker) : text;
   return [text.top - box.top, box.bottom - last.bottom];
 }
@@ -172,6 +188,8 @@ def test_the_input_is_padded_evenly_above_and_below(page, models, text):
     box.fill(text)
     if len(models) > 1:
         expect(page.get_by_role("button", name="Model: Alpha")).to_be_visible()
+    else:
+        expect(page.locator(".pa-model-fixed")).to_be_visible()
 
     def even():
         top, bottom = page.evaluate(COMPOSER_GAPS)
