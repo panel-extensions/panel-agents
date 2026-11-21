@@ -90,6 +90,19 @@ def test_a_narrow_window_overlays_the_drawer(page):
     wait_until(lambda: paper.bounding_box()["width"] > 850, page)
 
 
+def test_a_drawer_wider_than_a_phone_stays_on_screen(page):
+    page.set_viewport_size({"width": 390, "height": 844})
+    main = pmui.Paper(pmui.Typography("main"), sizing_mode="stretch_both")
+    drawer = AgentDrawer(state=RunState(), main=main, overlay_below=1200, width=420)
+    serve_component(page, pmui.Column(pmui.Row(drawer.toggle), drawer, height=800, sizing_mode="stretch_width"))
+    wait_until(lambda: drawer._drawer.variant == "temporary", page)
+    page.get_by_role("button", name="Assistant", exact=True).click()
+    paper = page.locator(".MuiDrawer-paper")
+    expect(paper).to_be_visible()
+    wait_until(lambda: paper.bounding_box() == {**paper.bounding_box(), "x": 0, "width": 390}, page)
+    assert page.evaluate("document.documentElement.scrollWidth") == 390
+
+
 _LOOK = """el => {
   const style = getComputedStyle(el)
   const box = el.getBoundingClientRect()

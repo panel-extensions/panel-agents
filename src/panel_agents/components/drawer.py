@@ -198,6 +198,8 @@ class AgentDrawer(Viewer):
             variant=self.variant, inline=self.variant == "persistent",
             # The inline drawer sets its own width (0 when closed); the row must neither grow nor shrink it.
             styles={"flex": "0 0 auto"},
+            # On a phone narrower than the drawer it takes the screen's width rather than running off it.
+            sx={"maxWidth": "100vw"},
         )
         self._drawer.param.watch(self._on_drawer_open, "open")
 
