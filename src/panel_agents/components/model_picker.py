@@ -76,6 +76,7 @@ export function render({ model, el }) {
   fixed.className = "pa-model-fixed"
   fixed.hidden = true
   fixed.tabIndex = 0
+  fixed.setAttribute("role", "note")
   const tip = document.createElement("span")
   tip.className = "pa-model-tip"
   tip.id = `pa-model-tip-${Math.random().toString(36).slice(2)}`
@@ -135,6 +136,10 @@ export function render({ model, el }) {
       fixed.classList.toggle("pa-model-unavailable", Boolean(only.reason))
       const details = [only.label === only.id ? null : only.id, only.reason || only.description]
       tip.textContent = details.filter(Boolean).join(" · ")
+      // Named in full, since a description alone is announced unreliably.
+      const state = only.reason ? " unavailable" : ""
+      const named = [`${model.label}: ${only.label}${state}`, tip.textContent].filter(Boolean)
+      fixed.setAttribute("aria-label", named.join(", "))
       if (!tip.textContent) { hideTip() }
     } else {
       hideTip()

@@ -55,6 +55,8 @@ def test_one_model_is_named_without_a_menu(page):
     label = page.locator(".pa-model-fixed")
     expect(label).to_be_visible()
     expect(label).to_have_text("Model: Alpha")
+    expect(label).to_have_attribute("role", "note")
+    expect(label).to_have_attribute("aria-label", "Model: Alpha, alpha-model")
     # The id is a tooltip that keyboard and screen reader users reach too.
     tip = page.locator(".pa-model-tip")
     expect(tip).to_have_attribute("role", "tooltip")
@@ -82,6 +84,9 @@ def test_an_unusable_single_model_looks_unavailable_and_says_why(page):
     tip = page.locator(".pa-model-tip")
     expect(tip).to_be_visible()
     expect(tip).to_have_text("Unavailable: Unknown model: bogus:model")
+    expect(label).to_have_attribute(
+        "aria-label", "Model: bogus:model unavailable, Unavailable: Unknown model: bogus:model"
+    )
     expect(label).to_have_attribute("aria-describedby", tip.get_attribute("id"))
 
 
