@@ -35,6 +35,12 @@ _THINKING_CSS = """
 .markdown { font-size: 0.85rem; opacity: 0.75; }
 """
 
+# The model picker's row (the div after the textarea) sits right under the text, so the text drops
+# its bottom padding, which pmui sets inline, hence !important.
+_FOOTER_CSS = """
+textarea:has(~ div) { padding-bottom: 0 !important; }
+"""
+
 
 class AgentChat(Viewer):
     """
@@ -207,6 +213,8 @@ class AgentChat(Viewer):
             # needs 14px more (16px less its button's 2px padding) to sit as far from the
             # bottom edge as the text is from the top (8px padding and 8px in the textarea).
             self._model_picker.__panel__().margin = (0, 0, 14, 0)
+            widget = self._feed._widget
+            widget.stylesheets = [*widget.stylesheets, _FOOTER_CSS]
             self.model_id = self._model_picker.value
             self._model_picker.param.watch(lambda e: setattr(self, "model_id", e.new), "value")
             self._sync_footer()
