@@ -211,12 +211,15 @@ COMPOSER_GAPS = """
   const box = all.find(e => e.classList.contains('MuiInputBase-root')).getBoundingClientRect();
   const content = (el) => {
     const r = el.getBoundingClientRect(), s = getComputedStyle(el);
-    return {top: r.top + parseFloat(s.paddingTop), bottom: r.bottom - parseFloat(s.paddingBottom)};
+    return {
+      left: r.left + parseFloat(s.paddingLeft), top: r.top + parseFloat(s.paddingTop),
+      bottom: r.bottom - parseFloat(s.paddingBottom),
+    };
   };
   const text = content(all.find(e => e.tagName === 'TEXTAREA' && e.offsetHeight));
   const picker = all.find(e => (e.classList.contains('pa-model-button') || e.classList.contains('pa-model-fixed')) && e.offsetHeight);
   const last = picker ? content(picker) : text;
-  return [text.top - box.top, box.bottom - last.bottom];
+  return [text.top - box.top, box.bottom - last.bottom, last.top - text.bottom, last.left - text.left];
 }
 """
 
@@ -233,7 +236,19 @@ def test_the_input_is_padded_evenly_above_and_below(page, models, text):
         expect(page.locator(".pa-model-fixed")).to_be_visible()
 
     def even():
-        top, bottom = page.evaluate(COMPOSER_GAPS)
+        top, bottom, *_ = page.evaluate(COMPOSER_GAPS)
         return top >= 16 and abs(top - bottom) <= 1
 
     wait_until(even, page)
+
+
+@pytest.mark.parametrize("models", [["alpha-model"], ["alpha-model", "beta-model"]], ids=["one", "two"])
+def test_the_model_sits_right_under_the_text(page, models):
+    serve_component(page, drawer(models))
+    expect(page.locator(".pa-model-fixed" if len(models) == 1 else ".pa-model-button")).to_be_visible()
+
+    def tucked():
+        *_, gap, indent = page.evaluate(COMPOSER_GAPS)
+        return 0 <= gap <= 4 and abs(indent) <= 1
+
+    wait_until(tucked, page)
