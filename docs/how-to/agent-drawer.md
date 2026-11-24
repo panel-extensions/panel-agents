@@ -45,6 +45,19 @@ drawer = AgentDrawer(runner, chat_params={
 
 A model is a pydantic-ai model string, a dict of `ModelChoice` fields or a `ModelChoice`; `ModelChoice(id, model=...)` runs a ready-made model object, e.g. one with a custom provider, under that id. Each id is offered once, models that share a label show their id too, and the button is named "Model" for screen readers. With a single model there is nothing to pick, so its name is shown as plain text in the same place, with its id as a tooltip, and with no models nothing is shown. The picked model becomes the runner's `model`, which `AgentRunner` reads when a request starts, so switching applies from the next request and never to one in progress: a run paused for an approval keeps its model, and `run(deferred_tool_results=...)` starts a new run with the model picked by then. A `model` passed in `run_kwargs` or to `run`, such as a `Cassette`, still wins. Each model's `description` is listed under its name, and a model the runner cannot use, typically because its provider's package or API key is missing, is listed disabled with the reason (`AgentRunner.unavailable_reason`) instead, without showing any key. `model_id` sets the initial pick (the first usable model by default), and with `remember_model` the browser keeps the last pick in localStorage under that key and starts the next session with it while it is still offered and usable. Every model request records its model, so the usage line, the model-call cards and the run's details show which model answered.
 
+## Hand an item over to the agent
+
+When the person moves from another part of the app to the agent with something in hand, for example a chart they just added, mention it in the chat's input so their next message is about it:
+
+```python
+from panel_agents import Mention
+
+drawer.chat.mentions = [Mention("sales_by_region", icon="bar_chart")]
+drawer.open = True
+```
+
+Each mention is a chip in the input, below the text, with a button that removes it. Sending a message writes the mentions at its start, as `@` and the label (`Mention(..., text="...")` writes something else), and clears them, so the agent reads what the message is about and the conversation shows it: "@sales_by_region make it a bar chart". Tell the agent in its instructions what an `@` name refers to in your app.
+
 `drawer.chat`, `drawer.artifacts` and `drawer.approvals` give access to the `AgentChat`, `ArtifactPane` and `ApprovalQueue` inside.
 
 ## Use a page's contextbar instead
