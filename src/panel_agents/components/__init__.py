@@ -2,7 +2,7 @@ from ._schema_form import SchemaForm
 from .approval import ApprovalCard, ApprovalQueue, approval_factory
 from .artifact_cell import ArtifactAction, ArtifactCell
 from .artifacts import ArtifactPane, ArtifactView
-from .chat import AgentChat
+from .chat import AgentChat, Mention
 from .drawer import AgentDrawer
 from .model_call import ModelCallCard
 from .model_picker import ModelChoice, ModelPicker
@@ -20,6 +20,7 @@ __all__ = [
     "ArtifactCell",
     "ArtifactPane",
     "ArtifactView",
+    "Mention",
     "ModelCallCard",
     "ModelChoice",
     "ModelPicker",

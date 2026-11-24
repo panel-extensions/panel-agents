@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import datetime as dt
 import inspect
+from dataclasses import dataclass
 from html import escape
 from typing import Any
 
@@ -40,6 +41,28 @@ _THINKING_CSS = """
 _FOOTER_CSS = """
 textarea:has(~ div) { padding-bottom: 0 !important; }
 """
+
+
+@dataclass(frozen=True)
+class Mention:
+    """
+    Something a person's next message is about, e.g. an item handed over
+    to the chat from elsewhere in the app.
+
+    It shows as a chip in the chat's input, which the person can remove,
+    and sending a message writes its ``text`` at the start of the message,
+    by default ``@`` followed by the ``label``, so the agent reads what
+    the message is about and the conversation shows it.
+    """
+
+    label: str
+    icon: str | None = None
+    text: str | None = None
+
+    @property
+    def written(self) -> str:
+        """How the sent message names it."""
+        return self.text or f"@{self.label}"
 
 
 class AgentChat(Viewer):
@@ -177,6 +200,12 @@ class AgentChat(Viewer):
         A localStorage key under which the browser remembers the picked
         model for the next session, see ``ModelPicker.remember``.""")
 
+    mentions = param.List(default=[], item_type=Mention, doc="""
+        What the next message is about, e.g. an item a person handed over
+        from elsewhere in the app, shown as chips in the input that they
+        can remove. Sending a message writes them at its start, see
+        ``Mention``, and clears them.""")
+
     def __init__(self, state: RunState | None = None, **params):
         params.setdefault("approval_factory", default_approval_factory)
         if state is not None:
@@ -217,8 +246,10 @@ class AgentChat(Viewer):
             widget.stylesheets = [*widget.stylesheets, _FOOTER_CSS]
             self.model_id = self._model_picker.value
             self._model_picker.param.watch(lambda e: setattr(self, "model_id", e.new), "value")
+            self._mention_chips: dict[Mention, pmui.Row] = {}
             self._sync_footer()
             self.param.watch(self._sync_model_picker, ["models", "model_id", "remember_model"])
+            self.param.watch(lambda e: self._sync_footer(), "mentions")
         # Timeline items in order; only the ones shown get a view and a message.
         self._rendered: list[Any] = []
         self._index: dict[int, int] = {}
@@ -288,10 +319,28 @@ class AgentChat(Viewer):
         self._sync_footer()
 
     def _sync_footer(self):
+        chips = {mention: self._mention_chips.get(mention) or self._mention_chip(mention) for mention in self.mentions}
+        self._mention_chips = chips
         # An empty footer row still takes space in the input and pushes the text off center.
-        footer = [self._model_picker.__panel__()] if self._model_picker.choices else []
+        footer = [*chips.values(), *([self._model_picker.__panel__()] if self._model_picker.choices else [])]
         if self._feed._widget.footer_objects != footer:
             self._feed._widget.footer_objects = footer
+
+    def _mention_chip(self, mention: Mention) -> pmui.Row:
+        chip = pmui.Chip(
+            label=mention.label, icon=mention.icon, size="small", variant="outlined", color="default",
+            description=f"This message is about {mention.label}", margin=0,
+        )
+        remove = pmui.IconButton(
+            icon="close", size="small", description=f"Remove {mention.label}", margin=0,
+            sx={"p": "2px", "& .material-icons": {"fontSize": "16px"}},
+            on_click=lambda _: self._remove_mention(mention),
+        )
+        # Below the text like the model picker, whose 14px bottom margin it shares.
+        return pmui.Row(chip, remove, margin=(0, 0, 14, 0), styles={"align-items": "center", "flex-shrink": "0"}, css_classes=["agent-chat-mention"])
+
+    def _remove_mention(self, mention: Mention):
+        self.mentions = [m for m in self.mentions if m != mention]
 
     def view_for(self, item: MessageState | ModelCallState | ToolCallState) -> Any:
         """
@@ -304,10 +353,13 @@ class AgentChat(Viewer):
         return self._views[id(item)]
 
     async def submit(self, text: str):
-        """Submit text as the user would through the input."""
+        """Submit text as the user would through the input, after the ``mentions``, which it clears."""
         text = text.strip()
         if not text or self.state.running:
             return
+        if self.mentions and not self.readonly:
+            text = " ".join([*(mention.written for mention in self.mentions), text])
+            self.mentions = []
         if self.runner is not None:
             result = self.runner.run(text)
         elif self.callback is not None:

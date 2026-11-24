@@ -4,7 +4,7 @@ import pytest
 
 from panel_agents import RunState
 from panel_agents import events as ev
-from panel_agents.components.chat import AgentChat
+from panel_agents.components.chat import AgentChat, Mention
 from panel_agents.components.model_call import ModelCallCard
 from panel_agents.components.tool_call import ToolCallCard
 from panel_agents.state import ModelCallState
@@ -546,3 +546,42 @@ def test_a_model_call_inserted_before_its_response_keeps_the_feed():
     assert [o for o in objects if o in before] == before
     message = chat._messages[id(second)]
     assert objects.index(message) < objects.index(chat._messages[id(state.messages["a"])])
+
+
+async def test_mentions_show_in_the_input_and_start_the_next_message():
+    state = RunState(flush_interval=0)
+    received = []
+    chat = AgentChat(state, callback=received.append, models=["a", "b"])
+    chat.mentions = [Mention("sales_by_region", icon="bar_chart"), Mention("Orders", text="@orders_table")]
+    footer = chat.feed._widget.footer_objects
+    assert len(footer) == 3 and footer[-1] is chat.model_picker.__panel__()
+    chip, remove = footer[0].objects
+    assert (chip.label, chip.icon) == ("sales_by_region", "bar_chart")
+    assert remove.description == "Remove sales_by_region"
+    await chat.submit("make it a bar chart")
+    assert received == ["@sales_by_region @orders_table make it a bar chart"]
+    assert chat.mentions == [] and chat.feed._widget.footer_objects == [chat.model_picker.__panel__()]
+    assert chat.feed.objects[0].object.object == "@sales_by_region @orders_table make it a bar chart"
+
+
+async def test_a_mention_is_kept_until_a_message_is_sent():
+    state = RunState(flush_interval=0)
+    received = []
+    chat = AgentChat(state, callback=received.append)
+    chat.mentions = [Mention("sales_by_region")]
+    await chat.submit("   ")
+    state.apply(ev.RunStarted(run_id="r1"))
+    await chat.submit("hello")
+    assert received == [] and chat.mentions == [Mention("sales_by_region")]
+
+
+def test_removing_a_mention_drops_its_chip():
+    chat = AgentChat(RunState(flush_interval=0), callback=lambda text: None)
+    first, second = Mention("a"), Mention("b")
+    chat.mentions = [first, second]
+    kept = chat.feed._widget.footer_objects[1]
+    chat.feed._widget.footer_objects[0].objects[1].clicks += 1
+    assert chat.mentions == [second]
+    assert chat.feed._widget.footer_objects == [kept]
+    chat.mentions = []
+    assert chat.feed._widget.footer_objects == []
