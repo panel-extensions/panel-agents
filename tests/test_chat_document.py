@@ -393,3 +393,16 @@ def test_avatars_are_given_by_name():
     user, reply = messages(chat)
     assert reply.user == "Dashboard" and reply.avatar == "📊"
     assert user.avatar != "📊"
+
+
+def test_the_user_placement_and_message_params_reach_every_message():
+    state = RunState(flush_interval=0)
+    chat = AgentChat(
+        state, layout="document", readonly=True, user="You", user_placement="right",
+        message_params={"show_avatar": False, "show_user": False},
+    )
+    mine = chat._message_params("You", None)
+    theirs = chat._message_params("Explore", None)
+    assert mine["placement"] == "right" and "sizing_mode" not in mine
+    assert theirs["placement"] == "left" and theirs["sizing_mode"] == "stretch_width"
+    assert mine["show_avatar"] is False and theirs["show_user"] is False

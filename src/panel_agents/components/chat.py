@@ -139,6 +139,16 @@ class AgentChat(Viewer):
         with every message on the left and the artifacts a run published
         shown inline under its last message.""")
 
+    user_placement = param.Selector(default=None, objects=[None, "left", "right"], allow_None=True, doc="""
+        Where the user's messages are placed. By default on the right in
+        the chat layout, as bubbles, and on the left in the document
+        layout; "right" makes them bubbles in the document layout too.""")
+
+    message_params = param.Dict(default={}, doc="""
+        Parameters given to every message on top of the chat's own, e.g.
+        ``{"show_avatar": False, "show_user": False}`` to leave out who sent
+        each message.""")
+
     inline_artifacts = param.Callable(default=None, allow_None=True, doc="""
         Predicate ``(artifact) -> bool`` choosing the artifacts shown inline
         in the document layout. Defaults to every artifact that does not
@@ -427,9 +437,12 @@ class AgentChat(Viewer):
         return (run.agent_name if run is not None else None) or self.assistant
 
     def _message_params(self, user: str, created_at: float | None, compact: bool = False) -> dict[str, Any]:
+        placement = "left"
+        if user == self.user:
+            placement = self.user_placement or ("right" if self.layout == "chat" else "left")
         params: dict[str, Any] = {
             "user": user,
-            "placement": "right" if user == self.user and self.layout == "chat" else "left",
+            "placement": placement,
             "show_reaction_icons": False,
             "show_copy_icon": False,
             # The hover timestamp row adds a gap that would space out runs of tool calls.
@@ -439,9 +452,9 @@ class AgentChat(Viewer):
             params["timestamp"] = dt.datetime.fromtimestamp(created_at)
         if user in self.avatars:
             params["avatar"] = self.avatars[user]
-        if self.layout == "document":
+        if self.layout == "document" and placement == "left":
             params["sizing_mode"] = "stretch_width"
-        return params
+        return {**params, **self.message_params}
 
     def _build_step(self, item: _Step) -> pmui.ChatMessage:
         params = self._message_params(self._agent_name(item.run_id), item.started_at, compact=True)
