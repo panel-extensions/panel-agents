@@ -143,3 +143,50 @@ def test_toggle_looks_like_a_small_text_button(page, dark):
     page.get_by_role("button", name="Close", exact=True).click()
     wait_until(lambda: not drawer.open, page)
     wait_until(lambda: background() == idle, page)
+
+
+def _hit(page, x, y):
+    """Return the class of the element under the point, looking into shadow roots."""
+    return page.evaluate(
+        """([x, y]) => {
+          let root = document, hit = null
+          while (root) {
+            const next = root.elementFromPoint(x, y)
+            if (!next || next === hit) break
+            hit = next
+            root = hit.shadowRoot
+          }
+          return hit ? String(hit.className) : null
+        }""",
+        [x, y],
+    )
+
+
+def test_dragging_the_left_edge_resizes_the_drawer(page):
+    main = pmui.Paper(pmui.Typography("main"), sizing_mode="stretch_both")
+    drawer = AgentDrawer(state=RunState(), main=main, open=True, width=400)
+    page.set_viewport_size({"width": 1200, "height": 700})
+    serve_component(page, pmui.Column(drawer, height=600, sizing_mode="stretch_width"))
+    paper = page.locator(".MuiDrawer-paper").first
+    # Once the drawer has slid in.
+    wait_until(lambda: (paper.bounding_box() or {}).get("x") == 800, page)
+    handle = page.get_by_role("separator", name="Resize Assistant")
+    box = handle.bounding_box()
+    # The whole edge can be grabbed.
+    assert box["height"] > 500
+    x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    # Until the drawer has settled after opening, the point can be the page behind it.
+    wait_until(lambda: _hit(page, x, y) == "pa-drawer-handle", page)
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x - 150, y, steps=6)
+    page.mouse.up()
+    wait_until(lambda: abs(drawer.width - 550) <= 2, page)
+    wait_until(lambda: abs(paper.bounding_box()["width"] - drawer.width) <= 2, page)
+    # No wider than 60% of the window.
+    handle.focus()
+    for _ in range(12):
+        page.keyboard.press("ArrowLeft")
+    wait_until(lambda: drawer.width == 720, page)
+    drawer.width = 300
+    wait_until(lambda: abs(paper.bounding_box()["width"] - 300) <= 2, page)

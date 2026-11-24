@@ -207,3 +207,15 @@ def test_the_drawer_frames_a_flat_chat():
     drawer = AgentDrawer(Runner(), chat_params={"feed_params": {"card_params": {"elevation": 2}}, "user": "Ann"})
     assert drawer.chat.feed._card.elevation == 2 and drawer.chat.user == "Ann"
     assert drawer.chat.feed.min_height == 0
+
+
+def test_a_resize_sets_the_width_and_resizable_hides_the_handle():
+    drawer = AgentDrawer(state=RunState())
+    drawer._handle.size = 520
+    assert drawer.width == 520 and drawer._drawer.size == 520
+    drawer._handle.size = 100
+    assert drawer.width == 240
+    drawer.width = 400
+    assert drawer._handle.size == 400
+    drawer.resizable = False
+    assert not drawer._handle.visible
