@@ -597,24 +597,35 @@ def test_removing_a_mention_ignores_an_index_out_of_range():
     assert chat.mentions == [Mention("a")]
 
 
-async def test_a_repeated_mention_shows_and_is_written_once():
+async def test_mentions_writing_the_same_name_show_and_are_written_once():
     received = []
     chat = AgentChat(RunState(flush_interval=0), callback=received.append)
-    chat.mentions = [Mention("a"), Mention("a"), Mention("a", icon="table")]
-    assert chat.feed._widget.footer_objects[0].mentions == [{"label": "a", "icon": None}, {"label": "a", "icon": "table"}]
-    remove_chip(chat, 0)
-    assert chat.mentions == [Mention("a", icon="table")]
-    chat.mentions = [Mention("a"), Mention("a")]
+    chat.mentions = [Mention("a"), Mention("b"), Mention("a"), Mention("a", icon="table"), Mention("A", text="@a")]
+    assert chat.feed._widget.footer_objects[0].mentions == [{"label": "a", "icon": None}, {"label": "b", "icon": None}]
     await chat.submit("x")
-    assert received == ["@a x"]
+    assert received == ["@a @b x"]
+    chat.mentions = [Mention("a"), Mention("b"), Mention("a", icon="table")]
+    remove_chip(chat, 0)
+    assert chat.mentions == [Mention("b")]
 
 
 @pytest.mark.parametrize(("mention", "written"), [
     (Mention("sales_by_region"), "@sales_by_region"),
+    (Mention("orders/2024:q1-v1.2"), "@orders/2024:q1-v1.2"),
+    (Mention("région_é"), "@région_é"),
     (Mention("Sales by region"), '@"Sales by region"'),
     (Mention("@odd"), "@odd"),
+    (Mention("@@odd"), "@odd"),
+    (Mention('a"b'), '@"a\\"b"'),
+    (Mention("a,b"), '@"a,b"'),
     (Mention(' say "hi" '), '@"say \\"hi\\""'),
     (Mention("Sales by region", text="@sales"), "@sales"),
 ])
 def test_a_mention_is_written_as_one_name(mention, written):
     assert mention.written == written
+
+
+@pytest.mark.parametrize("label", ["", "  ", "@", " @@ "])
+def test_a_mention_needs_a_label(label):
+    with pytest.raises(ValueError, match="needs a label"):
+        Mention(label)

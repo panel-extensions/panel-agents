@@ -58,7 +58,7 @@ drawer.chat.mentions = [Mention("sales_by_region", icon="bar_chart")]
 drawer.open = True
 ```
 
-Each mention is a chip in the input, below the text, with a button that removes it and puts the focus back in the input; Backspace in an empty input removes the last one. Sending a message writes the mentions at its start and clears them, so the agent reads what the message is about and the conversation shows it: "@sales_by_region make it a bar chart". Each is written once, as `@` and the label, quoted when it has spaces (`@"Sales by region"`); `Mention(..., text="...")` writes something else, e.g. an id. Tell the agent in its instructions what an `@` name refers to in your app.
+Each mention is a chip in the input, below the text, with its label cut short when long and a button that removes it and puts the focus back in the input; Backspace in an empty input removes the last one. Sending a message writes the mentions at its start and clears them, so the agent reads what the message is about and the conversation shows it: "@sales_by_region make it a bar chart". Mentions that would write the same name show as one chip and are written once, as `@` and the label, quoted unless it is made of letters, digits and `_ . - / :` only (`@"Sales by region"`); `Mention(..., text="...")` writes something else, e.g. an id. A label must not be empty. Tell the agent in its instructions what an `@` name refers to in your app.
 
 `drawer.chat`, `drawer.artifacts` and `drawer.approvals` give access to the `AgentChat`, `ArtifactPane` and `ApprovalQueue` inside.
 

@@ -47,6 +47,7 @@ export function render({ model, el }) {
       const label = document.createElement("span")
       label.className = "pa-mention-label"
       label.textContent = mention.label
+      label.title = mention.label
       const button = document.createElement("button")
       button.type = "button"
       button.className = "pa-mention-remove"
@@ -87,17 +88,21 @@ export function render({ model, el }) {
 """
 
 _CSS = """
-.pa-mentions { display: flex; flex-wrap: nowrap; gap: 4px; align-items: center; }
+.pa-mentions { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; }
 .pa-mention {
-  display: inline-flex; align-items: center; gap: 4px; height: 24px; box-sizing: border-box;
+  display: inline-flex; align-items: center; gap: 4px; height: 24px; box-sizing: border-box; max-width: 100%; min-width: 0;
   padding: 0 2px 0 8px; border: 1px solid var(--mui-palette-Chip-defaultBorder, #bdbdbd); border-radius: 12px;
   font: var(--mui-font-body2, 400 0.875rem/1.43 Roboto, sans-serif); font-size: 0.8125rem; white-space: nowrap;
   color: var(--mui-palette-text-primary, rgba(0, 0, 0, 0.87));
 }
-.pa-mention-icon { font-size: 16px; margin-left: -2px; color: var(--mui-palette-action-active, rgba(0, 0, 0, 0.54)); }
+.pa-mention-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 16em; }
+.pa-mention-icon {
+  flex-shrink: 0; width: 16px; overflow: hidden; font-size: 16px; margin-left: -2px;
+  color: var(--mui-palette-action-active, rgba(0, 0, 0, 0.54));
+}
 .pa-mention-remove {
   display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0;
-  border: 0; border-radius: 50%; background: transparent; color: inherit; opacity: 0.6; cursor: pointer;
+  flex-shrink: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; opacity: 0.6; cursor: pointer;
 }
 .pa-mention-remove:hover { opacity: 1; background: var(--mui-palette-action-hover, rgba(0, 0, 0, 0.04)); }
 .pa-mention-remove:focus-visible { opacity: 1; outline: 2px solid currentColor; outline-offset: -1px; }

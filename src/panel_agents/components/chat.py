@@ -7,6 +7,7 @@ from __future__ import annotations
 import datetime as dt
 import inspect
 import json
+import re
 from dataclasses import dataclass
 from html import escape
 from typing import Any
@@ -40,9 +41,16 @@ _THINKING_CSS = """
 
 # The model picker's row (the div after the textarea) sits right under the text, so the text drops
 # its bottom padding, which pmui sets inline, hence !important.
+# The mention chips take what the picker leaves, so pmui's wrapper around them and the box around the
+# text and footer have to shrink as well, or a long label pushes the picker and send button out.
 _FOOTER_CSS = """
 textarea:has(~ div) { padding-bottom: 0 !important; }
+div:has(> textarea) { min-width: 0; }
+.child-wrapper:has(> .agent-chat-mention) { flex: 0 1 auto; min-width: 0; }
 """
+
+
+_TOKEN = re.compile(r"[\w./:-]+")
 
 
 @dataclass(frozen=True)
@@ -54,14 +62,19 @@ class Mention:
     It shows as a chip in the chat's input, which the person can remove,
     and sending a message writes its ``text`` at the start of the message,
     so the agent reads what the message is about and the conversation
-    shows it. By default that is ``@`` and the ``label``, quoted when the
-    label has spaces (``@"Sales by region"``) so the name stays one
-    token; pass ``text`` to write something else, e.g. an id.
+    shows it. By default that is ``@`` and the ``label``, quoted unless
+    it is made of letters, digits and ``_ . - / :`` only
+    (``@"Sales by region"``), so the name stays one token; pass ``text``
+    to write something else, e.g. an id. The label must not be empty.
     """
 
     label: str
     icon: str | None = None
     text: str | None = None
+
+    def __post_init__(self):
+        if not self.label.strip().lstrip("@"):
+            raise ValueError(f"A Mention needs a label to show, not {self.label!r}.")
 
     @property
     def written(self) -> str:
@@ -69,7 +82,7 @@ class Mention:
         if self.text:
             return self.text
         name = self.label.strip().lstrip("@")
-        return f"@{json.dumps(name, ensure_ascii=False)}" if len(name.split()) != 1 else f"@{name}"
+        return f"@{name}" if _TOKEN.fullmatch(name) else f"@{json.dumps(name, ensure_ascii=False)}"
 
 
 class AgentChat(Viewer):
@@ -268,7 +281,7 @@ class AgentChat(Viewer):
             self.model_id = self._model_picker.value
             self._model_picker.param.watch(lambda e: setattr(self, "model_id", e.new), "value")
             # Below the text like the model picker, whose 14px bottom margin it shares.
-            self._mention_chips = MentionChips(margin=(0, 0, 14, 0), styles={"flex-shrink": "0"}, css_classes=["agent-chat-mention"])
+            self._mention_chips = MentionChips(margin=(0, 0, 14, 0), styles={"flex": "0 1 auto", "min-width": "0"}, css_classes=["agent-chat-mention"])
             self._mention_chips.on_msg(self._on_mention_msg)
             self._sync_footer()
             self.param.watch(self._sync_model_picker, ["models", "model_id", "remember_model"])
@@ -353,13 +366,18 @@ class AgentChat(Viewer):
 
     @property
     def _unique_mentions(self) -> list[Mention]:
-        return list(dict.fromkeys(self.mentions))
+        # One chip per name the message would carry, so no two chips look alike but write one name.
+        unique: dict[str, Mention] = {}
+        for mention in self.mentions:
+            unique.setdefault(mention.written, mention)
+        return list(unique.values())
 
     def _on_mention_msg(self, event):
         msg, mentions = event.data, self._unique_mentions
         index = msg.get("index")
         if msg.get("type") == "remove" and isinstance(index, int) and 0 <= index < len(mentions):
-            self.mentions = [m for m in self.mentions if m != mentions[index]]
+            written = mentions[index].written
+            self.mentions = [m for m in self.mentions if m.written != written]
 
     def view_for(self, item: MessageState | ModelCallState | ToolCallState) -> Any:
         """

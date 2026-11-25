@@ -11,6 +11,9 @@ from pydantic_ai.messages import ModelRequest, UserPromptPart
 from pydantic_ai.models.function import FunctionModel
 
 from panel_agents import AgentDrawer, Mention, ModelChoice
+from panel_agents.adapters.pydantic_ai import AgentRunner
+
+pytestmark = pytest.mark.ui
 
 # The element with the focus, looking into shadow roots.
 FOCUSED = """() => {
@@ -18,9 +21,6 @@ FOCUSED = """() => {
   while (a && a.shadowRoot && a.shadowRoot.activeElement) { a = a.shadowRoot.activeElement }
   return a ? (a.getAttribute("aria-label") || a.getAttribute("placeholder") || a.tagName) : null
 }"""
-from panel_agents.adapters.pydantic_ai import AgentRunner
-
-pytestmark = pytest.mark.ui
 
 
 @pytest.fixture(autouse=True)
@@ -170,3 +170,58 @@ def test_enter_on_the_single_model_sends_nothing(page):
     page.wait_for_timeout(500)
     assert agent_drawer.chat.feed.objects == []
     expect(box).to_have_value("half typed")
+
+
+LONG = "Monthly revenue by customer segment"
+
+
+@pytest.mark.parametrize("width", [390, 1280], ids=["narrow", "default-drawer"])
+@pytest.mark.parametrize("labels", [[LONG], ["sales_by_region", "orders_table", "customer_segments"]], ids=["long", "three"])
+def test_mentions_keep_the_model_picker_and_send_button_in_the_input(page, width, labels):
+    page.set_viewport_size({"width": width, "height": 720})
+    agent_drawer = drawer(models=["alpha", "beta"])
+    agent_drawer.chat.mentions = [Mention(label, icon="bar_chart") for label in labels]
+    serve_component(page, agent_drawer)
+
+    removes = [page.get_by_role("button", name=f"Remove {label}") for label in labels]
+    picker = page.locator(".pa-model-button")
+    send = page.get_by_role("button", name="Send message")
+    for control in [*removes, picker, send]:
+        expect(control).to_be_visible()
+    field = page.locator(".MuiOutlinedInput-root").bounding_box()
+
+    def inside(box):
+        return (
+            box["x"] >= field["x"] and box["x"] + box["width"] <= field["x"] + field["width"]
+            and box["y"] >= field["y"] and box["y"] + box["height"] <= field["y"] + field["height"]
+        )
+
+    def laid_out():
+        boxes = [control.bounding_box() for control in [*removes, picker]]
+        edge = send.bounding_box()["x"]
+        return all(inside(box) and box["x"] + box["width"] <= edge for box in boxes) and inside(send.bounding_box())
+
+    wait_until(laid_out, page)
+
+
+def test_a_long_label_is_cut_short_with_its_full_name_on_hover(page):
+    page.set_viewport_size({"width": 390, "height": 720})
+    agent_drawer = drawer(models=["alpha", "beta"])
+    agent_drawer.chat.mentions = [Mention(LONG)]
+    serve_component(page, agent_drawer)
+
+    label = page.locator(".pa-mention-label")
+    expect(label).to_have_attribute("title", LONG)
+    assert label.evaluate("e => e.scrollWidth > e.clientWidth")
+    expect(page.get_by_role("button", name=f"Remove {LONG}")).to_be_visible()
+
+
+def test_mentions_writing_the_same_name_show_as_one_chip(page):
+    agent_drawer = drawer()
+    agent_drawer.chat.mentions = [Mention("orders_table"), Mention("orders_table", icon="table_chart")]
+    serve_component(page, agent_drawer)
+
+    expect(page.locator(".pa-mention")).to_have_count(1)
+    page.get_by_role("button", name="Remove orders_table").click()
+    expect(page.locator(".pa-mention")).to_have_count(0)
+    wait_until(lambda: agent_drawer.chat.mentions == [], page)
