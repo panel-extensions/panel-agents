@@ -7,6 +7,8 @@ Most artifacts are outputs: a query result, a chart, a report. A document artifa
 A tool that edits the document in place publishes what the document now holds with `applied=True`:
 
 ```python
+from pydantic_ai import RunContext
+
 from panel_agents.adapters.pydantic_ai import publish_artifact
 
 @agent.tool

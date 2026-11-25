@@ -9,7 +9,7 @@ Without an argument the bundled test fixture is replayed.
 import sys
 from pathlib import Path
 
-import panel_material_ui as pmui
+import panel as pn
 
 from panel_agents import AgentChat, ArtifactPane, load_state
 
@@ -18,11 +18,11 @@ DEFAULT = Path(__file__).parents[2] / "tests" / "fixtures" / "sql_agent_run.json
 path = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT
 state = load_state(path)
 
-pmui.Page(
+pn.ui.Page(
     title=f"Replay: {path.name}",
-    main=[pmui.Row(
-        pmui.Column(AgentChat(state, readonly=True), sizing_mode="stretch_both", min_width=420),
-        pmui.Column(ArtifactPane(state.artifacts), sizing_mode="stretch_both", min_width=480),
+    main=[pn.ui.Row(
+        pn.ui.Column(AgentChat(state, readonly=True), sizing_mode="stretch_both", min_width=420),
+        pn.ui.Column(ArtifactPane(state.artifacts), sizing_mode="stretch_both", min_width=480),
         sizing_mode="stretch_both",
     )],
 ).servable()

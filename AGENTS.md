@@ -12,7 +12,7 @@ Panel components for building agent user interfaces: tool-call cards, versioned 
 
 ## Conventions
 
-- Use panel-material-ui widgets and layouts (`import panel_material_ui as pmui`) over Panel's built-in equivalents, except where pmui has no equivalent (Tabulator, CodeEditor, JSON pane).
+- Use panel-material-ui widgets and layouts over Panel's built-in equivalents, except where it has no equivalent (Tabulator, CodeEditor, JSON pane). The README, docs and examples reach them through `pn.ui` (`import panel as pn`); `src/panel_agents` imports `panel_material_ui as pmui`.
 - Components subclass `panel.viewable.Viewer` or `panel.custom.PyComponent` and expose their configuration as `param` parameters.
 - Only add short comments explaining why, never what. No comment is the default.
 - Tests live in `tests/`, run with `pixi run test` or `PYTHONPATH=src pytest tests` in a Panel dev environment. UI tests use Playwright and are marked `@pytest.mark.ui`.

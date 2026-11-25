@@ -6,15 +6,18 @@ First release of panel-agents. Since 0.1.0b0 the components have gained model ca
 
 ### Added
 
-- **Model calls and traces:** the chat shows each model call, `RunTrace` and `SpanView` show how a run was made (`RunState.span`), and model traces can be recorded, continued from and played back to an agent with a `Cassette`.
-- **Undo and redo:** `RunState` can undo and redo single steps and whole runs (`redo_run`), and refuses to undo a run over someone else's edits. Artifact versions are shown as a history grouped by run, record who made them and can be persisted; `drop_artifact_versions` drops the values of a document's older versions.
+- **Model calls and traces:** the chat shows each model call, `RunTrace` and `SpanView` show how a run was made (`RunState.span`), and model traces can be recorded (`ModelTraceRecorder`), continued from (`load_messages`), merged into older recordings (`merge_model_calls`) and played back to an agent with a `Cassette`.
+- **Undo and redo:** `RunState` can undo and redo single steps and whole runs (`redo_run`), and refuses to undo a run over someone else's edits. Artifact versions are shown as a history grouped by run and can be persisted with `HistoryRecorder` and `load_history`; `drop_artifact_versions` drops the values of a document's older versions.
+- **Who made a version:** every artifact version records its run, tool call, actor and user. `current_run_id()` and `current_tool_call_id()` give host code the ids of the run and tool call it executes in, and `RunState.user_run` groups a person's edits into a run.
 - **Model picker:** people can pick the agent's model in the chat; a single model shows as a read-only label that keyboard and screen reader users can reach.
-- **Document layout:** `AgentChat` can show a run's artifacts inline, as a document.
+- **Document layout:** `AgentChat(layout="document")` shows a run's artifacts inline as `ArtifactCell`s, with `ArtifactAction` buttons that run front-end actions.
 - **Mentions:** a host can mention items in the chat input (`Mention`). Each shows as a removable chip and is written into the message as `@name`.
 - **Message placement:** `AgentChat` can place the user's messages and set parameters on every message (`user_placement`, `message_params`).
 - **Approval labels:** approval cards and queues take configurable action labels.
 - `SchemaForm` is public.
 - `RunState(max_events=...)` caps the events a state keeps in memory.
+- Recorders also write to a callable, for example one storing each record in a database, and log a failing sink instead of ending the run unless `on_error="raise"`.
+- A documentation site at [panel-extensions.github.io/panel-agents](https://panel-extensions.github.io/panel-agents).
 
 ### Changed
 
@@ -22,6 +25,11 @@ First release of panel-agents. Since 0.1.0b0 the components have gained model ca
 - Inside `AgentDrawer` the chat is drawn flat, and the drawer stays on screen when the window is narrower than it.
 - Long chat feeds are cheaper to build, append to and publish into, and finished steps fold without blinking.
 - Failed runs and provider refusals are shown and logged instead of dropped, and the chat input stays focused and typeable during a run.
+- Tool results that are JSON, YAML, code or tracebacks are shown as highlighted code blocks.
+
+### Deprecated
+
+- The `path` argument of `Recorder`, `load_events` and `load_state`; pass the sink or source as the first argument instead.
 
 ### Requirements
 
@@ -46,5 +54,3 @@ First beta of panel-agents: Panel components for building user interfaces for AI
 ### Requirements
 
 Python 3.11 or newer, Panel 1.9 or newer, panel-material-ui 0.16 or newer, and pydantic-ai-slim 2.60 or newer for the pydantic-ai adapter.
-
-This is a beta: the API may still change before 0.1.0.

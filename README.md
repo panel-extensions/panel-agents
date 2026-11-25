@@ -35,13 +35,17 @@ replayed = load_state("runs/session.jsonl")
 
 The documentation is at [panel-extensions.github.io/panel-agents](https://panel-extensions.github.io/panel-agents), with a getting-started tutorial, the guides below and the API reference.
 
+- [Arrange the chat](docs/how-to/chat.md): message placement and the document layout of `AgentChat`.
 - [Dock an agent beside an existing app](docs/how-to/agent-drawer.md) with `AgentDrawer`.
 - [Require approval for tool calls](docs/how-to/approvals.md) with `ApprovalPolicy`.
 - [Edit documents with versions you can apply and revert](docs/how-to/document-artifacts.md), with semantic diffs.
 - [Let the agent act on the page](docs/how-to/ui-actions.md) with an `ActionRegistry`.
 - [Serve an agent's tools over MCP](docs/how-to/mcp.md) with the `mcp` extra.
+- [Show model calls and run traces](docs/how-to/model-calls.md) with `RunTrace` and `SpanView`.
+- [Trace and replay model calls](docs/how-to/model-traces.md) with a `ModelTraceRecorder` and a `Cassette`.
 - [Security](docs/how-to/security.md): what panel-agents does about prompt injection in rendered output and approvals.
 - [API reference](docs/reference/api.md): everything public, by module.
+- [Release notes](docs/releases.md).
 
 ## Examples
 
@@ -51,4 +55,4 @@ The documentation is at [panel-extensions.github.io/panel-agents](https://panel-
 
 ## Compatibility
 
-panel-agents 1.x follows semantic versioning for the names listed in the API reference. Names starting with an underscore and modules starting with an underscore are private and may change in any release. Recordings written by 1.x can be read by later 1.x releases.
+panel-agents follows semantic versioning for the names listed in the [API reference](docs/reference/api.md). Names and modules starting with an underscore are private and may change in any release, and recordings written by a release can be read by later releases of the same major version.
