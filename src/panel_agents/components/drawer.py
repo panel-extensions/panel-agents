@@ -12,7 +12,7 @@ import param
 from panel.viewable import Viewable, Viewer
 
 from ..state import RunState
-from ._toggle import DrawerResizeNotifier, DrawerToggle
+from ._toggle import DrawerResizeHandle, DrawerResizeNotifier, DrawerToggle
 from .approval import ApprovalQueue
 from .artifacts import ArtifactPane
 from .chat import AgentChat
@@ -50,6 +50,20 @@ class AgentDrawer(Viewer):
     open = param.Boolean(default=False, doc="Whether the drawer is open.")
 
     width = param.Integer(default=420, bounds=(240, None), doc="Width of the open drawer in pixels.")
+
+    resizable = param.Boolean(default=True, doc="""
+        Whether the drawer's left edge can be dragged to resize it, from
+        ``min_resize_width`` to ``max_resize_ratio`` of the window. A
+        resize sets ``width``, which a host may store to open the drawer
+        at that width next time.""")
+
+    min_resize_width = param.Integer(default=240, bounds=(240, None), doc="""
+        The narrowest, in pixels, that dragging the drawer's edge makes it.""")
+
+    max_resize_ratio = param.Number(default=0.6, bounds=(0, 1), doc="""
+        The largest share of the window's width that dragging the drawer's
+        edge makes it, e.g. 0.5 for half the window. It never goes below
+        ``min_resize_width``.""")
 
     title = param.String(default="Assistant", doc="Title shown at the top of the drawer.")
 
@@ -192,9 +206,17 @@ class AgentDrawer(Viewer):
         self._content = pmui.Column(
             header, self._pending_bar, self._body, self._confirm, self._span_dialog, sizing_mode="stretch_both", margin=0, styles={"height": "100%"},
         )
+        # Along the drawer's left edge, beside its content.
+        self._handle = DrawerResizeHandle(
+            size=self.width, min_size=self.min_resize_width, max_ratio=self.max_resize_ratio,
+            label=f"Resize {self.title}", margin=0, sizing_mode="stretch_height",
+        )
+        self._handle.param.watch(self._on_resized, "size")
+        self._frame = pmui.Row(sizing_mode="stretch_both", margin=0, styles={"height": "100%"})
+        self._sync_resizable()
 
         self._drawer = pmui.Drawer(
-            self._content, anchor="right", open=self.open, size=self.width,
+            self._frame, anchor="right", open=self.open, size=self.width,
             variant=self.variant, inline=self.variant == "persistent",
             # The inline drawer sets its own width (0 when closed); the row must neither grow nor shrink it.
             styles={"flex": "0 0 auto"},
@@ -326,9 +348,23 @@ class AgentDrawer(Viewer):
         self._pending_bar.visible = chat and self.show_approvals and pending > 0
         self._pending_text.object = f"{pending} {'action waits' if pending == 1 else 'actions wait'} for you"
 
+    def _on_resized(self, event):
+        if event.new is not None:
+            self.width = max(self.param.width.bounds[0], event.new)
+
+    @param.depends("resizable", watch=True)
+    def _sync_resizable(self):
+        self._frame.objects = [self._handle, self._content] if self.resizable else [self._content]
+
+    @param.depends("min_resize_width", "max_resize_ratio", watch=True)
+    def _sync_resize_bounds(self):
+        self._handle.param.update(min_size=self.min_resize_width, max_ratio=self.max_resize_ratio)
+
     @param.depends("open", "width", watch=True)
     def _sync_open(self):
         self._drawer.param.update(open=self.open, size=self.width)
+        # A width set here replaces the one a drag left on the drawer in the page.
+        self._handle.size = self.width
         self._toggle.expanded = self.open
         self._resize.open = self.open
 
@@ -352,6 +388,7 @@ class AgentDrawer(Viewer):
     @param.depends("title", watch=True)
     def _sync_title(self):
         self._toggle.label = self.title
+        self._handle.label = f"Resize {self.title}"
 
     @property
     def _variant(self) -> str:

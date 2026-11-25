@@ -18,6 +18,8 @@ pmui.Page(title="My app", header=[drawer.toggle], main=[drawer]).servable()
 
 `drawer.toggle` is a header button that opens and closes the drawer. Its badge counts pending approvals, the count is part of its accessible name ("Assistant, 2 pending approvals"), and `aria-expanded` tells screen readers whether the drawer is open. Opening the drawer with the toggle moves focus to the chat input, and closing it returns focus to the toggle. With `open_on_approval=True` (the default) a new approval opens a persistent drawer, so a paused run does not go unnoticed. A temporary drawer would cover the app in the middle of the user's work, so there a new approval only updates the badge. `open`, `width` and `tab` (`"chat"`, `"artifacts"` or `"approvals"`) are parameters, so the app can open the drawer on a given view, for example from a command palette.
 
+The drawer's left edge is a handle that resizes it: drag it, or focus it with Tab and use the arrow keys. It goes from `min_resize_width` (240 px) to `max_resize_ratio` of the window (0.6), and a resize sets `width`, so the app can store it and open the drawer at that width next time. Pass `resizable=False` for a fixed width.
+
 ## What the drawer passes on
 
 - The runner's `state` is shown and its `approval_policy.can_approve` decides who may approve, in the chat and in the approvals view. Pass `can_approve` to override it.

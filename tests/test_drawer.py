@@ -1,5 +1,6 @@
 import panel_material_ui as pmui
 import pytest
+from bokeh.document import Document
 
 from panel_agents import AgentChat, AgentDrawer, ApprovalPolicy, ApprovalRule, RunState
 from panel_agents import events as ev
@@ -207,3 +208,36 @@ def test_the_drawer_frames_a_flat_chat():
     drawer = AgentDrawer(Runner(), chat_params={"feed_params": {"card_params": {"elevation": 2}}, "user": "Ann"})
     assert drawer.chat.feed._card.elevation == 2 and drawer.chat.user == "Ann"
     assert drawer.chat.feed.min_height == 0
+
+
+def test_a_resize_sets_the_width_and_resizable_removes_the_handle():
+    drawer = AgentDrawer(state=RunState(), width=380)
+    assert drawer._handle.size == 380
+    drawer._handle.size = 520
+    assert drawer.width == 520 and drawer._drawer.size == 520
+    drawer._handle.size = 100
+    assert drawer.width == 240
+    drawer.width = 400
+    assert drawer._handle.size == 400
+    drawer.resizable = False
+    assert drawer._frame.objects == [drawer.content]
+    drawer.resizable = True
+    assert drawer._frame.objects == [drawer._handle, drawer.content]
+    fixed = AgentDrawer(state=RunState(), resizable=False)
+    assert fixed._frame.objects == [fixed.content]
+
+
+@pytest.mark.parametrize("resizable", [True, False])
+def test_the_handle_adds_no_minimum_width_to_the_drawer(resizable):
+    drawer = AgentDrawer(state=RunState(), main=pmui.Paper(sizing_mode="stretch_both"), resizable=resizable)
+    assert not drawer._drawer.get_root(Document()).min_width
+
+
+def test_the_handle_follows_the_title_and_resize_bounds():
+    drawer = AgentDrawer(state=RunState(), min_resize_width=320, max_resize_ratio=0.5)
+    assert drawer._handle.label == "Resize Assistant"
+    assert (drawer._handle.min_size, drawer._handle.max_ratio) == (320, 0.5)
+    drawer.title = "Helper"
+    assert drawer._handle.label == "Resize Helper"
+    drawer.param.update(min_resize_width=300, max_resize_ratio=0.4)
+    assert (drawer._handle.min_size, drawer._handle.max_ratio) == (300, 0.4)

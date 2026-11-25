@@ -1,5 +1,11 @@
 # Release Notes
 
+## Unreleased
+
+### Changed
+
+- **AgentDrawer is resizable by default:** a handle along the drawer's left edge resizes it by dragging, or with the arrow keys once it has focus, between `min_resize_width` and `max_resize_ratio` of the window (240 px and 60% by default). A resize sets `width`, so a host can store it. `resizable=True` is the new default, so existing apps get the handle too; pass `resizable=False` to keep a fixed width.
+
 ## 0.1.0b0
 
 First beta of panel-agents: Panel components for building user interfaces for AI agents, connected to agent frameworks through adapters that emit a small set of normalized events modelled on the AG-UI protocol.
