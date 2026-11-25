@@ -48,13 +48,13 @@ In an `AgentDrawer`, pass them through `chat_params`.
 It is the building block for showing where something came from. Given a run id, for example that of the tool call that published an artifact version, a host can show the run in a dialog:
 
 ```python
-import panel_material_ui as pmui
+import panel as pn
 
 from panel_agents import RunTrace
 
 run_id = state.tool_calls[version.tool_call_id].run_id
 trace = RunTrace(state, run_id=run_id)
-dialog = pmui.Dialog(trace, title="How this was made", width=900, open=True)
+dialog = pn.ui.Dialog(trace, title="How this was made", width=900, open=True)
 ```
 
 Setting `trace.run_id` shows another run. The time bars take a quarter of the width and the card headers drop the cost and the token counts as the view gets narrow, so it also fits a drawer. `show_totals=False` hides the totals.
