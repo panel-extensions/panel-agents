@@ -1,25 +1,9 @@
 version: 7
 platforms:
 - name: linux-64
-  virtual-packages:
-  - __unix=0
-  - __linux=4.18
-  - __glibc=2.28
-  - __archspec=0=x86_64
 - name: osx-64
-  virtual-packages:
-  - __unix=0
-  - __osx=13.0
-  - __archspec=0=x86_64
 - name: osx-arm64
-  virtual-packages:
-  - __unix=0
-  - __osx=13.0
-  - __archspec=0=m1
 - name: win-64
-  virtual-packages:
-  - __win=10.0
-  - __archspec=0=x86_64
 environments:
   build:
     channels:
@@ -171,7 +155,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/wheel-0.48.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/xyzservices-2026.9.1-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.2-pyh5ded981_0.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b4-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -307,7 +291,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/yaml-0.2.5-had63097_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-ng-2.3.3-h646e873_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-hbc1a06c_7.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b4-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -443,7 +427,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/yaml-0.2.5-h74c22ad_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-h31dac16_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b4-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -580,7 +564,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/yaml-0.2.5-h6a83c73_3.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zlib-ng-2.3.3-h0261ad2_1.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_7.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b4-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -704,7 +688,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/vcs_versioning-2.6.0-pyh5ded981_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/xyzservices-2026.9.1-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.2-pyh5ded981_0.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b4-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -821,7 +805,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/yaml-0.2.5-had63097_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-ng-2.3.3-h646e873_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-hbc1a06c_7.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b4-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -938,7 +922,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/yaml-0.2.5-h74c22ad_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-h31dac16_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b4-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -1056,7 +1040,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/yaml-0.2.5-h6a83c73_3.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zlib-ng-2.3.3-h0261ad2_1.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_7.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b4-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -1198,7 +1182,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/xyzservices-2026.9.1-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zensical-ui-0.0.42-pyh5ded981_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.2-pyh5ded981_0.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b5-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -1331,7 +1315,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zensical-0.1.1-py311h7a64e7a_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-ng-2.3.3-h646e873_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-hbc1a06c_7.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b5-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -1464,7 +1448,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zensical-0.1.1-py311hf98a78c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-h31dac16_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b5-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -1597,7 +1581,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/zensical-0.1.1-py311hc3dac5c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zlib-ng-2.3.3-h0261ad2_1.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_7.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b5-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -2017,7 +2001,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/wheel-0.48.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/xyzservices-2026.9.1-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.2-pyh5ded981_0.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b4-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -2264,7 +2248,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-1.3.2-hbb4bfdb_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-ng-2.3.3-h646e873_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-hbc1a06c_7.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b4-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -2511,7 +2495,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-1.3.2-h8088a28_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-h31dac16_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b4-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -2748,7 +2732,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/zlib-1.3.2-hfd05255_3.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zlib-ng-2.3.3-h0261ad2_1.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_7.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b4-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -3019,7 +3003,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/vcs_versioning-2.6.0-pyh5ded981_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/xyzservices-2026.9.1-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.2-pyh5ded981_0.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b4-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -3266,7 +3250,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-1.3.2-hbb4bfdb_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-ng-2.3.3-h646e873_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-hbc1a06c_7.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b4-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -3513,7 +3497,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-1.3.2-h8088a28_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-h31dac16_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b4-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -3750,7 +3734,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/zlib-1.3.2-hfd05255_3.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zlib-ng-2.3.3-h0261ad2_1.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_7.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b4-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -4023,7 +4007,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/wheel-0.48.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/xyzservices-2026.9.1-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.2-pyh5ded981_0.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b5-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -4270,7 +4254,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-1.3.2-h8088a28_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-h31dac16_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b5-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -4551,7 +4535,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.2-pyh5ded981_0.conda
       - conda: https://conda.anaconda.org/microsoft/linux-64/playwright-1.47.0-py312_0.tar.bz2
       - conda: https://conda.anaconda.org/microsoft/noarch/pytest-playwright-0.8.0-pyhe2000d9_0.conda
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b4-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -4805,7 +4789,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-hbc1a06c_7.conda
       - conda: https://conda.anaconda.org/microsoft/noarch/pytest-playwright-0.8.0-pyhe2000d9_0.conda
       - conda: https://conda.anaconda.org/microsoft/osx-64/playwright-1.47.0-py312_0.tar.bz2
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b4-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -5059,7 +5043,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
       - conda: https://conda.anaconda.org/microsoft/noarch/pytest-playwright-0.8.0-pyhe2000d9_0.conda
       - conda: https://conda.anaconda.org/microsoft/osx-arm64/playwright-1.47.0-py312_0.tar.bz2
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b4-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -5303,7 +5287,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_7.conda
       - conda: https://conda.anaconda.org/microsoft/noarch/pytest-playwright-0.8.0-pyhe2000d9_0.conda
       - conda: https://conda.anaconda.org/microsoft/win-64/playwright-1.47.0-py312_0.tar.bz2
-      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
+      - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/param-2.5.0b4-py_0.conda
       - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/pyviz_comms-3.0.6-pyhd8ed1ab_0.conda
@@ -18871,9 +18855,9 @@ packages:
   license_family: Apache
   size: 28246145
   timestamp: 1726160461333
-- conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0rc0-py_0.conda
-  sha256: 6e4a4564e5da68e5afa4fbba2ea50bfb9db8af58b7e010f301ecfb6a03176708
-  md5: 147446bcf75f6d6f1f24020e623f63a8
+- conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-1.11.0-py_0.conda
+  sha256: 8f4375e616802f9ced60b8e0480e6092f83329a36a80fa370f2f9b4e85d3569b
+  md5: b8c2d2dbc039416202cbd85fe12d47e8
   depends:
   - bokeh >=3.10.0,<3.11.0
   - linkify-it-py
@@ -18891,8 +18875,8 @@ packages:
   - tqdm
   - typing_extensions
   license: BSD
-  size: 16133035
-  timestamp: 1795021923442
+  size: 16268061
+  timestamp: 1795526089597
 - conda: https://conda.anaconda.org/pyviz/label/dev/noarch/panel-material-ui-0.17.0rc1-py_0.conda
   sha256: ecb02d26ef6beb6296a1c76fcb0addf05b56b410dc9096220013d7ef5fff9feb
   md5: 85255c58d85530a7da5005d99b765d90

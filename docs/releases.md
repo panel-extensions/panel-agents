@@ -1,10 +1,31 @@
 # Release Notes
 
-## Unreleased
+## 0.1.0
+
+First release of panel-agents. Since 0.1.0b0 the components have gained model call traces, undo and redo of runs and artifact versions, a model picker, a document layout, a resizable drawer and mentions in the chat input.
+
+### Added
+
+- **Model calls and traces:** the chat shows each model call, `RunTrace` and `SpanView` show how a run was made (`RunState.span`), and model traces can be recorded, continued from and played back to an agent with a `Cassette`.
+- **Undo and redo:** `RunState` can undo and redo single steps and whole runs (`redo_run`), and refuses to undo a run over someone else's edits. Artifact versions are shown as a history grouped by run, record who made them and can be persisted; `drop_artifact_versions` drops the values of a document's older versions.
+- **Model picker:** people can pick the agent's model in the chat; a single model shows as a read-only label that keyboard and screen reader users can reach.
+- **Document layout:** `AgentChat` can show a run's artifacts inline, as a document.
+- **Mentions:** a host can mention items in the chat input (`Mention`). Each shows as a removable chip and is written into the message as `@name`.
+- **Message placement:** `AgentChat` can place the user's messages and set parameters on every message (`user_placement`, `message_params`).
+- **Approval labels:** approval cards and queues take configurable action labels.
+- `SchemaForm` is public.
+- `RunState(max_events=...)` caps the events a state keeps in memory.
 
 ### Changed
 
-- **AgentDrawer is resizable by default:** a handle along the drawer's left edge resizes it by dragging, or with the arrow keys once it has focus, between `min_resize_width` and `max_resize_ratio` of the window (240 px and 60% by default). A resize sets `width`, so a host can store it. `resizable=True` is the new default, so existing apps get the handle too; pass `resizable=False` to keep a fixed width.
+- **AgentDrawer is resizable by default:** a handle along the drawer's left edge resizes it by dragging, or with the arrow keys once it has focus, between `min_resize_width` and `max_resize_ratio` of the window (240 px and 60% by default). A resize sets `width`, so a host can store it. Pass `resizable=False` to keep a fixed width.
+- Inside `AgentDrawer` the chat is drawn flat, and the drawer stays on screen when the window is narrower than it.
+- Long chat feeds are cheaper to build, append to and publish into, and finished steps fold without blinking.
+- Failed runs and provider refusals are shown and logged instead of dropped, and the chat input stays focused and typeable during a run.
+
+### Requirements
+
+Python 3.12 or newer, Panel 1.11 or newer, panel-material-ui 0.17 or newer, pydantic 2.12 or newer, and pydantic-ai-slim 2.60 or newer for the pydantic-ai adapter.
 
 ## 0.1.0b0
 
