@@ -19,7 +19,6 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 import panel as pn
-import panel_material_ui as pmui
 from pydantic_ai import Agent, RunContext
 
 from panel_agents import ActionRegistry, AgentDrawer, ApprovalPolicy
@@ -79,16 +78,16 @@ class SalesReport(pn.viewable.Viewer):
         super().__init__()
         self.data = sales_data()
         self.report = Report()
-        self._title = pmui.Typography(variant="h5", margin=(10, 10, 0, 10))
-        self._regions = pmui.MultiChoice(label="Regions", options=REGIONS, value=list(REGIONS), width=320)
-        self._group = pmui.RadioButtonGroup(options=["region", "product"], value="region", label="Group by")
+        self._title = pn.ui.Typography(variant="h5", margin=(10, 10, 0, 10))
+        self._regions = pn.ui.MultiChoice(label="Regions", options=REGIONS, value=list(REGIONS), width=320)
+        self._group = pn.ui.RadioButtonGroup(options=["region", "product"], value="region", label="Group by")
         self._table = pn.widgets.Tabulator(pd.DataFrame(), sizing_mode="stretch_width", height=420, disabled=True, show_index=False)
         self.on_user_edit = None
         self._rendering = False
         self._regions.param.watch(lambda e: self._user_edit(regions=e.new), "value")
         self._group.param.watch(lambda e: self._user_edit(group_by=e.new), "value")
-        self._layout = pmui.Column(
-            self._title, pmui.Row(self._regions, self._group, margin=(0, 5)), self._table,
+        self._layout = pn.ui.Column(
+            self._title, pn.ui.Row(self._regions, self._group, margin=(0, 5)), self._table,
             sizing_mode="stretch_both",
         )
         self.render()
@@ -197,7 +196,7 @@ def create_app(model=None):
         app.update(**version.value)
 
     drawer = AgentDrawer(runner, main=app, on_apply=apply_report, open=True)
-    return pmui.Page(title="Sales report", header=[pn.HSpacer(), drawer.toggle], main=[drawer])
+    return pn.ui.Page(title="Sales report", header=[pn.HSpacer(), drawer.toggle], main=[drawer])
 
 
 if pn.state.served:

@@ -22,7 +22,6 @@ import duckdb
 import numpy as np
 import pandas as pd
 import panel as pn
-import panel_material_ui as pmui
 from pydantic_ai import Agent, RunContext
 
 from panel_agents import (
@@ -257,21 +256,21 @@ def create_app():
     pn.state.on_session_destroyed(cleanup)
 
     chat = AgentChat(runner=runner, assistant="Analyst", placeholder="Ask about customers, orders or products…")
-    usage = pmui.Typography(usage_text(state), variant="body2", sx={"opacity": 0.8})
+    usage = pn.ui.Typography(usage_text(state), variant="body2", sx={"opacity": 0.8})
     state.param.watch(lambda *_: setattr(usage, "object", usage_text(state)), ["runs", "items"])
 
-    page = pmui.Page(
+    page = pn.ui.Page(
         title="SQL Analyst",
         header=[pn.HSpacer(), usage],
-        main=[pmui.Row(
-            pmui.Column(chat, sizing_mode="stretch_both", min_width=420),
-            pmui.Column(artifacts, sizing_mode="stretch_both", min_width=480),
+        main=[pn.ui.Row(
+            pn.ui.Column(chat, sizing_mode="stretch_both", min_width=420),
+            pn.ui.Column(artifacts, sizing_mode="stretch_both", min_width=480),
             sizing_mode="stretch_both",
         )],
         sidebar=[
-            pmui.Typography("Examples", variant="subtitle2"),
+            pn.ui.Typography("Examples", variant="subtitle2"),
             *[
-                pmui.Button(label=q, variant="text", sizing_mode="stretch_width",
+                pn.ui.Button(label=q, variant="text", sizing_mode="stretch_width",
                             on_click=partial(_ask, chat, q))
                 for q in [
                     "What were monthly revenues by region in 2025?",

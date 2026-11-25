@@ -26,7 +26,7 @@ The drawer's left edge is a handle that resizes it: drag it, or focus it with Ta
 - `on_apply` is the callback for document artifacts. The artifacts view offers to apply or revert their versions, see [document artifacts](document-artifacts.md).
 - `overlay_below=1200` makes a persistent drawer overlay the app, like the temporary variant, while the window is narrower than 1200 px, so a small screen keeps its full width for the app. In that mode a new approval only updates the toggle's badge.
 - Finished tool calls of a run fold into one "3 steps · 2.1s" row that expands; calls that failed, were denied, wait for approval or published an artifact always show. Turn it off with `chat_params={"group_tool_calls": False}`. `chat_params={"tool_labels": {...}}` names calls in the user's words, by tool name, with a string or a callable of the call's arguments, e.g. `{"get_report": "Read the report", "update_report": lambda args: "Change " + ", ".join(args)}`; imperative labels read right whether the call is running, done, failed or waiting for approval. The tool name stays in the card's body and its accessible name.
-- `chat_params` are passed to the `AgentChat`, for example `{"placeholder": "Ask about this dashboard"}`. The drawer frames the chat itself, so it draws the chat feed flat instead of as a raised card; `chat_params={"feed_params": {"card_params": {...}}}` changes that, and the other `feed_params` you pass are merged with the drawer's.
+- `chat_params` are passed to the `AgentChat`, for example `{"placeholder": "Ask about this dashboard"}`; [Arrange the chat](chat.md) covers its layout and message parameters. The drawer frames the chat itself, so it draws the chat feed flat instead of as a raised card; `chat_params={"feed_params": {"card_params": {...}}}` changes that, and the other `feed_params` you pass are merged with the drawer's.
 - The New conversation button starts a new conversation. It clears the runner's history and the session's runs, artifacts and approvals, and is disabled while a run is in progress. When there are document artifacts, it asks first, because their versions could no longer be compared or reverted.
 
 ## Let people pick the model
@@ -39,13 +39,13 @@ from panel_agents import ModelChoice
 drawer = AgentDrawer(runner, chat_params={
     "models": [
         ModelChoice("openai:gpt-5-mini", label="GPT-5 mini", description="Fast and cheap"),
-        ModelChoice("anthropic:claude-sonnet-4-5", label="Claude Sonnet"),
+        ModelChoice("anthropic:claude-sonnet-5-5", label="Claude Sonnet"),
     ],
     "remember_model": "my-app-model",
 })
 ```
 
-A model is a pydantic-ai model string, a dict of `ModelChoice` fields or a `ModelChoice`; `ModelChoice(id, model=...)` runs a ready-made model object, e.g. one with a custom provider, under that id. Each id is offered once, models that share a label show their id too, and the button is named "Model" for screen readers. With a single model there is nothing to pick, so its name is shown as plain text in the same place, with its id as a tooltip, and with no models nothing is shown. The picked model becomes the runner's `model`, which `AgentRunner` reads when a request starts, so switching applies from the next request and never to one in progress: a run paused for an approval keeps its model, and `run(deferred_tool_results=...)` starts a new run with the model picked by then. A `model` passed in `run_kwargs` or to `run`, such as a `Cassette`, still wins. Each model's `description` is listed under its name, and a model the runner cannot use, typically because its provider's package or API key is missing, is listed disabled with the reason (`AgentRunner.unavailable_reason`) instead, without showing any key. `model_id` sets the initial pick (the first usable model by default), and with `remember_model` the browser keeps the last pick in localStorage under that key and starts the next session with it while it is still offered and usable. Every model request records its model, so the usage line, the model-call cards and the run's details show which model answered.
+A model is a pydantic-ai model string, a dict of `ModelChoice` fields or a `ModelChoice`; `ModelChoice(id, model=...)` runs a ready-made model object, e.g. one with a custom provider, under that id. Each id is offered once, models that share a label show their id too, and the button is named "Model" for screen readers. With a single model there is nothing to pick, so its name is shown as plain text in the same place, with its id as a tooltip, and it takes the keyboard focus so keyboard and screen reader users reach the id too; with no models nothing is shown. The picked model becomes the runner's `model`, which `AgentRunner` reads when a request starts, so switching applies from the next request and never to one in progress: a run paused for an approval keeps its model, and `run(deferred_tool_results=...)` starts a new run with the model picked by then. A `model` passed in `run_kwargs` or to `run`, such as a `Cassette`, still wins. Each model's `description` is listed under its name, and a model the runner cannot use, typically because its provider's package or API key is missing, is listed disabled with the reason (`AgentRunner.unavailable_reason`) instead, without showing any key. `model_id` sets the initial pick (the first usable model by default), and with `remember_model` the browser keeps the last pick in localStorage under that key and starts the next session with it while it is still offered and usable. Every model request records its model, so the usage line, the model-call cards and the run's details show which model answered.
 
 ## Hand an item over to the agent
 
@@ -67,6 +67,10 @@ Each mention is a chip in the input, below the text, with its label cut short wh
 `pn.ui.Page` has its own right-hand contextbar. To use it, place the drawer's body there instead of the drawer itself:
 
 ```python
+import panel as pn
+
+from panel_agents import AgentDrawer
+
 drawer = AgentDrawer(runner)
 pn.ui.Page(main=[app], contextbar=[drawer.content], contextbar_width=420, contextbar_open=True)
 ```

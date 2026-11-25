@@ -9,7 +9,6 @@ import json
 from typing import Literal
 
 import panel as pn
-import panel_material_ui as pmui
 from pydantic import BaseModel, Field
 
 from panel_agents import ApprovalQueue, AuditLog, RunState
@@ -66,7 +65,7 @@ state = RunState()
 records = []
 audit = AuditLog(state, records.append)
 
-event_log = pmui.Column(sizing_mode="stretch_width", height=420, scroll=True, view_latest=True, auto_scroll_limit=2000, margin=0)
+event_log = pn.ui.Column(sizing_mode="stretch_width", height=420, scroll=True, view_latest=True, auto_scroll_limit=2000, margin=0)
 audit_view = pn.pane.JSON([], depth=3, sizing_mode="stretch_width")
 
 
@@ -77,10 +76,10 @@ def _event_row(event: ev.Event):
     if len(detail) > 140:
         detail = detail[:139] + "…"
     color = {"APPROVAL_REQUESTED": "warning", "APPROVAL_RESOLVED": "success"}.get(event.type, "default")
-    return pmui.Row(
-        pmui.Typography(when, variant="caption", color="text.secondary", margin=(2, 6), width=60),
-        pmui.Chip(label=event.type, size="small", color=color, variant="outlined", margin=(0, 6)),
-        pmui.Typography(f"`{detail}`", variant="caption", margin=(2, 4), sizing_mode="stretch_width"),
+    return pn.ui.Row(
+        pn.ui.Typography(when, variant="caption", color="text.secondary", margin=(2, 6), width=60),
+        pn.ui.Chip(label=event.type, size="small", color=color, variant="outlined", margin=(0, 6)),
+        pn.ui.Typography(f"`{detail}`", variant="caption", margin=(2, 4), sizing_mode="stretch_width"),
         sizing_mode="stretch_width", margin=(2, 0),
     )
 
@@ -102,8 +101,8 @@ def reset(event=None):
     state.apply_many(synthetic_events())
 
 
-reset_button = pmui.Button(label="Reset demo", icon="restart_alt", variant="outlined", on_click=reset)
-reason_mode = pmui.RadioButtonGroup(
+reset_button = pn.ui.Button(label="Reset demo", icon="restart_alt", variant="outlined", on_click=reset)
+reason_mode = pn.ui.RadioButtonGroup(
     label="Reason required", options=["never", "deny", "edit", "always"], value="deny", size="small",
 )
 
@@ -112,10 +111,10 @@ reason_mode.param.watch(lambda e: setattr(queue, "require_reason", e.new), "valu
 
 reset()
 
-pmui.Page(
+pn.ui.Page(
     title="panel-agents · approvals",
     sidebar=[
-        pmui.Typography(
+        pn.ui.Typography(
             "An agent proposed two tool calls. Review them, edit the arguments if needed, "
             "then approve or deny. Every decision is emitted as an `APPROVAL_RESOLVED` event "
             "and written to the audit log.",
@@ -125,14 +124,14 @@ pmui.Page(
         reset_button,
     ],
     main=[
-        pmui.Row(
-            pmui.Column(queue, sizing_mode="stretch_width", min_width=420),
-            pmui.Column(
-                pmui.Typography("Events", variant="h6"),
-                pmui.Paper(event_log, variant="outlined", sizing_mode="stretch_width", sx={"padding": "6px"}),
-                pmui.Typography("Audit log", variant="h6", margin=(16, 5, 5, 5)),
-                pmui.Paper(
-                    pmui.Column(audit_view, height=300, scroll=True, sizing_mode="stretch_width", margin=0),
+        pn.ui.Row(
+            pn.ui.Column(queue, sizing_mode="stretch_width", min_width=420),
+            pn.ui.Column(
+                pn.ui.Typography("Events", variant="h6"),
+                pn.ui.Paper(event_log, variant="outlined", sizing_mode="stretch_width", sx={"padding": "6px"}),
+                pn.ui.Typography("Audit log", variant="h6", margin=(16, 5, 5, 5)),
+                pn.ui.Paper(
+                    pn.ui.Column(audit_view, height=300, scroll=True, sizing_mode="stretch_width", margin=0),
                     variant="outlined", sizing_mode="stretch_width", sx={"padding": "6px"},
                 ),
                 sizing_mode="stretch_width", min_width=380,

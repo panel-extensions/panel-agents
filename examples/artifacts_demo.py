@@ -9,7 +9,6 @@ import time
 
 import pandas as pd
 import panel as pn
-import panel_material_ui as pmui
 
 from panel_agents import ArtifactPane, RunState
 from panel_agents import events as ev
@@ -98,11 +97,11 @@ def apply_chart(artifact, version):
 
 pane = ArtifactPane(state=state, on_apply=apply_chart)
 
-pmui.Page(
+pn.ui.Page(
     title="Artifacts",
-    main=[pmui.Row(
-        pmui.Column(pane, sizing_mode="stretch_both"),
-        pmui.Paper(pmui.Typography("Live chart spec", variant="h6"), live, width=320, margin=10, sx={"padding": "12px"}),
+    main=[pn.ui.Row(
+        pn.ui.Column(pane, sizing_mode="stretch_both"),
+        pn.ui.Paper(pn.ui.Typography("Live chart spec", variant="h6"), live, width=320, margin=10, sx={"padding": "12px"}),
         sizing_mode="stretch_both",
     )],
 ).servable()

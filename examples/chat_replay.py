@@ -12,7 +12,7 @@ import asyncio
 import json
 
 import pandas as pd
-import panel_material_ui as pmui
+import panel as pn
 
 from panel_agents import AgentChat, RunState
 from panel_agents import events as ev
@@ -116,7 +116,7 @@ EVENTS = analyst_events()
 state = RunState.from_events(EVENTS)
 chat = AgentChat(state, readonly=True)
 
-active = pmui.Typography("No artifact selected", variant="body2", margin=(0, 10))
+active = pn.ui.Typography("No artifact selected", variant="body2", margin=(0, 10))
 
 
 def show_active(*_):
@@ -150,10 +150,10 @@ async def replay(_):
         replay_button.disabled = False
 
 
-replay_button = pmui.Button(label="Replay", icon="replay", variant="outlined", on_click=replay)
+replay_button = pn.ui.Button(label="Replay", icon="replay", variant="outlined", on_click=replay)
 
-pmui.Page(
+pn.ui.Page(
     title="SQL Analyst replay",
-    header=[pmui.Row(active, replay_button, align="center")],
-    main=[pmui.Container(chat, width_option="md", sizing_mode="stretch_both")],
+    header=[pn.ui.Row(active, replay_button, align="center")],
+    main=[pn.ui.Container(chat, width_option="md", sizing_mode="stretch_both")],
 ).servable()

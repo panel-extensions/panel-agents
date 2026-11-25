@@ -34,7 +34,7 @@ From there, [Getting started](getting-started.md) adds a tool and docks the agen
 ## Where to go next
 
 - [Getting started](getting-started.md) walks through a chat and a drawer in a few minutes.
-- The how-to guides cover [the agent drawer](how-to/agent-drawer.md), [approvals](how-to/approvals.md), [document artifacts](how-to/document-artifacts.md), [front-end actions](how-to/ui-actions.md), [MCP](how-to/mcp.md) and [security](how-to/security.md).
+- The how-to guides cover [arranging the chat](how-to/chat.md), [the agent drawer](how-to/agent-drawer.md), [approvals](how-to/approvals.md), [document artifacts](how-to/document-artifacts.md), [front-end actions](how-to/ui-actions.md), [MCP](how-to/mcp.md), [model calls and run traces](how-to/model-calls.md), [model traces and replay](how-to/model-traces.md) and [security](how-to/security.md).
 - [Examples](examples.md) describes the runnable apps in the repository.
 - The [API overview](reference/api.md) lists everything public, and [API by module](reference/modules.md) has the docstrings.
 
