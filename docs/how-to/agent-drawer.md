@@ -20,6 +20,9 @@ pn.ui.Page(title="My app", header=[drawer.toggle], main=[drawer]).servable()
 
 The drawer's left edge is a handle that resizes it: drag it, or focus it with Tab and use the arrow keys. It goes from `min_resize_width` (240 px) to `max_resize_ratio` of the window (0.6), and a resize sets `width`, so the app can store it and open the drawer at that width next time. Pass `resizable=False` for a fixed width.
 
+![The drawer in light and dark theme, docked beside `examples/drawer_app.py`'s sales report.](../assets/images/drawer-light.png)
+![](../assets/images/drawer-dark.png)
+
 ## What the drawer passes on
 
 - The runner's `state` is shown and its `approval_policy.can_approve` decides who may approve, in the chat and in the approvals view. Pass `can_approve` to override it.
@@ -45,6 +48,9 @@ drawer = AgentDrawer(runner, chat_params={
 })
 ```
 
+![With two models offered, the menu button opens a list naming each one and, where given, its description.](../assets/images/model-picker-menu.png)
+![With a single model there is nothing to pick, so its name is shown as plain text instead.](../assets/images/model-picker-single.png)
+
 A model is a pydantic-ai model string, a dict of `ModelChoice` fields or a `ModelChoice`; `ModelChoice(id, model=...)` runs a ready-made model object, e.g. one with a custom provider, under that id. Each id is offered once, models that share a label show their id too, and the button is named "Model" for screen readers. With a single model there is nothing to pick, so its name is shown as plain text in the same place, with its id as a tooltip, and it takes the keyboard focus so keyboard and screen reader users reach the id too; with no models nothing is shown. The picked model becomes the runner's `model`, which `AgentRunner` reads when a request starts, so switching applies from the next request and never to one in progress: a run paused for an approval keeps its model, and `run(deferred_tool_results=...)` starts a new run with the model picked by then. A `model` passed in `run_kwargs` or to `run`, such as a `Cassette`, still wins. Each model's `description` is listed under its name, and a model the runner cannot use, typically because its provider's package or API key is missing, is listed disabled with the reason (`AgentRunner.unavailable_reason`) instead, without showing any key. `model_id` sets the initial pick (the first usable model by default), and with `remember_model` the browser keeps the last pick in localStorage under that key and starts the next session with it while it is still offered and usable. Every model request records its model, so the usage line, the model-call cards and the run's details show which model answered.
 
 ## Hand an item over to the agent
@@ -57,6 +63,8 @@ from panel_agents import Mention
 drawer.chat.mentions = [Mention("sales_by_region", icon="bar_chart")]
 drawer.open = True
 ```
+
+![Each mention is a chip below the input text; a long label is cut short, with the full name on hover.](../assets/images/mentions-chip.png)
 
 Each mention is a chip in the input, below the text, with its label cut short when long and a button that removes it and puts the focus back in the input; Backspace in an empty input removes the last one. Sending a message writes the mentions at its start and clears them, so the agent reads what the message is about and the conversation shows it: "@sales_by_region make it a bar chart". Mentions that would write the same name show as one chip and are written once, as `@` and the label, quoted unless it is made of letters, digits and `_ . - / :` only (`@"Sales by region"`); `Mention(..., text="...")` writes something else, e.g. an id. A label must not be empty. Tell the agent in its instructions what an `@` name refers to in your app.
 

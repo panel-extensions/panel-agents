@@ -42,6 +42,8 @@ pn.ui.Page(title="Dice", main=[chat]).servable()
 
 Serve it with `panel serve chat.py --show` and ask the agent to roll two dice. Each call appears as a card labelled "Roll a die", with its arguments and result, and once the run finishes the calls fold into one "2 steps" row you can expand. The runner keeps the conversation, so follow-up questions see the earlier turns.
 
+![After the run finishes, the two "Roll a die" calls fold into one "2 steps" row, and the model's own cost and token usage sit under the answer.](assets/images/getting-started-chat.png)
+
 Because `chat.py` creates the runner at module level, `panel serve` gives each browser session its own runner and conversation.
 
 ## Dock the agent beside an app
@@ -96,6 +98,8 @@ pn.ui.Page(title="Revenue", header=[drawer.toggle], main=[drawer]).servable()
 ```
 
 Ask the assistant to show only the regions above 100k. It reads the table, then pauses on `filter_regions`: the card in the chat shows the arguments, which you can edit before approving or denying. While the drawer is closed, the badge on `drawer.toggle` in the header counts the pending approvals. When you approve, the run continues as the same run and the table updates.
+
+![The pending `filter_regions` call shows its `regions` argument in the chat and waits for approval before the table changes.](assets/images/getting-started-approval.png)
 
 ## Next steps
 

@@ -2,6 +2,8 @@
 
 A tool call that needs approval pauses the run until a person approves, edits or denies it in an `ApprovalCard`. The run then continues as the same run, and the decision is recorded as an `APPROVAL_RESOLVED` event, so it appears in recordings and in an `AuditLog`.
 
+![Editing shows a form generated from the tool's schema; the "Changes" list tracks what differs from the proposed call before it is approved with edits.](../assets/images/approval-card-edit.png)
+
 There are two ways to ask for approval. A tool can ask for itself, with pydantic-ai's `requires_approval=True` or by raising `ApprovalRequired`. Or the app declares an `ApprovalPolicy`, which keeps the decision of what needs review out of the tools and also covers tools you did not write, such as front-end actions or MCP toolsets.
 
 ## Declare a policy

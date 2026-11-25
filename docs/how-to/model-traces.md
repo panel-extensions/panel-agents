@@ -2,6 +2,8 @@
 
 A session has two recordings. The `Recorder` writes what the user saw: messages, tool calls, artifacts and approvals as events, which `load_state` replays into the same components. The model trace writes what the model saw: pydantic-ai's own message history, one `ModelMessage` per line, with the model, tokens, cost, duration and tool calls of every request. It is what you continue a conversation from, and the place to look when you want to know why a turn was slow or expensive.
 
+![A replayed conversation recording: thinking, a failing query, the model's own correction, and the streamed answer.](../assets/images/chat-replay.png)
+
 ## Record a model trace
 
 Attach a `ModelTraceRecorder` to an `AgentRunner`:
