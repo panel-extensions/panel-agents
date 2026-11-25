@@ -135,3 +135,30 @@ def test_disabled_edit_toggle_has_no_border(page):
     toggle = page.get_by_role("button", name="Edit")
     expect(toggle).to_be_disabled()
     assert toggle.evaluate("e => getComputedStyle(e).borderTopWidth") == "0px"
+
+
+def test_embedded_approval_keeps_edit_right_aligned_beside_description(page):
+    from panel_agents.components.tool_call import ToolCallCard
+
+    state = RunState(flush_interval=0)
+    state.apply_many([
+        ev.RunStarted(run_id="r"),
+        ev.ToolCallStart(tool_call_id="t1", tool_name="filter_regions", run_id="r"),
+        ev.ApprovalRequested(
+            tool_call_id="t1", tool_name="filter_regions", run_id="r",
+            args={"regions": ["North", "East"]},
+            description="Show only the given regions.",
+        ),
+    ])
+    from panel_agents.components.approval import approval_factory
+
+    card = ToolCallCard(state.tool_calls["t1"], state=state, approval_factory=approval_factory)
+    serve_component(page, pmui.Page(main=[pmui.Column(card, width=420)]))
+    edit = page.get_by_role("button", name="Edit")
+    approve = page.get_by_role("button", name="Approve", exact=True)
+    desc = page.get_by_text("Show only the given regions.")
+    expect(edit).to_be_visible()
+    expect(desc).to_be_visible()
+    edit_box, approve_box, desc_box = edit.bounding_box(), approve.bounding_box(), desc.bounding_box()
+    assert edit_box["x"] > desc_box["x"]
+    assert abs((edit_box["x"] + edit_box["width"]) - (approve_box["x"] + approve_box["width"])) <= 2

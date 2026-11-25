@@ -173,8 +173,8 @@ class AgentDrawer(Viewer):
             sizing_mode="stretch_width", margin=(8, 12, 0, 12), align="center", visible=False,
             styles={
                 "align-items": "center", "border-radius": "8px", "padding": "2px 4px 2px 6px",
-                "border": "1px solid var(--mui-palette-warning-main)",
-                "background": "rgba(var(--mui-palette-warning-mainChannel) / 0.12)",
+                "border": "1px solid rgba(var(--mui-palette-warning-mainChannel, 237 108 2) / 0.42)",
+                "background": "rgba(var(--mui-palette-warning-mainChannel, 237 108 2) / 0.10)",
             },
         )
 

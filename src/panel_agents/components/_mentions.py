@@ -91,7 +91,8 @@ _CSS = """
 .pa-mentions { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-width: 0; }
 .pa-mention {
   display: inline-flex; align-items: center; gap: 4px; height: 24px; box-sizing: border-box; max-width: 100%; min-width: 0;
-  padding: 0 2px 0 8px; border: 1px solid var(--mui-palette-Chip-defaultBorder, #bdbdbd); border-radius: 12px;
+  padding: 0 3px 0 8px; border: 1px solid var(--mui-palette-Chip-defaultBorder, #bdbdbd); border-radius: 12px;
+  background: var(--mui-palette-action-hover, rgba(0, 0, 0, 0.04));
   font: var(--mui-font-body2, 400 0.875rem/1.43 Roboto, sans-serif); font-size: 0.8125rem; white-space: nowrap;
   color: var(--mui-palette-text-primary, rgba(0, 0, 0, 0.87));
 }

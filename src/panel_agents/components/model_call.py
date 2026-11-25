@@ -21,6 +21,12 @@ _STEP_STATUS = {"running": "running", "success": "success", "failed": "failed"}
 
 _MODEL_HEADER_CSS = _HEADER_CSS + """
 :host { container-type: inline-size; }
+.mc-kind {
+  flex: none; padding: 0 0.45em; border-radius: 999px; font-size: 0.68rem; font-weight: 500; line-height: 1.55;
+  color: var(--mui-palette-text-secondary, rgba(127, 127, 127, 0.9));
+  border: 1px solid var(--mui-palette-divider, rgba(127, 127, 127, 0.25));
+  background: var(--mui-palette-action-hover, rgba(127, 127, 127, 0.04));
+}
 .mc-model { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mc-meta {
   display: flex; align-items: center; gap: 0.6em; flex: none;
@@ -35,6 +41,7 @@ _MODEL_HEADER_CSS = _HEADER_CSS + """
 }
 @container (max-width: 460px) { .mc-tools { display: none; } }
 @container (max-width: 420px) { .mc-cost { display: none; } }
+@container (max-width: 400px) { .mc-kind { display: none; } }
 @container (max-width: 380px) { .mc-tokens { display: none; } }
 """
 
@@ -183,8 +190,8 @@ class ModelCallCard(Viewer):
             meta.append(f'<span>{_format_duration(call.duration)}</span>')
         tooltip = escape(self._tooltip(), quote=True)
         self._header.object = (
-            f'<div class="tc-head" title="{tooltip}"><span class="mc-model">{model}</span>'
-            f'<span class="mc-meta">{"".join(meta)}</span></div>'
+            f'<div class="tc-head" title="{tooltip}"><span class="mc-kind">Model</span>'
+            f'<span class="mc-model">{model}</span><span class="mc-meta">{"".join(meta)}</span></div>'
         )
         self._details.object = self._details_html()
         error = "The request failed." if self.redacted and call.error else call.error or ""

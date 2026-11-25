@@ -114,3 +114,20 @@ def test_output_markdown_uses_inert_rendering():
 
     pane = _output_markdown("x")
     assert pane.disable_math and inert_markdown in pane.plugins
+
+
+def test_code_and_table_renderers_size_to_content():
+    from panel_agents.components.renderers import render
+
+    short_sql = render("SELECT a\nFROM t\nGROUP BY a\nORDER BY a", kind="sql")
+    assert isinstance(short_sql, pn.widgets.CodeEditor)
+    assert short_sql.height < 160
+
+    explicit = render("SELECT 1", kind="sql", height=250)
+    assert explicit.height == 250
+
+    narrow = render(pd.DataFrame({"a": [1], "b": [2]}), kind="table")
+    assert isinstance(narrow, pn.widgets.Tabulator) and narrow.layout == "fit_columns"
+
+    wide = render(pd.DataFrame({f"c{i}": [i] for i in range(8)}), kind="table")
+    assert isinstance(wide, pn.widgets.Tabulator) and wide.layout != "fit_columns"

@@ -40,11 +40,24 @@ export function render({ model, el }) {
     const waiting = count ? `, ${count} pending approval${count === 1 ? "" : "s"}` : ""
     button.setAttribute("aria-label", `${model.label}${waiting}`)
   }
+  const syncSurface = () => {
+    let node = el
+    let onAppBar = false
+    while (node) {
+      if (node.classList && node.classList.contains("MuiAppBar-root")) { onAppBar = true; break }
+      const root = node.getRootNode && node.getRootNode()
+      node = node.parentElement || (root && root !== node ? root.host : null)
+    }
+    button.classList.toggle("pa-on-appbar", onAppBar)
+  }
+
   update()
   model.on(["label", "count", "expanded"], update)
   button.addEventListener("click", () => { model.expanded = !model.expanded })
   model.on("msg:custom", (msg) => { if (msg.type === "focus") { button.focus() } })
   el.append(button)
+  syncSurface()
+  requestAnimationFrame(syncSurface)
 }
 """
 
@@ -60,6 +73,9 @@ _CSS = """
 .pa-toggle svg { width: 18px; height: 18px; }
 .pa-toggle:hover { background: var(--mui-palette-action-hover, rgba(0, 0, 0, 0.04)); }
 .pa-toggle[aria-expanded="true"] { background: var(--mui-palette-action-selected, rgba(0, 0, 0, 0.08)); }
+.pa-toggle.pa-on-appbar { color: #fff; }
+.pa-toggle.pa-on-appbar:hover { background: rgba(255, 255, 255, 0.14); }
+.pa-toggle.pa-on-appbar[aria-expanded="true"] { background: rgba(255, 255, 255, 0.22); }
 .pa-toggle:focus-visible {
   background: var(--mui-palette-action-focus, rgba(0, 0, 0, 0.12));
   outline: 2px solid currentColor; outline-offset: -2px;

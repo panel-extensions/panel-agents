@@ -491,3 +491,17 @@ def test_a_single_rows_tooltip_has_its_summary_detail_and_why_it_cannot_be_undon
     view, _ = make_view(state, user="bob")
     row = next(i for i in view._timeline._list.items if i["label"] == "Build it")
     assert row["tooltip"] == f"{BLOCKED_NOTE}. Added 2 components: Added a. Added b."
+
+
+def test_non_document_timeline_rows_use_dots_instead_of_radios():
+    state = RunState(flush_interval=0)
+    state.apply(ev.RunStarted(run_id="r1"))
+    state.apply(ev.ArtifactPublished(artifact_id="sql", value="SELECT 1", kind="sql", run_id="r1"))
+    state.apply(ev.ArtifactPublished(artifact_id="sql", value="SELECT 2", kind="sql", run_id="r1"))
+    state.apply(ev.RunFinished(run_id="r1"))
+    view = ArtifactView(state.artifacts["sql"], state=state, history=True)
+    assert [r["icon"] for r in rows(view)] == ["fiber_manual_record", "fiber_manual_record"]
+
+    doc_state = make_state()
+    doc_view, _ = make_view(doc_state)
+    assert [r["icon"] for r in rows(doc_view)][:2] == ["radio_button_checked", "radio_button_unchecked"]

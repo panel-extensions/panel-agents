@@ -67,7 +67,12 @@ _CELL_STYLES = {
 
 _CHANGES_CSS = """
 :host { width: 100%; }
-.pa-changes { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; }
+.pa-changes {
+  display: flex; flex-direction: column; gap: 5px; font-size: 0.85rem;
+  padding: 10px 12px; border: 1px solid var(--mui-palette-divider, rgba(127, 127, 127, 0.25));
+  border-radius: var(--mui-shape-borderRadius, 6px);
+  background: var(--mui-palette-action-hover, rgba(127, 127, 127, 0.03));
+}
 .pa-change { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding: 2px 0; }
 .pa-op {
   flex: none; width: 1.2em; text-align: center; font-weight: 700;
@@ -83,10 +88,16 @@ _CHANGES_CSS = """
 }
 .pa-old, .pa-new {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem;
-  padding: 0 4px; border-radius: 4px;
+  padding: 1px 5px; border-radius: 4px;
 }
-.pa-old { text-decoration: line-through; color: var(--mui-palette-error-main, #c62828); background: rgba(198, 40, 40, 0.08); }
-.pa-new { color: var(--mui-palette-success-dark, #1b5e20); background: rgba(46, 125, 50, 0.1); }
+.pa-old {
+  text-decoration: line-through; color: var(--mui-palette-error-main, #c62828);
+  background: rgba(var(--mui-palette-error-mainChannel, 211 47 47) / 0.12);
+}
+.pa-new {
+  color: var(--mui-palette-success-main, #2e7d32);
+  background: rgba(var(--mui-palette-success-mainChannel, 46 125 50) / 0.14);
+}
 .pa-arrow { color: var(--mui-palette-text-disabled, #9e9e9e); }
 """
 
@@ -294,7 +305,7 @@ class ArtifactView(Viewer):
             variant="subtitle1", margin=0, sizing_mode="stretch_width",
             sx={"fontWeight": 600, "lineHeight": 1.3, "whiteSpace": "nowrap", "overflow": "hidden", "textOverflow": "ellipsis"},
         )
-        self._count = pmui.Typography(variant="caption", color="text.secondary", margin=0, sx={"lineHeight": 1.3})
+        self._count = pmui.Typography(variant="caption", color="text.secondary", margin=0, sx={"lineHeight": 1.3, "color": "text.secondary"})
         # A 4px gap between 30px buttons, the pitch of the buttons on the history's rows.
         tooltip = {"description_delay": 300, "stylesheets": [_TOOLTIP_BELOW], "margin": (0, 0, 0, 4)}
         self._undo = pmui.IconButton(
@@ -346,8 +357,14 @@ class ArtifactView(Viewer):
 
         self._preview = pmui.Column(sizing_mode="stretch_width")
 
-        self._base = pmui.Select(label="Base", options={}, width=220, size="small")
-        self._target = pmui.Select(label="Compare to", options={}, width=220, size="small")
+        self._base = pmui.Select(
+            label="Base", options={}, min_width=220, max_width=290, size="small",
+            sizing_mode="stretch_width", styles={"flex": "1 1 220px", "max-width": "290px"},
+        )
+        self._target = pmui.Select(
+            label="Compare to", options={}, min_width=220, max_width=290, size="small",
+            sizing_mode="stretch_width", styles={"flex": "1 1 220px", "max-width": "290px"},
+        )
         self._layout = pmui.RadioButtonGroup(
             options={"Unified": "unified", "Split": "split"}, value=self.diff_layout, size="small",
             visible=False, align="center",
@@ -842,7 +859,15 @@ class ArtifactPane(Viewer):
         super().__init__(store=store, **params)
         self._views: dict[str, ArtifactView] = {}
         self._ids: list[str] = []
-        self._list = pmui.MenuList(items=[], dense=False, sizing_mode="stretch_width")
+        self._list = pmui.MenuList(
+            items=[], dense=False, sizing_mode="stretch_width",
+            sx={
+                "& .MuiListItemText-root": {"minWidth": 0},
+                "& .MuiListItemText-primary, & .MuiListItemText-secondary": {
+                    "whiteSpace": "nowrap", "overflow": "hidden", "textOverflow": "ellipsis",
+                },
+            },
+        )
         self._list.param.watch(self._on_list_select, "active")
         self._empty = pmui.Typography(
             self.param.empty_message, color="text.secondary", variant="body2",

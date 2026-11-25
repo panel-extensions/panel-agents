@@ -219,3 +219,13 @@ def test_keyboard_resizing_keeps_to_the_bounds_and_tells_the_page(page):
     for _ in range(14):
         page.keyboard.press("ArrowLeft")
     wait_until(lambda: drawer.width == 600, page)
+
+
+@pytest.mark.parametrize("dark", [False, True], ids=["light", "dark"])
+def test_toggle_in_page_header_uses_white_text(page, dark):
+    drawer = AgentDrawer(state=RunState(), main=pmui.Typography("The app"))
+    serve_component(page, pmui.Page(title="App", header=[drawer.toggle], main=[drawer], dark_theme=dark))
+    toggle = page.locator("button.pa-toggle")
+    expect(toggle).to_be_visible()
+    wait_until(lambda: "pa-on-appbar" in (toggle.get_attribute("class") or ""), page)
+    expect(toggle).to_have_css("color", "rgb(255, 255, 255)")
