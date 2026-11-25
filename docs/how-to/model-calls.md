@@ -65,6 +65,8 @@ Requests recorded with the tool call ids they issued nest those calls under them
 
 `SpanView` answers "how was this made?" for one run. It shows the question, the run's totals with the share of input tokens read from the cache, the run's steps as in `RunTrace`, the artifact versions the run published and the problems it ran into (failed requests and retries, failed tool calls, blocking guardrails). The steps of child runs, such as a sub-agent's, are part of it, under a label naming the child run, and so are their tokens and cost. A cancelled run shows as cancelled with its reason, not as failed. It is readonly and follows a run in progress.
 
+![`SpanView` shows the run's question and totals, then its steps on a shared time axis; here a failed `run_query` call is expanded.](../assets/images/span-view.png)
+
 ```python
 from panel_agents import SpanView
 

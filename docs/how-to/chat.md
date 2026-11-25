@@ -38,6 +38,8 @@ chat = AgentChat(
 )
 ```
 
+![In the document layout, the query and the table a run published render inline as cells after its folded steps and answer.](../assets/images/chat-document-layout.png)
+
 `layout` is set once, when the chat is created. `inline_artifacts` chooses which artifacts get a cell; by default every artifact that is not a [document](document-artifacts.md), since a document already lives in the app. The tool calls that published an inline artifact need no chip of their own and fold into the run's step group. `cell_renderer` renders a cell's body, by default with the renderers registered through `register_renderer`. A cell shows the latest version and renders again when a new one is published. A run that publishes more than `max_cells` artifacts shows the rest behind a "Show more" button. `chat.cells` maps artifact ids to the cells built so far.
 
 `user_placement="right"` puts the person's messages back on the right as bubbles in the document layout too. Cells can offer actions such as "Add to dashboard", see [Offer actions on artifacts](ui-actions.md#offer-actions-on-artifacts).

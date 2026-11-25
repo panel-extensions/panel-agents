@@ -20,6 +20,8 @@ drawer = AgentDrawer(runner, main=my_app)
 pn.ui.Page(title="My app", header=[drawer.toggle], main=[drawer]).servable()
 ```
 
+![The drawer docks beside the sales report; its chat folds finished tool calls into one step and shows the run's cost and tokens under the answer.](docs/assets/images/drawer-light.png)
+
 Every session can be recorded and replayed with the same components:
 
 ```python

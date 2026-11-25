@@ -4,6 +4,8 @@ panel-agents gives [Panel](https://panel.holoviz.org) apps the pieces an AI agen
 
 The components never talk to an agent framework directly. An adapter translates the framework's output into a small set of normalized events, modelled on the [AG-UI protocol](https://docs.ag-ui.com), and the components bind to a reactive `RunState` built from those events. That is why the same UI works during a live run, against a recorded session, or with any framework that has an adapter. The pydantic-ai adapter ships with the package.
 
+![The drawer docks beside an existing app, with the agent's tool calls, artifact versions and usage shown next to its answer.](assets/images/drawer-light.png)
+
 ## Install
 
 ```bash

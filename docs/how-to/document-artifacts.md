@@ -106,6 +106,8 @@ They are backed by a context variable, so they follow awaited code and the tasks
 
 The artifact view lists the versions in a history grouped by the run that made them, newest first. It opens by default for documents, so in an `AgentDrawer` the artifacts view shows it right away; for other artifacts the history button in the header opens it, and `ArtifactView(history=True)` opens it from code. The header shows the artifact's title and number of versions, with icon buttons for Undo, Redo, the history and Download.
 
+![The history groups versions by the run that made them, newest first, with each run's question as its heading.](../assets/images/artifact-history.png)
+
 A run that made several versions is a group headed by the run's input, the question the user asked, with its number of versions and time; a run that made one version is a single row with the question as its title and the version below it. A run made with `RunState.user_run` shows its input too; other edits by a person read "You edited" for the person viewing and "ann edited" for anyone else. Versions made outside a run are grouped while the same person keeps editing, and a person's edit made while an agent ran sits between the agent's versions before and after it. The latest group is open and older ones are folded. A folded group sends and renders no rows until it is opened, and an open group shows its latest 50 versions with a "Show 50 more" row below them, so the cost of an update grows with the number of runs and the rows people open rather than with the number of versions. With 500 versions in 100 runs, the drawer loads in about half a second and opening a run or viewing a version takes a few hundred milliseconds.
 
 A row shows the version's operation, its number and time, and marks the applied version ("v3 applied") with a coloured icon. Clicking it shows that version without applying it, and the Compare tab then compares it with the applied one. The operation label comes from the version's metadata:
@@ -119,6 +121,8 @@ Publish both when you have them; the label is shown and `op` stays available to 
 ## Undo and redo
 
 For a document with an `on_apply` callback the header has Undo and Redo buttons, and the history a restore button on every row that is neither applied nor the one shown (shown on hover or focus, taking no space otherwise), and an undo button on each run that changed the applied version, up to the applied one ("Undo run" and "Go back to before this run"). They all move the applied version through `on_apply` and record an `ARTIFACT_APPLIED` event, so no version is ever changed or removed and a replayed recording shows the same history. The same commands exist in code:
+
+![A document artifact's header carries Undo and Redo next to the history and download buttons.](../assets/images/artifact-undo-redo.png)
 
 ```python
 await view.undo()            # back to the version applied before the last change
@@ -199,3 +203,5 @@ def diff_dashboard(old, new, **options):
 ```
 
 The view lists the changes, showing the label when there is one and otherwise the path with the old and new values. When `old_text` and `new_text` are set, a Text tab next to the change list shows the line diff of the serialized versions. `examples/artifacts_demo.py` shows a document artifact with a custom diff and an `on_apply` callback.
+
+![The Compare tab lists what a registered diff strategy found between two versions, here a changed chart type and an added colour.](../assets/images/artifact-diff.png)
