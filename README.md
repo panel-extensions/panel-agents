@@ -11,13 +11,13 @@ pip install "panel-agents[pydantic-ai]"
 A chat for a pydantic-ai agent, docked beside an existing app, with inline approvals and a versioned artifact pane:
 
 ```python
-import panel_material_ui as pmui
+import panel as pn
 from panel_agents import AgentDrawer, ApprovalPolicy
 from panel_agents.adapters.pydantic_ai import AgentRunner
 
 runner = AgentRunner(agent, deps=deps, approval_policy=ApprovalPolicy(["save_*", "delete_*"]))
 drawer = AgentDrawer(runner, main=my_app)
-pmui.Page(title="My app", header=[drawer.toggle], main=[drawer]).servable()
+pn.ui.Page(title="My app", header=[drawer.toggle], main=[drawer]).servable()
 ```
 
 Every session can be recorded and replayed with the same components:

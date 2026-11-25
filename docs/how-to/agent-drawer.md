@@ -3,7 +3,7 @@
 `AgentDrawer` adds an agent to an app without giving up the app's layout. It is a collapsible drawer on the right holding an `AgentChat`, with views of the artifacts the agent publishes and the approvals it is waiting for. The drawer has no tab strip: the artifacts open from a button in its header, which counts them, and a bar above the chat says how many actions wait for the user and opens the approvals. Both views have a back button to the chat.
 
 ```python
-import panel_material_ui as pmui
+import panel as pn
 
 from panel_agents import AgentDrawer
 from panel_agents.adapters.pydantic_ai import AgentRunner
@@ -11,7 +11,7 @@ from panel_agents.adapters.pydantic_ai import AgentRunner
 runner = AgentRunner(agent, deps=deps, approval_policy=policy)
 drawer = AgentDrawer(runner, main=app, title="Assistant")
 
-pmui.Page(title="My app", header=[drawer.toggle], main=[drawer]).servable()
+pn.ui.Page(title="My app", header=[drawer.toggle], main=[drawer]).servable()
 ```
 
 `main` is the existing content. In the default `persistent` variant the open drawer sits beside it and narrows it. With `variant="temporary"` the drawer overlays the content instead and closes when the user clicks outside it. Without `main`, the drawer renders on its own, for example as the last item of a row you already have.
@@ -64,11 +64,11 @@ Each mention is a chip in the input, below the text, with a button that removes 
 
 ## Use a page's contextbar instead
 
-`pmui.Page` has its own right-hand contextbar. To use it, place the drawer's body there instead of the drawer itself:
+`pn.ui.Page` has its own right-hand contextbar. To use it, place the drawer's body there instead of the drawer itself:
 
 ```python
 drawer = AgentDrawer(runner)
-pmui.Page(main=[app], contextbar=[drawer.content], contextbar_width=420, contextbar_open=True)
+pn.ui.Page(main=[app], contextbar=[drawer.content], contextbar_width=420, contextbar_open=True)
 ```
 
 `examples/drawer_app.py` docks an agent beside a small sales report. The agent edits the report settings as a document artifact, filters through a front-end action, and needs approval to export.
