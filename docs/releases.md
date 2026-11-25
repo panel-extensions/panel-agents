@@ -16,7 +16,7 @@ First release of panel-agents. Since 0.1.0b0 the components have gained model ca
 - **Approval labels:** approval cards and queues take configurable action labels.
 - `SchemaForm` is public.
 - `RunState(max_events=...)` caps the events a state keeps in memory.
-- Recorders also write to a callable, for example one storing each record in a database, and log a failing sink instead of ending the run unless `on_error="raise"`.
+- Recorders also write to a callable, for example one storing each record in a database, and log a failing sink instead of ending the run unless `on_error="raise"`. `load_events` and `load_state` read such records back from any iterable of record dicts.
 - A documentation site at [panel-extensions.github.io/panel-agents](https://panel-extensions.github.io/panel-agents).
 
 ### Changed
@@ -33,7 +33,7 @@ First release of panel-agents. Since 0.1.0b0 the components have gained model ca
 
 ### Requirements
 
-Python 3.12 or newer, Panel 1.11 or newer, panel-material-ui 0.17 or newer, pydantic 2.12 or newer, and pydantic-ai-slim 2.60 or newer for the pydantic-ai adapter.
+Python 3.12 or newer, Panel 1.11 or newer, panel-material-ui 0.17 or newer, pydantic 2.12 or newer, pandas, and pydantic-ai-slim 2.60 or newer for the pydantic-ai adapter.
 
 ## 0.1.0b0
 
