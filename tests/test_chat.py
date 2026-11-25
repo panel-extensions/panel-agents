@@ -1,10 +1,11 @@
 import panel as pn
 import panel_material_ui as pmui
 import pytest
+from panel.models.esm import DataEvent
 
 from panel_agents import RunState
 from panel_agents import events as ev
-from panel_agents.components.chat import AgentChat
+from panel_agents.components.chat import AgentChat, Mention
 from panel_agents.components.model_call import ModelCallCard
 from panel_agents.components.tool_call import ToolCallCard
 from panel_agents.state import ModelCallState
@@ -546,3 +547,85 @@ def test_a_model_call_inserted_before_its_response_keeps_the_feed():
     assert [o for o in objects if o in before] == before
     message = chat._messages[id(second)]
     assert objects.index(message) < objects.index(chat._messages[id(state.messages["a"])])
+
+
+async def test_mentions_show_in_the_input_and_start_the_next_message():
+    state = RunState(flush_interval=0)
+    received = []
+    chat = AgentChat(state, callback=received.append, models=["a", "b"])
+    chat.mentions = [Mention("sales_by_region", icon="bar_chart"), Mention("Orders", text="@orders_table")]
+    chips, picker = chat.feed._widget.footer_objects
+    assert picker is chat.model_picker.__panel__()
+    assert chips.mentions == [{"label": "sales_by_region", "icon": "bar_chart"}, {"label": "Orders", "icon": None}]
+    await chat.submit("make it a bar chart")
+    assert received == ["@sales_by_region @orders_table make it a bar chart"]
+    assert chat.mentions == [] and chat.feed._widget.footer_objects == [chat.model_picker.__panel__()]
+    assert chat.feed.objects[0].object.object == "@sales_by_region @orders_table make it a bar chart"
+
+
+async def test_a_mention_is_kept_until_a_message_is_sent():
+    state = RunState(flush_interval=0)
+    received = []
+    chat = AgentChat(state, callback=received.append)
+    chat.mentions = [Mention("sales_by_region")]
+    await chat.submit("   ")
+    state.apply(ev.RunStarted(run_id="r1"))
+    await chat.submit("hello")
+    assert received == [] and chat.mentions == [Mention("sales_by_region")]
+
+
+def remove_chip(chat, index):
+    chat.feed._widget.footer_objects[0]._process_event(DataEvent(model=None, data={"type": "remove", "index": index}))
+
+
+def test_removing_a_mention_drops_its_chip():
+    chat = AgentChat(RunState(flush_interval=0), callback=lambda text: None)
+    chat.mentions = [Mention("a"), Mention("b")]
+    chips = chat.feed._widget.footer_objects[0]
+    remove_chip(chat, 0)
+    assert chat.mentions == [Mention("b")]
+    assert chat.feed._widget.footer_objects == [chips] and chips.mentions == [{"label": "b", "icon": None}]
+    remove_chip(chat, 0)
+    assert chat.mentions == [] and chat.feed._widget.footer_objects == []
+
+
+def test_removing_a_mention_ignores_an_index_out_of_range():
+    chat = AgentChat(RunState(flush_interval=0), callback=lambda text: None)
+    chat.mentions = [Mention("a")]
+    remove_chip(chat, 1)
+    remove_chip(chat, -1)
+    assert chat.mentions == [Mention("a")]
+
+
+async def test_mentions_writing_the_same_name_show_and_are_written_once():
+    received = []
+    chat = AgentChat(RunState(flush_interval=0), callback=received.append)
+    chat.mentions = [Mention("a"), Mention("b"), Mention("a"), Mention("a", icon="table"), Mention("A", text="@a")]
+    assert chat.feed._widget.footer_objects[0].mentions == [{"label": "a", "icon": None}, {"label": "b", "icon": None}]
+    await chat.submit("x")
+    assert received == ["@a @b x"]
+    chat.mentions = [Mention("a"), Mention("b"), Mention("a", icon="table")]
+    remove_chip(chat, 0)
+    assert chat.mentions == [Mention("b")]
+
+
+@pytest.mark.parametrize(("mention", "written"), [
+    (Mention("sales_by_region"), "@sales_by_region"),
+    (Mention("orders/2024:q1-v1.2"), "@orders/2024:q1-v1.2"),
+    (Mention("région_é"), "@région_é"),
+    (Mention("Sales by region"), '@"Sales by region"'),
+    (Mention("@odd"), "@odd"),
+    (Mention("@@odd"), "@odd"),
+    (Mention('a"b'), '@"a\\"b"'),
+    (Mention("a,b"), '@"a,b"'),
+    (Mention(' say "hi" '), '@"say \\"hi\\""'),
+    (Mention("Sales by region", text="@sales"), "@sales"),
+])
+def test_a_mention_is_written_as_one_name(mention, written):
+    assert mention.written == written
+
+
+@pytest.mark.parametrize("label", ["", "  ", "@", " @@ "])
+def test_a_mention_needs_a_label(label):
+    with pytest.raises(ValueError, match="needs a label"):
+        Mention(label)

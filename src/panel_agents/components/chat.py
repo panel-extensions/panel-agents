@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import datetime as dt
 import inspect
+import json
+import re
+from dataclasses import dataclass
 from html import escape
 from typing import Any
 
@@ -19,6 +22,7 @@ from ..actions import ActionRegistry
 from ..artifacts.model import Artifact, root_run_id
 from ..security import _escape_markdown, untrusted_markdown
 from ..state import MessageState, ModelCallState, RunState, ToolCallState
+from ._mentions import MentionChips
 from .approval import ApprovalCard
 from .approval import approval_factory as default_approval_factory
 from .artifact_cell import ArtifactAction, ArtifactCell
@@ -37,9 +41,48 @@ _THINKING_CSS = """
 
 # The model picker's row (the div after the textarea) sits right under the text, so the text drops
 # its bottom padding, which pmui sets inline, hence !important.
+# The mention chips take what the picker leaves, so pmui's wrapper around them and the box around the
+# text and footer have to shrink as well, or a long label pushes the picker and send button out.
 _FOOTER_CSS = """
 textarea:has(~ div) { padding-bottom: 0 !important; }
+div:has(> textarea) { min-width: 0; }
+.child-wrapper:has(> .agent-chat-mention) { flex: 0 1 auto; min-width: 0; }
 """
+
+
+_TOKEN = re.compile(r"[\w./:-]+")
+
+
+@dataclass(frozen=True)
+class Mention:
+    """
+    Something a person's next message is about, e.g. an item handed over
+    to the chat from elsewhere in the app.
+
+    It shows as a chip in the chat's input, which the person can remove,
+    and sending a message writes its ``text`` at the start of the message,
+    so the agent reads what the message is about and the conversation
+    shows it. By default that is ``@`` and the ``label``, quoted unless
+    it is made of letters, digits and ``_ . - / :`` only
+    (``@"Sales by region"``), so the name stays one token; pass ``text``
+    to write something else, e.g. an id. The label must not be empty.
+    """
+
+    label: str
+    icon: str | None = None
+    text: str | None = None
+
+    def __post_init__(self):
+        if not self.label.strip().lstrip("@"):
+            raise ValueError(f"A Mention needs a label to show, not {self.label!r}.")
+
+    @property
+    def written(self) -> str:
+        """How the sent message names it."""
+        if self.text:
+            return self.text
+        name = self.label.strip().lstrip("@")
+        return f"@{name}" if _TOKEN.fullmatch(name) else f"@{json.dumps(name, ensure_ascii=False)}"
 
 
 class AgentChat(Viewer):
@@ -191,6 +234,12 @@ class AgentChat(Viewer):
         A localStorage key under which the browser remembers the picked
         model for the next session, see ``ModelPicker.remember``.""")
 
+    mentions = param.List(default=[], item_type=Mention, doc="""
+        What the next message is about, e.g. an item a person handed over
+        from elsewhere in the app, shown as chips in the input that they
+        can remove. Sending a message writes them at its start, see
+        ``Mention``, and clears them.""")
+
     def __init__(self, state: RunState | None = None, **params):
         params.setdefault("approval_factory", default_approval_factory)
         if state is not None:
@@ -231,8 +280,12 @@ class AgentChat(Viewer):
             widget.stylesheets = [*widget.stylesheets, _FOOTER_CSS]
             self.model_id = self._model_picker.value
             self._model_picker.param.watch(lambda e: setattr(self, "model_id", e.new), "value")
+            # Below the text like the model picker, whose 14px bottom margin it shares.
+            self._mention_chips = MentionChips(margin=(0, 0, 14, 0), styles={"flex": "0 1 auto", "min-width": "0"}, css_classes=["agent-chat-mention"])
+            self._mention_chips.on_msg(self._on_mention_msg)
             self._sync_footer()
             self.param.watch(self._sync_model_picker, ["models", "model_id", "remember_model"])
+            self.param.watch(lambda e: self._sync_footer(), "mentions")
         # Timeline items in order; only the ones shown get a view and a message.
         self._rendered: list[Any] = []
         self._index: dict[int, int] = {}
@@ -302,10 +355,29 @@ class AgentChat(Viewer):
         self._sync_footer()
 
     def _sync_footer(self):
+        chips = self._mention_chips
+        mentions = [{"label": m.label, "icon": m.icon} for m in self._unique_mentions]
+        if chips.mentions != mentions:
+            chips.mentions = mentions
         # An empty footer row still takes space in the input and pushes the text off center.
-        footer = [self._model_picker.__panel__()] if self._model_picker.choices else []
+        footer = [*([chips] if mentions else []), *([self._model_picker.__panel__()] if self._model_picker.choices else [])]
         if self._feed._widget.footer_objects != footer:
             self._feed._widget.footer_objects = footer
+
+    @property
+    def _unique_mentions(self) -> list[Mention]:
+        # One chip per name the message would carry, so no two chips look alike but write one name.
+        unique: dict[str, Mention] = {}
+        for mention in self.mentions:
+            unique.setdefault(mention.written, mention)
+        return list(unique.values())
+
+    def _on_mention_msg(self, event):
+        msg, mentions = event.data, self._unique_mentions
+        index = msg.get("index")
+        if msg.get("type") == "remove" and isinstance(index, int) and 0 <= index < len(mentions):
+            written = mentions[index].written
+            self.mentions = [m for m in self.mentions if m.written != written]
 
     def view_for(self, item: MessageState | ModelCallState | ToolCallState) -> Any:
         """
@@ -318,10 +390,13 @@ class AgentChat(Viewer):
         return self._views[id(item)]
 
     async def submit(self, text: str):
-        """Submit text as the user would through the input."""
+        """Submit text as the user would through the input, after the ``mentions``, which it clears."""
         text = text.strip()
         if not text or self.state.running:
             return
+        if self.mentions and not self.readonly:
+            text = " ".join([*dict.fromkeys(mention.written for mention in self.mentions), text])
+            self.mentions = []
         if self.runner is not None:
             result = self.runner.run(text)
         elif self.callback is not None:
