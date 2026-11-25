@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import datetime as dt
 import inspect
+import json
 from dataclasses import dataclass
 from html import escape
 from typing import Any
@@ -20,6 +21,7 @@ from ..actions import ActionRegistry
 from ..artifacts.model import Artifact, root_run_id
 from ..security import _escape_markdown, untrusted_markdown
 from ..state import MessageState, ModelCallState, RunState, ToolCallState
+from ._mentions import MentionChips
 from .approval import ApprovalCard
 from .approval import approval_factory as default_approval_factory
 from .artifact_cell import ArtifactAction, ArtifactCell
@@ -51,8 +53,10 @@ class Mention:
 
     It shows as a chip in the chat's input, which the person can remove,
     and sending a message writes its ``text`` at the start of the message,
-    by default ``@`` followed by the ``label``, so the agent reads what
-    the message is about and the conversation shows it.
+    so the agent reads what the message is about and the conversation
+    shows it. By default that is ``@`` and the ``label``, quoted when the
+    label has spaces (``@"Sales by region"``) so the name stays one
+    token; pass ``text`` to write something else, e.g. an id.
     """
 
     label: str
@@ -62,7 +66,10 @@ class Mention:
     @property
     def written(self) -> str:
         """How the sent message names it."""
-        return self.text or f"@{self.label}"
+        if self.text:
+            return self.text
+        name = self.label.strip().lstrip("@")
+        return f"@{json.dumps(name, ensure_ascii=False)}" if len(name.split()) != 1 else f"@{name}"
 
 
 class AgentChat(Viewer):
@@ -260,7 +267,9 @@ class AgentChat(Viewer):
             widget.stylesheets = [*widget.stylesheets, _FOOTER_CSS]
             self.model_id = self._model_picker.value
             self._model_picker.param.watch(lambda e: setattr(self, "model_id", e.new), "value")
-            self._mention_chips: dict[Mention, pmui.Row] = {}
+            # Below the text like the model picker, whose 14px bottom margin it shares.
+            self._mention_chips = MentionChips(margin=(0, 0, 14, 0), styles={"flex-shrink": "0"}, css_classes=["agent-chat-mention"])
+            self._mention_chips.on_msg(self._on_mention_msg)
             self._sync_footer()
             self.param.watch(self._sync_model_picker, ["models", "model_id", "remember_model"])
             self.param.watch(lambda e: self._sync_footer(), "mentions")
@@ -333,28 +342,24 @@ class AgentChat(Viewer):
         self._sync_footer()
 
     def _sync_footer(self):
-        chips = {mention: self._mention_chips.get(mention) or self._mention_chip(mention) for mention in self.mentions}
-        self._mention_chips = chips
+        chips = self._mention_chips
+        mentions = [{"label": m.label, "icon": m.icon} for m in self._unique_mentions]
+        if chips.mentions != mentions:
+            chips.mentions = mentions
         # An empty footer row still takes space in the input and pushes the text off center.
-        footer = [*chips.values(), *([self._model_picker.__panel__()] if self._model_picker.choices else [])]
+        footer = [*([chips] if mentions else []), *([self._model_picker.__panel__()] if self._model_picker.choices else [])]
         if self._feed._widget.footer_objects != footer:
             self._feed._widget.footer_objects = footer
 
-    def _mention_chip(self, mention: Mention) -> pmui.Row:
-        chip = pmui.Chip(
-            label=mention.label, icon=mention.icon, size="small", variant="outlined", color="default",
-            description=f"This message is about {mention.label}", margin=0,
-        )
-        remove = pmui.IconButton(
-            icon="close", size="small", description=f"Remove {mention.label}", margin=0,
-            sx={"p": "2px", "& .material-icons": {"fontSize": "16px"}},
-            on_click=lambda _: self._remove_mention(mention),
-        )
-        # Below the text like the model picker, whose 14px bottom margin it shares.
-        return pmui.Row(chip, remove, margin=(0, 0, 14, 0), styles={"align-items": "center", "flex-shrink": "0"}, css_classes=["agent-chat-mention"])
+    @property
+    def _unique_mentions(self) -> list[Mention]:
+        return list(dict.fromkeys(self.mentions))
 
-    def _remove_mention(self, mention: Mention):
-        self.mentions = [m for m in self.mentions if m != mention]
+    def _on_mention_msg(self, event):
+        msg, mentions = event.data, self._unique_mentions
+        index = msg.get("index")
+        if msg.get("type") == "remove" and isinstance(index, int) and 0 <= index < len(mentions):
+            self.mentions = [m for m in self.mentions if m != mentions[index]]
 
     def view_for(self, item: MessageState | ModelCallState | ToolCallState) -> Any:
         """
@@ -372,7 +377,7 @@ class AgentChat(Viewer):
         if not text or self.state.running:
             return
         if self.mentions and not self.readonly:
-            text = " ".join([*(mention.written for mention in self.mentions), text])
+            text = " ".join([*dict.fromkeys(mention.written for mention in self.mentions), text])
             self.mentions = []
         if self.runner is not None:
             result = self.runner.run(text)

@@ -99,7 +99,10 @@ export function render({ model, el }) {
   fixed.addEventListener("focus", showTip)
   fixed.addEventListener("blur", hideTip)
   fixed.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !tip.hidden) {
+    // A chat input would take Enter as sending the message.
+    if (e.key === "Enter") {
+      e.stopPropagation()
+    } else if (e.key === "Escape" && !tip.hidden) {
       e.stopPropagation()
       hideTip()
     }

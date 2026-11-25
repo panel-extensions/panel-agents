@@ -11,6 +11,13 @@ from pydantic_ai.messages import ModelRequest, UserPromptPart
 from pydantic_ai.models.function import FunctionModel
 
 from panel_agents import AgentDrawer, Mention, ModelChoice
+
+# The element with the focus, looking into shadow roots.
+FOCUSED = """() => {
+  let a = document.activeElement
+  while (a && a.shadowRoot && a.shadowRoot.activeElement) { a = a.shadowRoot.activeElement }
+  return a ? (a.getAttribute("aria-label") || a.getAttribute("placeholder") || a.tagName) : null
+}"""
 from panel_agents.adapters.pydantic_ai import AgentRunner
 
 pytestmark = pytest.mark.ui
@@ -49,7 +56,7 @@ def test_a_mention_shows_in_the_input_and_starts_the_message(page):
 
     mention = page.locator(".agent-chat-mention")
     expect(mention).to_have_count(1)
-    expect(mention.locator(".MuiChip-root")).to_have_text("bar_chartsales_by_region")
+    expect(mention.locator(".pa-mention")).to_have_text("bar_chartsales_by_region")
     box = page.get_by_placeholder("Ask the agent…")
     text, chip = box.bounding_box(), mention.bounding_box()
     # In the input, under the text.
@@ -82,3 +89,84 @@ def test_a_mention_can_be_removed_and_shares_the_row_with_the_model(page):
     expect(mention).to_have_count(0)
     wait_until(lambda: agent_drawer.chat.mentions == [], page)
     expect(picker).to_be_visible()
+
+
+def test_enter_on_a_remove_button_removes_the_mention_and_sends_nothing(page):
+    agent_drawer = drawer()
+    agent_drawer.chat.mentions = [Mention("sales_by_region")]
+    serve_component(page, agent_drawer)
+
+    box = page.get_by_placeholder("Ask the agent…")
+    box.fill("half typed")
+    page.get_by_role("button", name="Remove sales_by_region").press("Enter")
+    expect(page.locator(".pa-mention")).to_have_count(0)
+    wait_until(lambda: agent_drawer.chat.mentions == [], page)
+    page.wait_for_timeout(300)
+    assert agent_drawer.chat.feed.objects == []
+    expect(box).to_have_value("half typed")
+    assert page.evaluate(FOCUSED) == "Ask the agent…"
+
+
+def test_removing_a_mention_puts_the_focus_back_in_the_input(page):
+    agent_drawer = drawer()
+    agent_drawer.chat.mentions = [Mention("a"), Mention("b")]
+    serve_component(page, agent_drawer)
+
+    page.get_by_role("button", name="Remove a").click()
+    expect(page.locator(".pa-mention")).to_have_count(1)
+    assert page.evaluate(FOCUSED) == "Ask the agent…"
+    page.get_by_role("button", name="Remove b").press(" ")
+    expect(page.locator(".pa-mention")).to_have_count(0)
+    assert page.evaluate(FOCUSED) == "Ask the agent…"
+
+
+def test_only_the_remove_button_of_a_mention_takes_the_focus(page):
+    agent_drawer = drawer()
+    agent_drawer.chat.mentions = [Mention("a"), Mention("b")]
+    serve_component(page, agent_drawer)
+
+    page.get_by_placeholder("Ask the agent…").focus()
+    page.keyboard.press("Tab")
+    assert page.evaluate(FOCUSED) == "Remove a"
+    page.keyboard.press("Tab")
+    assert page.evaluate(FOCUSED) == "Remove b"
+
+
+def test_backspace_in_an_empty_input_removes_the_last_mention(page):
+    agent_drawer = drawer()
+    agent_drawer.chat.mentions = [Mention("a"), Mention("b")]
+    serve_component(page, agent_drawer)
+
+    box = page.get_by_placeholder("Ask the agent…")
+    box.fill("x")
+    box.press("Backspace")
+    expect(box).to_have_value("")
+    page.wait_for_timeout(300)
+    assert agent_drawer.chat.mentions == [Mention("a"), Mention("b")]
+    box.press("Backspace")
+    expect(page.locator(".pa-mention")).to_have_count(1)
+    wait_until(lambda: agent_drawer.chat.mentions == [Mention("a")], page)
+
+
+def test_a_repeated_mention_is_written_once_as_one_name(page):
+    agent_drawer = drawer()
+    agent_drawer.chat.mentions = [Mention("Sales by region"), Mention("Sales by region")]
+    serve_component(page, agent_drawer)
+
+    expect(page.locator(".pa-mention")).to_have_count(1)
+    box = page.get_by_placeholder("Ask the agent…")
+    box.fill("make it a bar chart")
+    box.press("Enter")
+    expect(page.get_by_text('@"Sales by region" make it a bar chart', exact=True)).to_be_visible()
+
+
+def test_enter_on_the_single_model_sends_nothing(page):
+    agent_drawer = drawer(models=["alpha"])
+    serve_component(page, agent_drawer)
+
+    box = page.get_by_placeholder("Ask the agent…")
+    box.fill("half typed")
+    page.locator(".pa-model-fixed").press("Enter")
+    page.wait_for_timeout(500)
+    assert agent_drawer.chat.feed.objects == []
+    expect(box).to_have_value("half typed")
