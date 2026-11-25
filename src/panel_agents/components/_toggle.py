@@ -145,8 +145,6 @@ class DrawerResizeHandle(JSComponent):
       bar.tabIndex = 0
       bar.setAttribute("role", "separator")
       bar.setAttribute("aria-orientation", "vertical")
-      bar.setAttribute("aria-label", model.label)
-      el.style.height = "100%"
       el.appendChild(bar)
       // The drawer's paper, found through the shadow roots of the layouts between.
       function paper() {
@@ -158,20 +156,34 @@ class DrawerResizeHandle(JSComponent):
         }
         return null
       }
+      function most() {
+        return Math.round(Math.max(model.min_size, window.innerWidth * model.max_ratio))
+      }
       function clamp(size) {
-        const most = Math.max(model.min_size, window.innerWidth * model.max_ratio)
-        return Math.round(Math.max(model.min_size, Math.min(size, most)))
+        return Math.round(Math.max(model.min_size, Math.min(size, most())))
+      }
+      let current = model.size
+      function describe() {
+        bar.setAttribute("aria-label", model.label)
+        bar.setAttribute("aria-valuemin", String(model.min_size))
+        // A drawer opened wider than the window allows still reports its width.
+        bar.setAttribute("aria-valuemax", String(Math.max(most(), current ?? 0)))
+        if (current != null) bar.setAttribute("aria-valuenow", String(current))
       }
       function apply(size) {
+        current = size
+        describe()
         const target = paper()
         if (!target) return
         target.style.width = `${size}px`
         // An inline drawer's own element takes its width too, so the content beside it narrows.
         const host = target.getRootNode().host
         if (host && host.style.width && host.style.width !== "0px") host.style.width = `${size}px`
-        bar.setAttribute("aria-valuenow", String(size))
-        bar.setAttribute("aria-valuemin", String(model.min_size))
-        bar.setAttribute("aria-valuemax", String(clamp(Infinity)))
+      }
+      function commit(size) {
+        model.size = size
+        // Plots and maps beside the drawer measure themselves on window resizes only.
+        window.dispatchEvent(new Event("resize"))
       }
       // The drag is followed on the window, so the pointer may leave the narrow bar.
       let start = null
@@ -186,11 +198,7 @@ class DrawerResizeHandle(JSComponent):
         window.removeEventListener("pointercancel", end)
         if (!start) return
         bar.classList.remove("dragging")
-        if (start.last != null) {
-          model.size = start.last
-          // Plots and maps beside the drawer measure themselves on window resizes only.
-          window.dispatchEvent(new Event("resize"))
-        }
+        if (start.last != null) commit(start.last)
         start = null
       }
       bar.addEventListener("pointerdown", (event) => {
@@ -210,14 +218,20 @@ class DrawerResizeHandle(JSComponent):
         event.preventDefault()
         const size = clamp(target.getBoundingClientRect().width + step)
         apply(size)
-        model.size = size
+        commit(size)
       })
       model.on("size", () => { if (model.size != null) apply(model.size) })
+      model.on(["label", "min_size", "max_ratio"], describe)
+      window.addEventListener("resize", describe)
+      model.on("remove", () => window.removeEventListener("resize", describe))
+      describe()
     }
     """
 
+    # Sized here rather than with ``width``: Panel adds a child's width to its
+    # row's minimum width, which would keep a closed drawer that wide.
     _stylesheets = ["""
-    :host { cursor: col-resize; }
+    :host { cursor: col-resize; width: 8px; flex: none; }
     .pa-drawer-handle { width: 8px; height: 100%; display: flex; align-items: center; justify-content: center;
       touch-action: none; outline: none; }
     .pa-drawer-handle::after { content: ""; width: 3px; height: 32px; border-radius: 2px;

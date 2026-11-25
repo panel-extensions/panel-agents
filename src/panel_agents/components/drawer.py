@@ -53,9 +53,17 @@ class AgentDrawer(Viewer):
 
     resizable = param.Boolean(default=True, doc="""
         Whether the drawer's left edge can be dragged to resize it, from
-        the smallest ``width`` to 60% of the window. A resize sets
-        ``width``, which a host may store to open the drawer at that width
-        next time.""")
+        ``min_resize_width`` to ``max_resize_ratio`` of the window. A
+        resize sets ``width``, which a host may store to open the drawer
+        at that width next time.""")
+
+    min_resize_width = param.Integer(default=240, bounds=(240, None), doc="""
+        The narrowest, in pixels, that dragging the drawer's edge makes it.""")
+
+    max_resize_ratio = param.Number(default=0.6, bounds=(0, 1), doc="""
+        The largest share of the window's width that dragging the drawer's
+        edge makes it, e.g. 0.5 for half the window. It never goes below
+        ``min_resize_width``.""")
 
     title = param.String(default="Assistant", doc="Title shown at the top of the drawer.")
 
@@ -200,14 +208,15 @@ class AgentDrawer(Viewer):
         )
         # Along the drawer's left edge, beside its content.
         self._handle = DrawerResizeHandle(
-            min_size=self.param.width.bounds[0], label=f"Resize {self.title}", visible=self.resizable,
-            width=8, margin=0, sizing_mode="stretch_height", styles={"flex": "none"},
+            size=self.width, min_size=self.min_resize_width, max_ratio=self.max_resize_ratio,
+            label=f"Resize {self.title}", margin=0, sizing_mode="stretch_height",
         )
         self._handle.param.watch(self._on_resized, "size")
+        self._frame = pmui.Row(sizing_mode="stretch_both", margin=0, styles={"height": "100%"})
+        self._sync_resizable()
 
         self._drawer = pmui.Drawer(
-            pmui.Row(self._handle, self._content, sizing_mode="stretch_both", margin=0, styles={"height": "100%"}),
-            anchor="right", open=self.open, size=self.width,
+            self._frame, anchor="right", open=self.open, size=self.width,
             variant=self.variant, inline=self.variant == "persistent",
             # The inline drawer sets its own width (0 when closed); the row must neither grow nor shrink it.
             styles={"flex": "0 0 auto"},
@@ -345,7 +354,11 @@ class AgentDrawer(Viewer):
 
     @param.depends("resizable", watch=True)
     def _sync_resizable(self):
-        self._handle.visible = self.resizable
+        self._frame.objects = [self._handle, self._content] if self.resizable else [self._content]
+
+    @param.depends("min_resize_width", "max_resize_ratio", watch=True)
+    def _sync_resize_bounds(self):
+        self._handle.param.update(min_size=self.min_resize_width, max_ratio=self.max_resize_ratio)
 
     @param.depends("open", "width", watch=True)
     def _sync_open(self):
@@ -375,6 +388,7 @@ class AgentDrawer(Viewer):
     @param.depends("title", watch=True)
     def _sync_title(self):
         self._toggle.label = self.title
+        self._handle.label = f"Resize {self.title}"
 
     @property
     def _variant(self) -> str:
