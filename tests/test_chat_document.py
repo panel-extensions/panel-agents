@@ -393,3 +393,62 @@ def test_avatars_are_given_by_name():
     user, reply = messages(chat)
     assert reply.user == "Dashboard" and reply.avatar == "📊"
     assert user.avatar != "📊"
+
+
+def placement_events():
+    events = [*question("r1", "Revenue?")]
+    for call in ("c1", "c2"):
+        events += [
+            ev.ToolCallStart(tool_call_id=call, tool_name="read", run_id="r1"),
+            ev.ToolCallEnd(tool_call_id=call, run_id="r1"),
+            ev.ToolCallResult(tool_call_id=call, content="ok", run_id="r1"),
+        ]
+    return [
+        *events, table("r1"),
+        ev.ApprovalRequested(tool_call_id="c3", tool_name="drop_table", args={"table": "a"}, run_id="r1"),
+        *answer("r1", "Done."), ev.Usage(run_id="r1", input_tokens=10, output_tokens=5, model="test"),
+        ev.RunFinished(run_id="r1"),
+    ]
+
+
+def test_the_user_placement_and_message_params_reach_every_message():
+    state = RunState.from_events(placement_events())
+    chat = AgentChat(
+        state, layout="document", user="You", user_placement="right",
+        message_params={"show_avatar": False, "show_user": False},
+    )
+    objects = chat.feed.objects
+    group = next(g.message for g in chat._groups.values())
+    approval = chat._messages[id(state.tool_calls["c3"])]
+    cells = next(m for m in objects if is_cells(m))
+    mine, reply = objects[0], messages(chat)[-1]
+    assert {id(m) for m in (group, approval, cells, reply)} <= {id(m) for m in objects}
+    assert chat.view_for(state.tool_calls["c3"])._approval.visible
+    assert all(m.show_avatar is False and m.show_user is False for m in objects)
+    assert (mine.user, mine.placement) == ("You", "right")
+    assert all(m.placement == "left" for m in objects[1:])
+    assert "run-usage" in reply.footer_objects[0].css_classes
+
+
+def test_changing_the_placement_or_message_params_rebuilds_the_messages():
+    state = RunState.from_events(placement_events())
+    chat = AgentChat(state, layout="document", user="You", message_params={"show_avatar": False})
+    before = list(chat.feed.objects)
+    assert before[0].placement == "left"
+    chat.param.update(user_placement="right", message_params={"show_user": False, "css_classes": ["mine"]})
+    objects = chat.feed.objects
+    assert len(objects) == len(before) and not {id(m) for m in objects} & {id(m) for m in before}
+    assert objects[0].placement == "right"
+    assert all(m.show_avatar is not False and m.show_user is False and "mine" in m.css_classes for m in objects)
+    assert len([m for m in objects if is_cells(m)]) == 1 and len(chat.cells) == 1
+    assert "run-usage" in messages(chat)[-1].footer_objects[0].css_classes
+
+
+def test_the_chat_keeps_deciding_which_messages_are_visible():
+    state = RunState(flush_interval=0)
+    chat = AgentChat(state, readonly=True, message_params={"visible": False})
+    state.apply_many([ev.RunStarted(run_id="r1"), ev.TextMessageStart(message_id="a", run_id="r1")])
+    (message,) = chat.feed.objects
+    assert not message.visible
+    state.apply(ev.TextMessageContent(message_id="a", delta="Hi", run_id="r1"))
+    assert message.visible

@@ -139,6 +139,20 @@ class AgentChat(Viewer):
         with every message on the left and the artifacts a run published
         shown inline under its last message.""")
 
+    user_placement = param.Selector(default=None, objects=[None, "left", "right"], allow_None=True, doc="""
+        Where the user's messages are placed. By default on the right in
+        the chat layout, as bubbles, and on the left in the document
+        layout; "right" makes them bubbles in the document layout too.
+        Changing it builds the messages already shown again.""")
+
+    message_params = param.Dict(default={}, doc="""
+        Parameters given to every ``ChatMessage`` on top of the chat's
+        own, e.g. ``{"show_avatar": False, "show_user": False}`` to leave
+        out who sent each message. ``visible`` is left to the chat, which
+        hides and shows messages as runs stream and steps fold, and
+        ``css_classes`` are added to the chat's own. Changing it builds
+        the messages already shown again.""")
+
     inline_artifacts = param.Callable(default=None, allow_None=True, doc="""
         Predicate ``(artifact) -> bool`` choosing the artifacts shown inline
         in the document layout. Defaults to every artifact that does not
@@ -426,10 +440,14 @@ class AgentChat(Viewer):
         run = self.state.runs.get(run_id) if run_id else None
         return (run.agent_name if run is not None else None) or self.assistant
 
-    def _message_params(self, user: str, created_at: float | None, compact: bool = False) -> dict[str, Any]:
+    def _message_params(self, user: str, created_at: float | None, compact: bool = False, **own) -> dict[str, Any]:
+        """The parameters of a message: the chat's, then ``message_params``, then the message's ``own``."""
+        placement = "left"
+        if user == self.user:
+            placement = self.user_placement or ("right" if self.layout == "chat" else "left")
         params: dict[str, Any] = {
             "user": user,
-            "placement": "right" if user == self.user and self.layout == "chat" else "left",
+            "placement": placement,
             "show_reaction_icons": False,
             "show_copy_icon": False,
             # The hover timestamp row adds a gap that would space out runs of tool calls.
@@ -439,12 +457,23 @@ class AgentChat(Viewer):
             params["timestamp"] = dt.datetime.fromtimestamp(created_at)
         if user in self.avatars:
             params["avatar"] = self.avatars[user]
-        if self.layout == "document":
+        if self.layout == "document" and placement == "left":
             params["sizing_mode"] = "stretch_width"
-        return params
+        extra = {k: v for k, v in self.message_params.items() if k != "visible"}
+        if "css_classes" in own:
+            own["css_classes"] = [*extra.get("css_classes", []), *own["css_classes"]]
+        return {**params, **extra, **own}
+
+    @param.depends("user_placement", "message_params", watch=True)
+    def _rebuild(self):
+        """Build the feed's messages again, so a change reaches the ones already shown."""
+        self._clear()
+        self._update_items()
 
     def _build_step(self, item: _Step) -> pmui.ChatMessage:
-        params = self._message_params(self._agent_name(item.run_id), item.started_at, compact=True)
+        params = self._message_params(
+            self._agent_name(item.run_id), item.started_at, compact=True, visible=self._step_visible(item),
+        )
         if isinstance(item, ModelCallState):
             card = ModelCallCard(item, state=self.state)
             self._built_models[id(item)] = item
@@ -456,7 +485,7 @@ class AgentChat(Viewer):
             self._watch(self, lambda e, c=card: setattr(c, "approval_factory", self._approval_factory()), ["approval_factory", "can_approve"])
             self._watch(self, lambda e, c=card, i=item: setattr(c, "label", self.tool_labels.get(i.tool_name)), "tool_labels")
         self._views[id(item)] = card
-        message = pmui.ChatMessage(card, visible=self._step_visible(item), **params)
+        message = pmui.ChatMessage(card, **params)
         self._own(item, message)
         self._unbuilt.pop(id(item), None)
         return message
@@ -484,7 +513,7 @@ class AgentChat(Viewer):
         user = self.user if item.role == "user" else self._agent_name(item.run_id)
         # Message text may carry injected content, so it is rendered inert: no images or HTML that load by themselves.
         pane = untrusted_markdown(item.content)
-        message = pmui.ChatMessage(pane, visible=bool(item.content), **self._message_params(user, item.created_at))
+        message = pmui.ChatMessage(pane, **self._message_params(user, item.created_at, visible=bool(item.content)))
         self._views[id(item)] = message
 
         def stream(*_):
@@ -510,8 +539,8 @@ class AgentChat(Viewer):
         )
         self._views[id(item)] = step
 
-        params = self._message_params(self._agent_name(item.run_id), item.created_at, compact=True)
-        message = pmui.ChatMessage(step, visible=_show_thinking(item), **params)
+        params = self._message_params(self._agent_name(item.run_id), item.created_at, compact=True, visible=_show_thinking(item))
+        message = pmui.ChatMessage(step, **params)
 
         def update(*_):
             pane.object = item.content
@@ -979,8 +1008,7 @@ class _CellRow:
         self.more.on_click(lambda _: self.expand())
         self.message = pmui.ChatMessage(
             pn.Column(self.flex, self.more, sizing_mode="stretch_width", margin=0),
-            **chat._message_params(chat._agent_name(run_id), None, compact=True),
-            css_classes=["run-artifacts-message"],
+            **chat._message_params(chat._agent_name(run_id), None, compact=True, css_classes=["run-artifacts-message"]),
         )
 
     def update(self, artifacts: list[Artifact]):
