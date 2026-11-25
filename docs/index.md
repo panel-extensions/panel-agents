@@ -17,7 +17,7 @@ The `mcp` extra adds `panel_agents.mcp` for serving an agent's tools over MCP, a
 A chat with a pydantic-ai agent, served with `panel serve app.py`:
 
 ```python
-import panel_material_ui as pmui
+import panel as pn
 from pydantic_ai import Agent
 
 from panel_agents import AgentChat
@@ -26,7 +26,7 @@ from panel_agents.adapters.pydantic_ai import AgentRunner
 agent = Agent("anthropic:claude-sonnet-5-5", instructions="Answer briefly.")
 runner = AgentRunner(agent)
 
-pmui.Page(title="Ask an agent", main=[AgentChat(runner=runner)]).servable()
+pn.ui.Page(title="Ask an agent", main=[AgentChat(runner=runner)]).servable()
 ```
 
 From there, [Getting started](getting-started.md) adds a tool and docks the agent beside an existing app with `AgentDrawer`.
