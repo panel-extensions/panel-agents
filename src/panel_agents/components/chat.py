@@ -39,12 +39,11 @@ _THINKING_CSS = """
 .markdown { font-size: 0.85rem; opacity: 0.75; }
 """
 
-# The model picker's row (the div after the textarea) sits right under the text, so the text drops
-# its bottom padding, which pmui sets inline, hence !important.
+# Give the textarea comfortable breathing room above the model picker and mention chips.
 # The mention chips take what the picker leaves, so pmui's wrapper around them and the box around the
 # text and footer have to shrink as well, or a long label pushes the picker and send button out.
 _FOOTER_CSS = """
-textarea:has(~ div) { padding-bottom: 0 !important; }
+textarea:has(~ div) { padding-bottom: 8px !important; }
 div:has(> textarea) { min-width: 0; }
 .child-wrapper:has(> .agent-chat-mention) { flex: 0 1 auto; min-width: 0; }
 div:has(> textarea ~ div) ~ .MuiInputAdornment-positionEnd { align-self: flex-end; margin-bottom: 4px; }

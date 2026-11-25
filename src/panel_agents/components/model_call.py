@@ -22,7 +22,7 @@ _STEP_STATUS = {"running": "running", "success": "success", "failed": "failed"}
 _MODEL_HEADER_CSS = _HEADER_CSS + """
 :host { container-type: inline-size; }
 .mc-kind {
-  flex: none; padding: 0 0.45em; border-radius: 999px; font-size: 0.68rem; font-weight: 500; line-height: 1.55;
+  flex: none; padding: 2px 8px; border-radius: 999px; font-size: 0.68rem; font-weight: 500; line-height: 1.4;
   color: var(--mui-palette-text-secondary, rgba(127, 127, 127, 0.9));
   border: 1px solid var(--mui-palette-divider, rgba(127, 127, 127, 0.25));
   background: var(--mui-palette-action-hover, rgba(127, 127, 127, 0.04));

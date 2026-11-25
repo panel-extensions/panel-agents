@@ -249,7 +249,7 @@ def test_the_model_sits_right_under_the_text(page, models):
 
     def tucked():
         *_, gap, indent = page.evaluate(COMPOSER_GAPS)
-        return 0 <= gap <= 4 and abs(indent) <= 1
+        return 6 <= gap <= 14 and abs(indent) <= 1
 
     wait_until(tucked, page)
 

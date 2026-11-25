@@ -732,7 +732,10 @@ class ArtifactView(Viewer):
 
     @staticmethod
     def _chip(label: str, color: str = "default", icon: str | None = None):
-        return pmui.Chip(label=label, color=color, icon=icon, size="small", variant="outlined", margin=(0, 6, 0, 0))
+        return pmui.Chip(
+            label=label, color=color, icon=icon, size="small", variant="outlined", margin=(0, 6, 0, 0),
+            sx={"px": "2px", "height": "26px"},
+        )
 
     def _summary_chips(self, result) -> list:
         if result.identical:

@@ -71,8 +71,8 @@ _HEADER_CSS = """
 .tc-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .tc-meta { display: flex; align-items: center; gap: 0.5em; flex: none; }
 .tc-badge {
-  padding: 0 0.55em; border-radius: 999px; font-size: 0.7rem; font-weight: 600;
-  letter-spacing: 0.02em; white-space: nowrap; line-height: 1.6;
+  padding: 2px 8px; border-radius: 999px; font-size: 0.7rem; font-weight: 600;
+  letter-spacing: 0.02em; white-space: nowrap; line-height: 1.45;
 }
 .tc-badge.warning {
   color: var(--mui-palette-warning-dark, #b26a00);
@@ -492,6 +492,7 @@ class ToolCallCard(Viewer):
                 chip = pmui.Chip(
                     label=label, icon=_ARTIFACT_ICONS.get(artifact.kind, "description"),
                     size="small", variant="outlined", color="primary", margin=(0, 5, 0, 0),
+                    sx={"px": "2px", "height": "26px"},
                 )
                 chip.on_click(lambda _, aid=artifact.artifact_id: self._activate(aid))
             else:
