@@ -34,10 +34,7 @@ _CELL_CSS = """
 """
 
 _HEADER_CSS = """
-:host {
-  border-bottom: 1px solid var(--mui-palette-divider);
-  background: var(--mui-palette-action-hover, rgba(127, 127, 127, 0.04));
-}
+:host { border-bottom: 1px solid var(--mui-palette-divider); }
 """
 
 
@@ -99,7 +96,7 @@ class ArtifactCell(Viewer):
         artifact = self.artifact
         self._chip = pmui.Chip(
             label=artifact.kind, icon=_kind_icon(artifact.kind), size="small",
-            color="default", variant="outlined", margin=(0, 8, 0, 0), css_classes=["artifact-cell-kind"],
+            variant="outlined", margin=(0, 8, 0, 0), css_classes=["artifact-cell-kind"],
             sx={"px": "2px", "height": "26px", "& .MuiChip-label": {"px": "8px"}, "& .MuiChip-icon": {"ml": "6px", "mr": "-2px"}},
         )
         # Titles and errors may carry injected content, so they are plain text.
