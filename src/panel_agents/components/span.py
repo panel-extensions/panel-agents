@@ -101,7 +101,7 @@ class SpanView(Viewer):
         if state is not None:
             params["state"] = state
         super().__init__(**params)
-        self._header = pn.pane.HTML(sizing_mode="stretch_width", margin=(0, 0, 8, 0), stylesheets=[_HEADER_CSS])
+        self._header = pn.pane.HTML(sizing_mode="stretch_width", margin=(0, 0, 12, 0), stylesheets=[_HEADER_CSS])
         self._missing = pmui.Alert(
             object="This run is not in the session.", severity="info", variant="outlined",
             sizing_mode="stretch_width", visible=False, margin=(4, 0),
@@ -128,7 +128,7 @@ class SpanView(Viewer):
             sizing_mode="stretch_width", margin=0,
         )
         self._layout = pn.Column(
-            self._header, self._missing, self._body, sizing_mode="stretch_width", css_classes=["span-view"],
+            self._header, self._missing, self._body, sizing_mode="stretch_width", margin=0, css_classes=["span-view"],
         )
         self._store_watcher = None
         self._released = False

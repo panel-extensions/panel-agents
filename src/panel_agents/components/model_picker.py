@@ -272,17 +272,18 @@ export function render({ model, el }) {
 _MENU_CSS = """
 :host { display: block; }
 .pa-model-button {
-  display: inline-flex; align-items: center; gap: 2px; max-width: 220px; padding: 2px 2px 2px 0;
+  display: inline-flex; align-items: center; gap: 2px; height: 26px; box-sizing: border-box;
+  max-width: 220px; padding: 2px 2px 2px 0;
   border: 0; border-radius: var(--mui-shape-borderRadius, 4px); background: transparent; cursor: pointer;
   color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
   font: 400 0.8125rem/1.5 var(--mui-font-family, Roboto, sans-serif);
 }
 .pa-model-current { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pa-model-fixed {
-  display: inline-block; max-width: 220px; padding: 2px 2px 2px 0; cursor: default;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: top;
+  display: inline-block; height: 26px; box-sizing: border-box; max-width: 220px; padding: 2px 2px 2px 0;
+  cursor: default; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: top;
   color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
-  font: 400 0.8125rem/1.5 var(--mui-font-family, Roboto, sans-serif);
+  font: 400 0.8125rem/22px var(--mui-font-family, Roboto, sans-serif);
 }
 .pa-model-fixed[hidden], .pa-model-button[hidden], .pa-model-tip[hidden] { display: none; }
 /* Drawn inside the label, since the composer clips anything around it. */

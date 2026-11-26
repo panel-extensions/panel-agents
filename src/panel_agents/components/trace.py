@@ -49,7 +49,7 @@ _TOTALS_CSS = """
 _AXIS_CSS = """
 :host { width: 100%; container-type: inline-size; }
 .rt-axis {
-  display: flex; align-items: baseline; gap: 12px; margin-top: 4px;
+  display: flex; align-items: baseline; gap: 12px; margin-top: 0;
   font-family: var(--mui-font-family, inherit); color: var(--mui-palette-text-primary, inherit);
 }
 .rt-question {
@@ -162,8 +162,8 @@ class RunTrace(Viewer):
         if state is not None:
             params["state"] = state
         super().__init__(**params)
-        self._totals = pn.pane.HTML(sizing_mode="stretch_width", margin=(0, 0, 8, 0), stylesheets=[_TOTALS_CSS])
-        self._axis = pn.pane.HTML(sizing_mode="stretch_width", margin=0, stylesheets=[_AXIS_CSS])
+        self._totals = pn.pane.HTML(sizing_mode="stretch_width", margin=(0, 0, 12, 0), stylesheets=[_TOTALS_CSS])
+        self._axis = pn.pane.HTML(sizing_mode="stretch_width", margin=(0, 0, 4, 0), stylesheets=[_AXIS_CSS])
         self._rows = pn.Column(sizing_mode="stretch_width", margin=0)
         self._more = pmui.Button(
             label="", variant="text", size="small", visible=False, margin=(4, 0), css_classes=["rt-more"],
@@ -171,7 +171,7 @@ class RunTrace(Viewer):
         self._more.on_click(self._show_more)
         self._limit = self.row_limit
         self._layout = pn.Column(
-            self._totals, self._axis, self._rows, self._more, sizing_mode="stretch_width", css_classes=["run-trace"],
+            self._totals, self._axis, self._rows, self._more, sizing_mode="stretch_width", margin=0, css_classes=["run-trace"],
         )
         # A SpanView shows the question in its own header.
         self._hide_question = _hide_question

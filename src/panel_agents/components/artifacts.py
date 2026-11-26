@@ -299,7 +299,7 @@ class ArtifactView(Viewer):
         self._rendered: dict[tuple[str, int], pn.viewable.Viewable] = {}
         self._applying = False
         self._watchers: list = []
-        self._diff_viewer = DiffViewer(context=3, max_height=520)
+        self._diff_viewer = DiffViewer(context=3, max_height=520, margin=0)
 
         self._title = _plain_typography(
             variant="subtitle1", margin=0, sizing_mode="stretch_width",
@@ -358,25 +358,36 @@ class ArtifactView(Viewer):
         self._preview = pmui.Column(sizing_mode="stretch_width")
 
         self._base = pmui.Select(
-            label="Base", options={}, min_width=220, max_width=290, size="small",
-            sizing_mode="stretch_width", styles={"flex": "1 1 220px", "max-width": "290px"},
+            label="Base", options={}, min_width=200, max_width=360, size="small", margin=0,
+            sizing_mode="stretch_width", styles={"flex": "1 1 200px", "max-width": "360px"},
         )
         self._target = pmui.Select(
-            label="Compare to", options={}, min_width=220, max_width=290, size="small",
-            sizing_mode="stretch_width", styles={"flex": "1 1 220px", "max-width": "290px"},
+            label="Compare to", options={}, min_width=200, max_width=360, size="small", margin=0,
+            sizing_mode="stretch_width", styles={"flex": "1 1 200px", "max-width": "360px"},
         )
         self._layout = pmui.RadioButtonGroup(
             options={"Unified": "unified", "Split": "split"}, value=self.diff_layout, size="small",
-            visible=False, align="center",
+            visible=False, align="center", margin=0, styles={"margin-left": "auto", "flex": "0 0 auto"},
         )
-        self._summary = pmui.Row(sizing_mode="stretch_width", styles={"flex-wrap": "wrap", "gap": "6px"}, margin=(8, 5))
-        self._compare_body = pmui.Column(sizing_mode="stretch_width")
+        self._summary = pmui.Row(
+            margin=0,
+            styles={"flex-wrap": "wrap", "gap": "6px", "align-items": "center", "flex": "1 1 auto", "min-width": "0"},
+        )
+        self._compare_body = pmui.Column(sizing_mode="stretch_width", margin=(10, 0, 0, 0))
         compare = pmui.Column(
             pmui.FlexBox(
-                self._base, pmui.Typography("→", margin=(0, 4), align="center"), self._target, pn.HSpacer(), self._layout,
-                flex_wrap="wrap", align_items="center", gap="4px", sizing_mode="stretch_width",
+                self._base,
+                pmui.Typography("→", margin=(0, 2), align="center", sx={"color": "text.secondary"}),
+                self._target,
+                flex_wrap="wrap", align_items="center", gap="6px", sizing_mode="stretch_width", margin=0,
             ),
-            self._summary, self._compare_body, sizing_mode="stretch_width",
+            pmui.FlexBox(
+                self._summary, self._layout,
+                flex_wrap="wrap", align_items="center", justify_content="space-between", gap="8px",
+                sizing_mode="stretch_width", margin=(10, 0, 0, 0),
+            ),
+            self._compare_body,
+            sizing_mode="stretch_width", margin=0, styles={"padding": "12px 12px 0 12px"},
         )
 
         self._metadata = pn.pane.JSON({}, depth=3, sizing_mode="stretch_width")
@@ -781,7 +792,7 @@ class ArtifactView(Viewer):
         return [self._chip("Values differ", "warning")]
 
     def _structured_comparison(self, old: ArtifactVersion, new: ArtifactVersion, result: StructuredDiff):
-        changes = pn.pane.HTML(_changes_html(result.changes), stylesheets=[_CHANGES_CSS], sizing_mode="stretch_width", margin=(4, 8))
+        changes = pn.pane.HTML(_changes_html(result.changes), stylesheets=[_CHANGES_CSS], sizing_mode="stretch_width", margin=(4, 0))
         if not (result.old_text or result.new_text):
             return changes
         text = DiffViewer(

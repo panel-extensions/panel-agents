@@ -43,10 +43,11 @@ _THINKING_CSS = """
 # The mention chips take what the picker leaves, so pmui's wrapper around them and the box around the
 # text and footer have to shrink as well, or a long label pushes the picker and send button out.
 _FOOTER_CSS = """
-textarea:has(~ div) { padding-bottom: 8px !important; }
+textarea:has(~ div) { padding-bottom: 12px !important; }
+textarea ~ div { align-items: flex-end !important; }
 div:has(> textarea) { min-width: 0; }
 .child-wrapper:has(> .agent-chat-mention) { flex: 0 1 auto; min-width: 0; }
-div:has(> textarea ~ div) ~ .MuiInputAdornment-positionEnd { align-self: flex-end; margin-bottom: 4px; }
+div:has(> textarea ~ div) ~ .MuiInputAdornment-positionEnd { align-self: flex-end; margin-bottom: -6px; }
 """
 
 
@@ -272,16 +273,15 @@ class AgentChat(Viewer):
             self._model_picker = ModelPicker(
                 models=self.models, value=self.model_id, runner=self.runner, remember=self.remember_model,
             )
-            # pmui pulls the footer into the input's 8px bottom padding, so the picker's text
-            # needs 14px more (16px less its button's 2px padding) to sit as far from the
-            # bottom edge as the text is from the top (8px padding and 8px in the textarea).
-            self._model_picker.__panel__().margin = (0, 0, 14, 0)
+            # Keep the footer row grounded near the bottom border (6px clearance)
+            # while the textarea's 12px bottom padding separates input text from it.
+            self._model_picker.__panel__().margin = (0, 0, 6, 0)
             widget = self._feed._widget
             widget.stylesheets = [*widget.stylesheets, _FOOTER_CSS]
             self.model_id = self._model_picker.value
             self._model_picker.param.watch(lambda e: setattr(self, "model_id", e.new), "value")
-            # Below the text like the model picker, whose 14px bottom margin it shares.
-            self._mention_chips = MentionChips(margin=(0, 0, 14, 0), styles={"flex": "0 1 auto", "min-width": "0"}, css_classes=["agent-chat-mention"])
+            # Below the text like the model picker, whose 6px bottom margin it shares.
+            self._mention_chips = MentionChips(margin=(0, 0, 6, 0), styles={"flex": "0 1 auto", "min-width": "0"}, css_classes=["agent-chat-mention"])
             self._mention_chips.on_msg(self._on_mention_msg)
             self._sync_footer()
             self.param.watch(self._sync_model_picker, ["models", "model_id", "remember_model"])

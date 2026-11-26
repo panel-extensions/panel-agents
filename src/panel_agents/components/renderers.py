@@ -206,6 +206,9 @@ _CODE_EDITOR_CSS = """
   background: transparent !important;
   border: 0 !important;
 }
+.ace_cursor-layer {
+  display: none !important;
+}
 """
 
 
@@ -213,7 +216,7 @@ def _render_code(value, language: str = "python", **options):
     text = str(value)
     if "height" not in options:
         lines = max(1, len(text.splitlines()))
-        options["height"] = min(max(lines * 20 + 28, 72), 420)
+        options["height"] = min(max(lines * 16 + 18, 56), 420)
     stylesheets = [_CODE_EDITOR_CSS, *options.pop("stylesheets", [])]
     return pn.widgets.CodeEditor(
         value=text, language=language, readonly=True,

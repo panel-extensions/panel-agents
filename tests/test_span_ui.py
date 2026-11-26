@@ -103,3 +103,34 @@ def test_model_name_stays_readable_in_a_narrow_card(page):
     expect(name).to_have_text("gpt-4o")
     assert name.evaluate("el => el.scrollWidth <= el.clientWidth")
     expect(page.locator(".mc-tokens")).to_be_hidden()
+
+
+def test_span_dialog_aligns_title_close_button_and_content(page):
+    s = state()
+    drawer = AgentDrawer(state=s, open=True, width=480)
+    drawer.show_run("r1")
+    serve_component(page, pmui.Page(main=[drawer]))
+
+    dialog = page.get_by_role("dialog")
+    expect(dialog.get_by_text("How this was made")).to_be_visible()
+    expect(dialog.locator(".sv-head")).to_be_visible()
+
+    def aligned():
+        metrics = page.evaluate("""() => {
+          const deep = r => [...r.querySelectorAll('*')].flatMap(e => [e, ...(e.shadowRoot ? deep(e.shadowRoot) : [])]);
+          const all = deep(document);
+          const paper = all.find(e => e.classList && e.classList.contains('MuiDialog-paper'));
+          const title = paper?.querySelector('.MuiDialogTitle-root');
+          const close = paper?.querySelector('.MuiIconButton-root');
+          const head = all.find(e => e.classList && e.classList.contains('sv-head'));
+          if (!title || !close || !head) return null;
+          const tr = title.getBoundingClientRect(), ts = getComputedStyle(title);
+          const cr = close.getBoundingClientRect(), hr = head.getBoundingClientRect();
+          return {
+            leftDiff: Math.abs((tr.left + parseFloat(ts.paddingLeft)) - hr.left),
+            midDiff: Math.abs((tr.top + tr.height / 2) - (cr.top + cr.height / 2)),
+          };
+        }""")
+        return metrics is not None and metrics["leftDiff"] <= 1 and metrics["midDiff"] <= 2
+
+    wait_until(aligned, page)

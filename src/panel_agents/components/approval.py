@@ -335,6 +335,9 @@ class ApprovalCard(Viewer):
     def _sync_embedded(self):
         self._title.visible = not self.embedded
         if self.embedded:
+            self._header.align_items = "flex-start"
+            self._args_pane.margin = (6, 4, 2, 4)
+            self._reason.margin = (10, 4, 4, 4)
             if self._description is not None:
                 self._description.param.update(margin=(0, 8, 0, 4), styles={"flex": "1 1 160px", "min-width": "0"})
                 self._header.objects = [self._title, self._description, self._edit_toggle]
@@ -349,6 +352,9 @@ class ApprovalCard(Viewer):
                 },
             )
         else:
+            self._header.align_items = "center"
+            self._args_pane.margin = (0, 4)
+            self._reason.margin = (8, 4, 4, 4)
             self._header.objects = [self._title, self._edit_toggle]
             body = [self._header]
             if self._description is not None:
@@ -595,7 +601,7 @@ class ApprovalQueue(Viewer):
         super().__init__(**params)
         self._cards: dict[str, ApprovalCard] = {}
         self._ordered: list[ApprovalCard] = []
-        self._count = pmui.Chip(label="0", size="small", color="warning", margin=(0, 8))
+        self._count = pmui.Chip(label="0", size="small", color="warning", margin=(0, 8), align="center")
         self._approve_all = pmui.Button(
             icon="done_all", color="success", variant="outlined", size="small",
             margin=(0, 4), sx={"whiteSpace": "nowrap"}, on_click=lambda e: self.approve_all(),
@@ -608,9 +614,9 @@ class ApprovalQueue(Viewer):
         self._empty = pmui.Typography("Nothing waiting for review.", variant="body2", color="text.secondary", margin=(8, 4))
         self._list = pmui.Column(sizing_mode="stretch_width", margin=0)
         header = pmui.Row(
-            pmui.Typography(self.title, variant="h6", margin=(0, 4), sx={"whiteSpace": "nowrap"}), self._count,
+            pmui.Typography(self.title, variant="h6", margin=(0, 4), align="center", sx={"whiteSpace": "nowrap"}), self._count,
             pn.Spacer(sizing_mode="stretch_width"), self._deny_all, self._approve_all,
-            sizing_mode="stretch_width", margin=(0, 0, 4, 0), align="center",
+            sizing_mode="stretch_width", margin=(0, 0, 4, 0), align="center", styles={"align-items": "center"},
         )
         self._layout = pmui.Column(header, self._message, self._empty, self._list, sizing_mode="stretch_width")
         self._refresh()
