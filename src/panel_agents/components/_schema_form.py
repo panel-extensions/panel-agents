@@ -184,8 +184,9 @@ def _parse_date(value: Any) -> dt.date | None:
     return None
 
 
-# Narrower than Panel's default 10px side margin, so the fields line up with the text and inputs around the form.
-_MARGIN = (5, 4)
+# Narrower than Panel's default 10px side margin so fields line up with surrounding inputs,
+# with vertical breathing room so helper text never touches the next field's floating label.
+_MARGIN = (10, 4)
 
 
 class _Field:

@@ -97,6 +97,7 @@ class ArtifactCell(Viewer):
         self._chip = pmui.Chip(
             label=artifact.kind, icon=_kind_icon(artifact.kind), size="small",
             variant="outlined", margin=(0, 8, 0, 0), css_classes=["artifact-cell-kind"],
+            sx={"px": "2px", "height": "26px", "& .MuiChip-label": {"px": "8px"}, "& .MuiChip-icon": {"ml": "6px", "mr": "-2px"}},
         )
         # Titles and errors may carry injected content, so they are plain text.
         title = artifact.title or artifact.artifact_id

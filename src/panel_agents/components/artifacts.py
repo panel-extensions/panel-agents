@@ -67,7 +67,12 @@ _CELL_STYLES = {
 
 _CHANGES_CSS = """
 :host { width: 100%; }
-.pa-changes { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; }
+.pa-changes {
+  display: flex; flex-direction: column; gap: 5px; font-size: 0.85rem;
+  padding: 10px 12px; border: 1px solid var(--mui-palette-divider, rgba(127, 127, 127, 0.25));
+  border-radius: var(--mui-shape-borderRadius, 6px);
+  background: var(--mui-palette-action-hover, rgba(127, 127, 127, 0.03));
+}
 .pa-change { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding: 2px 0; }
 .pa-op {
   flex: none; width: 1.2em; text-align: center; font-weight: 700;
@@ -83,10 +88,16 @@ _CHANGES_CSS = """
 }
 .pa-old, .pa-new {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem;
-  padding: 0 4px; border-radius: 4px;
+  padding: 1px 5px; border-radius: 4px;
 }
-.pa-old { text-decoration: line-through; color: var(--mui-palette-error-main, #c62828); background: rgba(198, 40, 40, 0.08); }
-.pa-new { color: var(--mui-palette-success-dark, #1b5e20); background: rgba(46, 125, 50, 0.1); }
+.pa-old {
+  text-decoration: line-through; color: var(--mui-palette-error-main, #c62828);
+  background: rgba(var(--mui-palette-error-mainChannel, 211 47 47) / 0.12);
+}
+.pa-new {
+  color: var(--mui-palette-success-main, #2e7d32);
+  background: rgba(var(--mui-palette-success-mainChannel, 46 125 50) / 0.14);
+}
 .pa-arrow { color: var(--mui-palette-text-disabled, #9e9e9e); }
 """
 
@@ -288,13 +299,13 @@ class ArtifactView(Viewer):
         self._rendered: dict[tuple[str, int], pn.viewable.Viewable] = {}
         self._applying = False
         self._watchers: list = []
-        self._diff_viewer = DiffViewer(context=3, max_height=520)
+        self._diff_viewer = DiffViewer(context=3, max_height=520, margin=0)
 
         self._title = _plain_typography(
             variant="subtitle1", margin=0, sizing_mode="stretch_width",
             sx={"fontWeight": 600, "lineHeight": 1.3, "whiteSpace": "nowrap", "overflow": "hidden", "textOverflow": "ellipsis"},
         )
-        self._count = pmui.Typography(variant="caption", color="text.secondary", margin=0, sx={"lineHeight": 1.3})
+        self._count = pmui.Typography(variant="caption", color="text.secondary", margin=0, sx={"lineHeight": 1.3, "color": "text.secondary"})
         # A 4px gap between 30px buttons, the pitch of the buttons on the history's rows.
         tooltip = {"description_delay": 300, "stylesheets": [_TOOLTIP_BELOW], "margin": (0, 0, 0, 4)}
         self._undo = pmui.IconButton(
@@ -346,20 +357,37 @@ class ArtifactView(Viewer):
 
         self._preview = pmui.Column(sizing_mode="stretch_width")
 
-        self._base = pmui.Select(label="Base", options={}, width=220, size="small")
-        self._target = pmui.Select(label="Compare to", options={}, width=220, size="small")
+        self._base = pmui.Select(
+            label="Base", options={}, min_width=200, max_width=360, size="small", margin=0,
+            sizing_mode="stretch_width", styles={"flex": "1 1 200px", "max-width": "360px"},
+        )
+        self._target = pmui.Select(
+            label="Compare to", options={}, min_width=200, max_width=360, size="small", margin=0,
+            sizing_mode="stretch_width", styles={"flex": "1 1 200px", "max-width": "360px"},
+        )
         self._layout = pmui.RadioButtonGroup(
             options={"Unified": "unified", "Split": "split"}, value=self.diff_layout, size="small",
-            visible=False, align="center",
+            visible=False, align="center", margin=0, styles={"margin-left": "auto", "flex": "0 0 auto"},
         )
-        self._summary = pmui.Row(sizing_mode="stretch_width", styles={"flex-wrap": "wrap", "gap": "6px"}, margin=(8, 5))
-        self._compare_body = pmui.Column(sizing_mode="stretch_width")
+        self._summary = pmui.Row(
+            margin=0,
+            styles={"flex-wrap": "wrap", "gap": "6px", "align-items": "center", "flex": "1 1 auto", "min-width": "0"},
+        )
+        self._compare_body = pmui.Column(sizing_mode="stretch_width", margin=(10, 0, 0, 0))
         compare = pmui.Column(
             pmui.FlexBox(
-                self._base, pmui.Typography("→", margin=(0, 4), align="center"), self._target, pn.HSpacer(), self._layout,
-                flex_wrap="wrap", align_items="center", gap="4px", sizing_mode="stretch_width",
+                self._base,
+                pmui.Typography("→", margin=(0, 2), align="center", sx={"color": "text.secondary"}),
+                self._target,
+                flex_wrap="wrap", align_items="center", gap="6px", sizing_mode="stretch_width", margin=0,
             ),
-            self._summary, self._compare_body, sizing_mode="stretch_width",
+            pmui.FlexBox(
+                self._summary, self._layout,
+                flex_wrap="wrap", align_items="center", justify_content="space-between", gap="8px",
+                sizing_mode="stretch_width", margin=(10, 0, 0, 0),
+            ),
+            self._compare_body,
+            sizing_mode="stretch_width", margin=0, styles={"padding": "12px 12px 0 12px"},
         )
 
         self._metadata = pn.pane.JSON({}, depth=3, sizing_mode="stretch_width")
@@ -715,7 +743,10 @@ class ArtifactView(Viewer):
 
     @staticmethod
     def _chip(label: str, color: str = "default", icon: str | None = None):
-        return pmui.Chip(label=label, color=color, icon=icon, size="small", variant="outlined", margin=(0, 6, 0, 0))
+        return pmui.Chip(
+            label=label, color=color, icon=icon, size="small", variant="outlined", margin=(0, 6, 0, 0),
+            sx={"px": "2px", "height": "26px"},
+        )
 
     def _summary_chips(self, result) -> list:
         if result.identical:
@@ -761,7 +792,7 @@ class ArtifactView(Viewer):
         return [self._chip("Values differ", "warning")]
 
     def _structured_comparison(self, old: ArtifactVersion, new: ArtifactVersion, result: StructuredDiff):
-        changes = pn.pane.HTML(_changes_html(result.changes), stylesheets=[_CHANGES_CSS], sizing_mode="stretch_width", margin=(4, 8))
+        changes = pn.pane.HTML(_changes_html(result.changes), stylesheets=[_CHANGES_CSS], sizing_mode="stretch_width", margin=(4, 0))
         if not (result.old_text or result.new_text):
             return changes
         text = DiffViewer(
@@ -842,7 +873,15 @@ class ArtifactPane(Viewer):
         super().__init__(store=store, **params)
         self._views: dict[str, ArtifactView] = {}
         self._ids: list[str] = []
-        self._list = pmui.MenuList(items=[], dense=False, sizing_mode="stretch_width")
+        self._list = pmui.MenuList(
+            items=[], dense=False, sizing_mode="stretch_width",
+            sx={
+                "& .MuiListItemText-root": {"minWidth": 0},
+                "& .MuiListItemText-primary, & .MuiListItemText-secondary": {
+                    "whiteSpace": "nowrap", "overflow": "hidden", "textOverflow": "ellipsis",
+                },
+            },
+        )
         self._list.param.watch(self._on_list_select, "active")
         self._empty = pmui.Typography(
             self.param.empty_message, color="text.secondary", variant="body2",

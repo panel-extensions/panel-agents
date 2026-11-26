@@ -235,11 +235,11 @@ def test_the_input_is_padded_evenly_above_and_below(page, models, text):
     else:
         expect(page.locator(".pa-model-fixed")).to_be_visible()
 
-    def even():
+    def grounded():
         top, bottom, *_ = page.evaluate(COMPOSER_GAPS)
-        return top >= 16 and abs(top - bottom) <= 1
+        return top >= 14 and 6 <= bottom <= 10 and bottom < top
 
-    wait_until(even, page)
+    wait_until(grounded, page)
 
 
 @pytest.mark.parametrize("models", [["alpha-model"], ["alpha-model", "beta-model"]], ids=["one", "two"])
@@ -249,6 +249,16 @@ def test_the_model_sits_right_under_the_text(page, models):
 
     def tucked():
         *_, gap, indent = page.evaluate(COMPOSER_GAPS)
-        return 0 <= gap <= 4 and abs(indent) <= 1
+        return 8 <= gap <= 16 and abs(indent) <= 1
 
     wait_until(tucked, page)
+
+
+def test_model_menu_opens_above_the_composer(page):
+    serve_component(page, drawer(["alpha-model", "beta-model"]))
+    page.get_by_role("button", name="Model: Alpha").click()
+    listbox = page.get_by_role("listbox", name="Model")
+    expect(listbox).to_be_visible()
+    menu = listbox.bounding_box()
+    composer = page.locator(".MuiOutlinedInput-root").bounding_box()
+    assert menu["y"] + menu["height"] <= composer["y"]

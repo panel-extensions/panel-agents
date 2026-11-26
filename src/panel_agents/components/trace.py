@@ -21,24 +21,27 @@ from .model_call import ModelCallCard, format_cost, format_tokens
 from .tool_call import ToolCallCard, _format_duration
 
 _TOTALS_CSS = """
-:host { width: 100%; }
+:host { width: 100%; container-type: inline-size; }
 .rt-totals {
-  display: flex; flex-wrap: wrap; gap: 1px; overflow: hidden;
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1px; overflow: hidden;
   border: 1px solid var(--mui-palette-divider, rgba(127, 127, 127, 0.3));
   border-radius: var(--mui-shape-borderRadius, 4px);
   background: var(--mui-palette-divider, rgba(127, 127, 127, 0.3));
 }
+@container (max-width: 480px) {
+  .rt-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .rt-stat {
-  flex: 1 1 120px; min-width: 0; padding: 8px 12px;
+  min-width: 0; padding: 8px 10px;
   background: var(--mui-palette-background-paper, #fff);
   font-family: var(--mui-font-family, inherit);
 }
 .rt-label, .rt-sub {
-  font-size: 0.75rem; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 0.72rem; line-height: 1.45; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   color: var(--mui-palette-text-secondary, rgba(127, 127, 127, 0.9));
 }
 .rt-value {
-  font-size: 1.25rem; line-height: 1.4; font-variant-numeric: tabular-nums;
+  font-size: 1.125rem; line-height: 1.4; font-variant-numeric: tabular-nums;
   color: var(--mui-palette-text-primary, inherit);
 }
 """
@@ -46,7 +49,7 @@ _TOTALS_CSS = """
 _AXIS_CSS = """
 :host { width: 100%; container-type: inline-size; }
 .rt-axis {
-  display: flex; align-items: baseline; gap: 12px; margin-top: 4px;
+  display: flex; align-items: baseline; gap: 12px; margin-top: 0;
   font-family: var(--mui-font-family, inherit); color: var(--mui-palette-text-primary, inherit);
 }
 .rt-question {
@@ -65,7 +68,11 @@ _BAR_CSS = """
 :host { flex: 0 0 24%; min-width: 56px; align-self: flex-start; margin: 0 !important; }
 .rt-track {
   position: relative; height: 10px; margin-top: 19px; border-radius: 2px;
-  background: rgba(var(--mui-palette-text-primaryChannel, 127 127 127) / 0.06);
+  background-color: rgba(var(--mui-palette-text-primaryChannel, 127 127 127) / 0.06);
+  background-image: linear-gradient(
+    to right, transparent 49.5%, var(--mui-palette-divider, rgba(127, 127, 127, 0.2)) 49.5%,
+    var(--mui-palette-divider, rgba(127, 127, 127, 0.2)) 50.5%, transparent 50.5%
+  );
 }
 .rt-bar {
   position: absolute; top: 0; bottom: 0; min-width: 2px; border-radius: 2px;
@@ -155,8 +162,8 @@ class RunTrace(Viewer):
         if state is not None:
             params["state"] = state
         super().__init__(**params)
-        self._totals = pn.pane.HTML(sizing_mode="stretch_width", margin=(0, 0, 8, 0), stylesheets=[_TOTALS_CSS])
-        self._axis = pn.pane.HTML(sizing_mode="stretch_width", margin=0, stylesheets=[_AXIS_CSS])
+        self._totals = pn.pane.HTML(sizing_mode="stretch_width", margin=(0, 0, 12, 0), stylesheets=[_TOTALS_CSS])
+        self._axis = pn.pane.HTML(sizing_mode="stretch_width", margin=(0, 0, 4, 0), stylesheets=[_AXIS_CSS])
         self._rows = pn.Column(sizing_mode="stretch_width", margin=0)
         self._more = pmui.Button(
             label="", variant="text", size="small", visible=False, margin=(4, 0), css_classes=["rt-more"],
@@ -164,7 +171,7 @@ class RunTrace(Viewer):
         self._more.on_click(self._show_more)
         self._limit = self.row_limit
         self._layout = pn.Column(
-            self._totals, self._axis, self._rows, self._more, sizing_mode="stretch_width", css_classes=["run-trace"],
+            self._totals, self._axis, self._rows, self._more, sizing_mode="stretch_width", margin=0, css_classes=["run-trace"],
         )
         # A SpanView shows the question in its own header.
         self._hide_question = _hide_question
@@ -351,7 +358,10 @@ class RunTrace(Viewer):
             else:
                 bar = pn.pane.HTML(margin=0, stylesheets=[_BAR_CSS], css_classes=["rt-timing"])
                 # Only the card is indented, so the bars of every row share one time axis.
-                body = pn.Column(card, sizing_mode="stretch_width", margin=(0, 0, 0, 24 * depth))
+                body = pn.Column(
+                    card, sizing_mode="stretch_width", margin=(0, 0, 0, 24 * depth),
+                    styles={"flex": "1 1 0", "min-width": "0"},
+                )
                 row = pn.Row(body, bar, sizing_mode="stretch_width", margin=0, styles={"gap": "12px"})
                 self._rows_by_key[key] = (row, bar)
         return self._rows_by_key[key]

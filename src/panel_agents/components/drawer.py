@@ -20,6 +20,27 @@ from .span import SpanView
 
 _TABS = ("chat", "artifacts", "approvals")
 
+# Keep modal titles, close buttons and body content on one shared 24px inset
+# with the close icon vertically centered on the title line.
+_DIALOG_SX = {
+    "& .MuiDialogTitle-root": {
+        "padding": "16px 12px 16px 24px",
+        "fontSize": "1.25rem",
+        "fontWeight": 500,
+        "lineHeight": 1.4,
+    },
+    "& .MuiDialog-paper > .MuiBox-root": {
+        "alignItems": "center",
+        "paddingRight": "18px",
+    },
+    "& .MuiDialog-paper > .MuiBox-root > .MuiIconButton-root": {
+        "alignSelf": "center",
+    },
+    "& .MuiDialogContent-root": {
+        "padding": "0 24px 24px 24px",
+    },
+}
+
 
 class AgentDrawer(Viewer):
     """
@@ -135,8 +156,8 @@ class AgentDrawer(Viewer):
         self._artifacts = ArtifactPane(state=self.state, on_apply=self.on_apply, show_list=False, on_show_run=self.show_run)
         self._span: SpanView | None = None
         self._span_dialog = pmui.Dialog(
-            title="How this was made", open=False, show_close_button=True, close_on_click=True, width_option="md",
-            css_classes=["span-dialog"],
+            title="How this was made", title_variant="h6", open=False, show_close_button=True,
+            close_on_click=True, width_option="md", sx=_DIALOG_SX, css_classes=["span-dialog"],
         )
         self._artifact_select = pmui.Select(
             label="Artifact", options={}, size="small", sizing_mode="stretch_width", margin=(8, 8, 0, 8),
@@ -173,8 +194,8 @@ class AgentDrawer(Viewer):
             sizing_mode="stretch_width", margin=(8, 12, 0, 12), align="center", visible=False,
             styles={
                 "align-items": "center", "border-radius": "8px", "padding": "2px 4px 2px 6px",
-                "border": "1px solid var(--mui-palette-warning-main)",
-                "background": "rgba(var(--mui-palette-warning-mainChannel) / 0.12)",
+                "border": "1px solid rgba(var(--mui-palette-warning-mainChannel, 237 108 2) / 0.42)",
+                "background": "rgba(var(--mui-palette-warning-mainChannel, 237 108 2) / 0.10)",
             },
         )
 
@@ -186,15 +207,22 @@ class AgentDrawer(Viewer):
         self._confirm = pmui.Dialog(
             pmui.Typography(
                 "Starting a new conversation clears the versions of the documents the agent edited, so they can no "
-                "longer be compared or reverted. The app keeps its current state.", variant="body2",
+                "longer be compared or reverted. The app keeps its current state.", variant="body2", margin=0,
             ),
             pmui.Row(
                 pn.HSpacer(),
-                pmui.Button(label="Cancel", variant="text", on_click=lambda e: self._confirm.param.update(open=False)),
-                pmui.Button(label="Start new conversation", color="warning", on_click=lambda e: self._confirm_new_conversation()),
-                sizing_mode="stretch_width",
+                pmui.Button(
+                    label="Cancel", variant="text", margin=0, sx={"whiteSpace": "nowrap"},
+                    on_click=lambda e: self._confirm.param.update(open=False),
+                ),
+                pmui.Button(
+                    label="Start new conversation", color="warning", disable_elevation=True, margin=0,
+                    sx={"whiteSpace": "nowrap"}, on_click=lambda e: self._confirm_new_conversation(),
+                ),
+                sizing_mode="stretch_width", margin=(20, 0, 0, 0), styles={"gap": "8px", "align-items": "center"},
             ),
-            title="Start a new conversation?", open=False,
+            title="Start a new conversation?", title_variant="h6", open=False, show_close_button=True,
+            close_on_click=True, width_option="sm", sx=_DIALOG_SX,
         )
         close = pmui.IconButton(icon="close", description="Close", size="small", on_click=lambda e: self._close_drawer())
         header = pmui.Row(

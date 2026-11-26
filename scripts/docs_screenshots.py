@@ -56,11 +56,9 @@ from panel_agents import (
     Mention,
     ModelChoice,
     RunState,
-    SpanView,
 )
 from panel_agents import events as ev
 from panel_agents.adapters.pydantic_ai import AgentRunner
-from panel_agents.components.renderers import render
 
 REGISTRY: dict[str, callable] = {}
 
@@ -388,16 +386,9 @@ def chat_document_layout(pw):
         sql_app.agent, state, deps=sql_app.AnalystDeps(con, state),
         approval_policy=sql_app.POLICY, run_kwargs={"model": model},
     )
-    def cell_renderer(artifact):
-        # The default SQL renderer sizes its editor for long queries; cap it
-        # here so a short one does not leave a tall empty box in the cell.
-        if artifact.kind == "sql":
-            return render(artifact.value, kind="sql", height=110)
-        return render(artifact.value, kind=artifact.kind)
-
     chat = AgentChat(
         runner=runner, layout="document", assistant="Analyst",
-        cell_renderer=cell_renderer, feed_params={"height": 560},
+        feed_params={"height": 560},
     )
 
     s = open_page(pw, 1100, 660)
@@ -502,13 +493,13 @@ def chat_replay_shot(pw):
 def span_view_shot(pw):
     import examples.chat_replay as cr
 
-    span = SpanView(cr.state, run_id="run-1", on_artifact=lambda artifact_id, number: None)
-    dialog = pn.ui.Dialog(span, title="How this was made", width=820, open=True)
+    drawer = AgentDrawer(state=cr.state, open=True)
+    drawer.show_run("run-1")
 
-    s = open_page(pw, 900, 760)
+    s = open_page(pw, 920, 780)
     try:
-        serve(s.page, dialog)
-        s.page.get_by_text("Q3 revenue by region").wait_for()
+        serve(s.page, pn.ui.Page(main=[drawer]))
+        s.page.get_by_role("dialog").get_by_text("How this was made").wait_for()
         s.page.mouse.move(0, 0)
         s.page.wait_for_timeout(300)
         shoot(s.page, "span-view.png")

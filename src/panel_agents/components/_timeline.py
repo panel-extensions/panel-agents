@@ -34,6 +34,9 @@ _BLOCKED = f'& .MuiIconButton-root[title="{BLOCKED_NOTE}"]'
 _LIST_SX = {
     "& .MuiListItemButton-root": {"py": "2px", "pr": 1, "minHeight": "48px", "gap": "4px"},
     "& .MuiListItemIcon-root": {"minWidth": "32px", "color": "var(--mui-palette-text-secondary)"},
+    "& .MuiListItemButton-root.Mui-selected .MuiListItemIcon-root, & .MuiListItemButton-root.Mui-selected .MuiListItemIcon-root .MuiIcon-root": {
+        "color": "var(--mui-palette-primary-main)",
+    },
     "& .MuiListItemIcon-root .MuiIcon-root": {"fontSize": "20px"},
     "& .MuiListItemText-root": {"my": "2px", "minWidth": 0},
     "& .MuiListItemText-primary, & .MuiListItemText-secondary": {
@@ -290,10 +293,15 @@ class VersionTimeline(Viewer):
 
     def _row(self, version: ArtifactVersion) -> dict[str, Any]:
         applied = self.artifact.applied == version.version
+        if self.artifact.is_document:
+            icon = "radio_button_checked" if applied else "radio_button_unchecked"
+            color = "primary" if applied else "action"
+        else:
+            icon = "fiber_manual_record"
+            color = "action"
         item = {
             "id": f"v{version.version}", "version": version.version, "label": version_label(version),
-            "secondary": self._meta(version), "icon": "radio_button_checked" if applied else "radio_button_unchecked",
-            "color": "primary" if applied else "action",
+            "secondary": self._meta(version), "icon": icon, "color": color,
         }
         if detail := version_detail(version):
             item["tooltip"] = detail

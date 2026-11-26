@@ -152,15 +152,17 @@ def _inert(pane: pn.viewable.Viewable, value: Any) -> pn.viewable.Viewable:
 @register_renderer(kind="table")
 def _render_table(value, max_rows: int = 1000, page_size: int = 20, **options):
     value = value.head(max_rows) if len(value) > max_rows else value
-    options = {
+    ncols = len(getattr(value, "columns", ()))
+    defaults = {
         "disabled": True,
         "show_index": not _is_range_index(value),
         "pagination": "local" if len(value) > page_size else None,
         "page_size": page_size,
         "sizing_mode": "stretch_width",
-        **options,
     }
-    return pn.widgets.Tabulator(value, **options)
+    if 1 <= ncols <= 6:
+        defaults["layout"] = "fit_columns"
+    return pn.widgets.Tabulator(value, **{**defaults, **options})
 
 
 def _is_range_index(df) -> bool:
@@ -199,10 +201,26 @@ def _render_records(value, **options):
     return _render_dataframe(pd.DataFrame.from_records(value), **options)
 
 
+_CODE_EDITOR_CSS = """
+.ace_marker-layer .ace_active-line, .ace_gutter-active-line {
+  background: transparent !important;
+  border: 0 !important;
+}
+.ace_cursor-layer {
+  display: none !important;
+}
+"""
+
+
 def _render_code(value, language: str = "python", **options):
+    text = str(value)
+    if "height" not in options:
+        lines = max(1, len(text.splitlines()))
+        options["height"] = min(max(lines * 16 + 18, 56), 420)
+    stylesheets = [_CODE_EDITOR_CSS, *options.pop("stylesheets", [])]
     return pn.widgets.CodeEditor(
-        value=str(value), language=language, readonly=True,
-        sizing_mode="stretch_width", **options,
+        value=text, language=language, readonly=True,
+        sizing_mode="stretch_width", stylesheets=stylesheets, **options,
     )
 
 

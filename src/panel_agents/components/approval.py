@@ -78,14 +78,14 @@ _STYLESHEET = """
 .pa-old {
   text-decoration: line-through;
   color: var(--mui-palette-error-main, #c62828);
-  background: rgba(198, 40, 40, 0.08);
-  padding: 0 4px;
+  background: rgba(var(--mui-palette-error-mainChannel, 211 47 47) / 0.12);
+  padding: 1px 5px;
   border-radius: 4px;
 }
 .pa-new {
-  color: var(--mui-palette-success-dark, #1b5e20);
-  background: rgba(46, 125, 50, 0.1);
-  padding: 0 4px;
+  color: var(--mui-palette-success-main, #2e7d32);
+  background: rgba(var(--mui-palette-success-mainChannel, 46 125 50) / 0.14);
+  padding: 1px 5px;
   border-radius: 4px;
 }
 .pa-arrow { color: var(--mui-palette-text-disabled, #9e9e9e); }
@@ -95,6 +95,7 @@ _STYLESHEET = """
 
 _TEXT_TOGGLE_SX = {
     "width": "auto",
+    "marginLeft": "auto",
     "border": 0,
     "borderRadius": "var(--mui-shape-borderRadius, 4px)",
     "padding": "4px 5px",
@@ -262,6 +263,11 @@ class ApprovalCard(Viewer):
 
     error = param.String(default="", doc="Message explaining why the last action was rejected.")
 
+    embedded = param.Boolean(default=False, doc="""
+        Whether the card is embedded inside another card such as ``ToolCallCard``.
+        Embedded cards drop their outer border, hide the repeated tool title and
+        place the description beside the edit toggle.""")
+
     def __init__(self, request: ApprovalRequest | None = None, state: RunState | None = None, **params):
         if request is not None:
             params["request"] = request
@@ -273,7 +279,7 @@ class ApprovalCard(Viewer):
         self._diff_pane = pn.pane.HTML("", stylesheets=[_STYLESHEET], sizing_mode="stretch_width", margin=(0, 4))
         self._diff_section = pmui.Column(
             pmui.Typography("Changes", variant="overline", color="text.secondary", margin=(4, 4, 0, 4)),
-            self._diff_pane, visible=False, sizing_mode="stretch_width", margin=0,
+            self._diff_pane, visible=False, sizing_mode="stretch_width", margin=(8, 0, 0, 0),
         )
         self._form_holder = pmui.Column(sizing_mode="stretch_width", margin=0, visible=False)
         # A ToggleButton keeps aria-pressed; restyled to read like pmui's small text Button.
@@ -301,30 +307,65 @@ class ApprovalCard(Viewer):
             self.request.tool_name, variant="subtitle1", margin=(0, 8, 0, 4),
             sx={"fontWeight": 600, "fontFamily": "ui-monospace, SFMono-Regular, Menlo, monospace"},
         )
+        self._description = (
+            _plain_typography(self.request.description, variant="body2", color="text.secondary", margin=(0, 4, 8, 4))
+            if self.request.description else None
+        )
         # Wraps the edit toggle below the title when the card is narrow, e.g. in a drawer.
-        header = pmui.FlexBox(
+        self._header = pmui.FlexBox(
             self._title,
             self._edit_toggle,
             flex_wrap="wrap", justify_content="space-between", align_items="center", gap="4px",
             sizing_mode="stretch_width", margin=0,
         )
-        body = [header]
-        if self.request.description:
-            body.append(_plain_typography(self.request.description, variant="body2", color="text.secondary", margin=(0, 4, 8, 4)))
-        body += [
-            self._args_pane, self._form_holder, self._diff_section, self._reason,
-            self._policy, self._error,
-            pmui.Row(pn.Spacer(sizing_mode="stretch_width"), self._deny, self._approve, sizing_mode="stretch_width", margin=0),
-        ]
-        self._pending_view = pmui.Column(*body, sizing_mode="stretch_width", margin=0)
+        self._actions_row = pmui.Row(
+            pn.Spacer(sizing_mode="stretch_width"), self._deny, self._approve, sizing_mode="stretch_width", margin=0,
+        )
+        self._pending_view = pmui.Column(sizing_mode="stretch_width", margin=0)
         self._layout = pmui.Paper(
             self._pending_view, variant="outlined", sizing_mode="stretch_width", margin=(6, 0),
-            sx={"padding": "12px 14px", "borderLeft": "4px solid", "borderLeftColor": "warning.main", "borderRadius": "8px"},
         )
+        self._sync_embedded()
         self.request.param.watch(self._on_status, "status")
         self._reason.param.watch(lambda e: self._update_controls(), "value_input")
         self._update_controls()
         self._on_status()
+
+    @param.depends("embedded", watch=True)
+    def _sync_embedded(self):
+        self._title.visible = not self.embedded
+        if self.embedded:
+            self._header.align_items = "flex-start"
+            self._args_pane.margin = (6, 4, 2, 4)
+            self._reason.margin = (10, 4, 4, 4)
+            if self._description is not None:
+                self._description.param.update(margin=(0, 8, 0, 4), styles={"flex": "1 1 160px", "min-width": "0"})
+                self._header.objects = [self._title, self._description, self._edit_toggle]
+            else:
+                self._header.objects = [self._title, self._edit_toggle]
+            body = [self._header, self._args_pane, self._form_holder, self._diff_section, self._reason, self._policy, self._error, self._actions_row]
+            self._layout.param.update(
+                variant="elevation", elevation=0, margin=(2, 0),
+                sx={
+                    "padding": "2px 0 2px 10px", "border": 0, "borderLeft": "3px solid",
+                    "borderLeftColor": "warning.main", "borderRadius": 0, "background": "transparent",
+                },
+            )
+        else:
+            self._header.align_items = "center"
+            self._args_pane.margin = (0, 4)
+            self._reason.margin = (8, 4, 4, 4)
+            self._header.objects = [self._title, self._edit_toggle]
+            body = [self._header]
+            if self._description is not None:
+                self._description.param.update(margin=(0, 4, 8, 4), styles={})
+                body.append(self._description)
+            body += [self._args_pane, self._form_holder, self._diff_section, self._reason, self._policy, self._error, self._actions_row]
+            self._layout.param.update(
+                variant="outlined", margin=(6, 0),
+                sx={"padding": "12px 14px", "borderLeft": "4px solid", "borderLeftColor": "warning.main", "borderRadius": "8px"},
+            )
+        self._pending_view.objects = body
 
     def __panel__(self):
         return self._layout
@@ -507,10 +548,17 @@ class ApprovalCard(Viewer):
         if edits:
             items.append(pn.pane.HTML(_diff_html(edits), stylesheets=[_STYLESHEET], sizing_mode="stretch_width", margin=(6, 0, 0, 2)))
         self._layout.objects = [pmui.Column(*items, sizing_mode="stretch_width", margin=0)]
-        self._layout.sx = {
-            "padding": "8px 12px", "borderLeft": "4px solid", "borderRadius": "8px",
-            "borderLeftColor": "success.main" if approved else "error.main",
-        }
+        if self.embedded:
+            self._layout.sx = {
+                "padding": "4px 0 4px 10px", "border": 0, "borderLeft": "3px solid",
+                "borderRadius": 0, "background": "transparent",
+                "borderLeftColor": "success.main" if approved else "error.main",
+            }
+        else:
+            self._layout.sx = {
+                "padding": "8px 12px", "borderLeft": "4px solid", "borderRadius": "8px",
+                "borderLeftColor": "success.main" if approved else "error.main",
+            }
 
 
 def approval_factory(request: ApprovalRequest, state: RunState) -> ApprovalCard:
@@ -553,7 +601,7 @@ class ApprovalQueue(Viewer):
         super().__init__(**params)
         self._cards: dict[str, ApprovalCard] = {}
         self._ordered: list[ApprovalCard] = []
-        self._count = pmui.Chip(label="0", size="small", color="warning", margin=(0, 8))
+        self._count = pmui.Chip(label="0", size="small", color="warning", margin=(0, 8), align="center")
         self._approve_all = pmui.Button(
             icon="done_all", color="success", variant="outlined", size="small",
             margin=(0, 4), sx={"whiteSpace": "nowrap"}, on_click=lambda e: self.approve_all(),
@@ -566,9 +614,9 @@ class ApprovalQueue(Viewer):
         self._empty = pmui.Typography("Nothing waiting for review.", variant="body2", color="text.secondary", margin=(8, 4))
         self._list = pmui.Column(sizing_mode="stretch_width", margin=0)
         header = pmui.Row(
-            pmui.Typography(self.title, variant="h6", margin=(0, 4), sx={"whiteSpace": "nowrap"}), self._count,
+            pmui.Typography(self.title, variant="h6", margin=(0, 4), align="center", sx={"whiteSpace": "nowrap"}), self._count,
             pn.Spacer(sizing_mode="stretch_width"), self._deny_all, self._approve_all,
-            sizing_mode="stretch_width", margin=(0, 0, 4, 0), align="center",
+            sizing_mode="stretch_width", margin=(0, 0, 4, 0), align="center", styles={"align-items": "center"},
         )
         self._layout = pmui.Column(header, self._message, self._empty, self._list, sizing_mode="stretch_width")
         self._refresh()

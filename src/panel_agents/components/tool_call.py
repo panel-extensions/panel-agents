@@ -64,14 +64,15 @@ _HEADER_CSS = """
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem;
   color: var(--mui-palette-text-secondary, rgba(127, 127, 127, 0.9));
 }
+.tc-head.expanded .tc-preview { opacity: 0.45; }
 .tc-label-text {
   flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .tc-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .tc-meta { display: flex; align-items: center; gap: 0.5em; flex: none; }
 .tc-badge {
-  padding: 0 0.55em; border-radius: 999px; font-size: 0.7rem; font-weight: 600;
-  letter-spacing: 0.02em; white-space: nowrap; line-height: 1.6;
+  padding: 2px 8px; border-radius: 999px; font-size: 0.7rem; font-weight: 600;
+  letter-spacing: 0.02em; white-space: nowrap; line-height: 1.45;
 }
 .tc-badge.warning {
   color: var(--mui-palette-warning-dark, #b26a00);
@@ -103,6 +104,7 @@ pre {
   margin: 0; max-height: 320px; overflow: auto; white-space: pre;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; line-height: 1.45;
 }
+:host(.tc-wrap) pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 """
 
 _LABEL_CSS = """
@@ -242,7 +244,7 @@ class ToolCallCard(Viewer):
         # A run trace renders a result once its card is opened, so a long list of collapsed cards stays cheap.
         self._defer_result = _defer_result
         self._header = pn.pane.HTML(sizing_mode="stretch_width", margin=0, stylesheets=[_HEADER_CSS])
-        self._args = _output_markdown(margin=(2, 0), stylesheets=[_ARGS_CSS], css_classes=["tc-args"])
+        self._args = _output_markdown(margin=(4, 0, 0, 0), stylesheets=[_ARGS_CSS], css_classes=["tc-args"])
         self._result = pn.Column(sizing_mode="stretch_width", margin=0)
         self._hint = pn.pane.HTML(margin=0, stylesheets=[_LABEL_CSS])
         # Visibility is toggled on layouts only: Panel's HTML view errors if hidden before it renders.
@@ -256,7 +258,7 @@ class ToolCallCard(Viewer):
         )
         self._error_text = pn.pane.HTML(margin=0, sizing_mode="stretch_width", stylesheets=[_ERROR_CSS])
         self._error = pmui.Alert(
-            self._error_text, severity="error", variant="outlined", sizing_mode="stretch_width", visible=False, margin=(5, 0),
+            self._error_text, severity="error", variant="outlined", sizing_mode="stretch_width", visible=False, margin=(6, 0, 0, 0),
         )
         self._approval = pn.Column(sizing_mode="stretch_width", margin=0, visible=False)
         self._artifacts = pmui.Row(sizing_mode="stretch_width", margin=(5, 0), visible=False)
@@ -303,6 +305,7 @@ class ToolCallCard(Viewer):
     @param.depends("collapsed", watch=True)
     def _sync_collapsed(self):
         self._step.collapsed = self.collapsed
+        self._update_header()
         if not self.collapsed and self._deferred:
             self._update_result()
 
@@ -347,7 +350,8 @@ class ToolCallCard(Viewer):
         if call.duration is not None:
             meta.append(f'<span class="tc-duration">{_format_duration(call.duration)}</span>')
         parts.append(f'<span class="tc-meta">{"".join(meta)}</span>')
-        self._header.object = f'<div class="tc-head">{"".join(parts)}</div>'
+        cls = "tc-head" if self.collapsed else "tc-head expanded"
+        self._header.object = f'<div class="{cls}">{"".join(parts)}</div>'
 
     def _approval_labels(self) -> dict[str, str]:
         request = self.call.approval
@@ -378,8 +382,11 @@ class ToolCallCard(Viewer):
             message = call.error or (f"The call was {_lower(denied_label)}." if denied else "The call failed.")
             if self.redacted:
                 message = f"The call was {_lower(denied_label)}." if denied else "The call failed."
-            # Denial reasons are prose; errors are often tracebacks or driver messages, kept verbatim.
-            self._error_text.object = "" if denied else f"<pre>{escape(message)}</pre>"
+            # Denial reasons are prose; tracebacks scroll verbatim while shorter error messages wrap cleanly.
+            self._error_text.param.update(
+                object="" if denied else f"<pre>{escape(message)}</pre>",
+                css_classes=[] if denied or "Traceback (" in message else ["tc-wrap"],
+            )
             self._error.param.update(
                 object=_escape_markdown(message) if denied else "", visible=True,
                 severity="warning" if denied else "error", title=denied_label if denied else "Error",
@@ -430,8 +437,8 @@ class ToolCallCard(Viewer):
         if self.approval_factory is not None:
             widget = self.approval_factory(request, self.state)
             if isinstance(widget, ApprovalCard):
-                # The card's own header already names the tool.
-                widget._title.visible = False
+                # The card's own header already names the tool and frames the approval.
+                widget.embedded = True
         else:
             description = None if self.redacted else request.description
             widget = pmui.Alert(
@@ -489,6 +496,7 @@ class ToolCallCard(Viewer):
                 chip = pmui.Chip(
                     label=label, icon=_ARTIFACT_ICONS.get(artifact.kind, "description"),
                     size="small", variant="outlined", color="primary", margin=(0, 5, 0, 0),
+                    sx={"px": "2px", "height": "26px"},
                 )
                 chip.on_click(lambda _, aid=artifact.artifact_id: self._activate(aid))
             else:

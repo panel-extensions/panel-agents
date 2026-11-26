@@ -39,14 +39,15 @@ _THINKING_CSS = """
 .markdown { font-size: 0.85rem; opacity: 0.75; }
 """
 
-# The model picker's row (the div after the textarea) sits right under the text, so the text drops
-# its bottom padding, which pmui sets inline, hence !important.
+# Give the textarea comfortable breathing room above the model picker and mention chips.
 # The mention chips take what the picker leaves, so pmui's wrapper around them and the box around the
 # text and footer have to shrink as well, or a long label pushes the picker and send button out.
 _FOOTER_CSS = """
-textarea:has(~ div) { padding-bottom: 0 !important; }
+textarea:has(~ div) { padding-bottom: 12px !important; }
+textarea ~ div { align-items: flex-end !important; }
 div:has(> textarea) { min-width: 0; }
 .child-wrapper:has(> .agent-chat-mention) { flex: 0 1 auto; min-width: 0; }
+div:has(> textarea ~ div) ~ .MuiInputAdornment-positionEnd { align-self: flex-end; margin-bottom: -6px; }
 """
 
 
@@ -272,16 +273,15 @@ class AgentChat(Viewer):
             self._model_picker = ModelPicker(
                 models=self.models, value=self.model_id, runner=self.runner, remember=self.remember_model,
             )
-            # pmui pulls the footer into the input's 8px bottom padding, so the picker's text
-            # needs 14px more (16px less its button's 2px padding) to sit as far from the
-            # bottom edge as the text is from the top (8px padding and 8px in the textarea).
-            self._model_picker.__panel__().margin = (0, 0, 14, 0)
+            # Keep the footer row grounded near the bottom border (6px clearance)
+            # while the textarea's 12px bottom padding separates input text from it.
+            self._model_picker.__panel__().margin = (0, 0, 6, 0)
             widget = self._feed._widget
             widget.stylesheets = [*widget.stylesheets, _FOOTER_CSS]
             self.model_id = self._model_picker.value
             self._model_picker.param.watch(lambda e: setattr(self, "model_id", e.new), "value")
-            # Below the text like the model picker, whose 14px bottom margin it shares.
-            self._mention_chips = MentionChips(margin=(0, 0, 14, 0), styles={"flex": "0 1 auto", "min-width": "0"}, css_classes=["agent-chat-mention"])
+            # Below the text like the model picker, whose 6px bottom margin it shares.
+            self._mention_chips = MentionChips(margin=(0, 0, 6, 0), styles={"flex": "0 1 auto", "min-width": "0"}, css_classes=["agent-chat-mention"])
             self._mention_chips.on_msg(self._on_mention_msg)
             self._sync_footer()
             self.param.watch(self._sync_model_picker, ["models", "model_id", "remember_model"])
@@ -532,6 +532,8 @@ class AgentChat(Viewer):
             params["timestamp"] = dt.datetime.fromtimestamp(created_at)
         if user in self.avatars:
             params["avatar"] = self.avatars[user]
+        elif user != self.user and user.lower() not in pmui.ChatMessage.default_avatars:
+            params["avatar"] = pmui.ChatMessage.default_avatars["assistant"]
         if self.layout == "document" and placement == "left":
             params["sizing_mode"] = "stretch_width"
         extra = {k: v for k, v in self.message_params.items() if k != "visible"}
@@ -944,16 +946,20 @@ class AgentChat(Viewer):
         if row is not None and row._usage == (footer, linked):
             return row
         usage = pn.pane.HTML(
-            footer, margin=(0, 10), stylesheets=[USAGE_CSS], css_classes=["run-usage"], visible=bool(footer),
+            footer, margin=(0, 2, 0, 10), align="center", stylesheets=[USAGE_CSS], css_classes=["run-usage"], visible=bool(footer),
         )
         if linked:
             link = pmui.Button(
-                label="Details", variant="text", size="small", margin=0, css_classes=["run-details"],
+                label="Details", variant="text", size="small", margin=0, align="center", css_classes=["run-details"],
                 description="How this answer was made: every model request and tool call of the run",
-                sx={"minWidth": 0, "py": 0, "px": "4px", "fontSize": "0.75rem", "textTransform": "none"},
+                sx={
+                    "minWidth": 0, "py": "1px", "px": "6px", "fontSize": "0.75rem", "lineHeight": 1.5,
+                    "textTransform": "none", "verticalAlign": "middle",
+                    "[data-mui-color-scheme='dark'] &": {"color": "primary.light"},
+                },
             )
             link.on_click(lambda _, rid=run_id: self._show_run(rid))
-            row = pn.Row(usage, link, margin=0, styles={"align-items": "center"})
+            row = pn.Row(usage, link, margin=0, align="center", styles={"align-items": "center"})
         else:
             row = usage
         row._usage = (footer, linked)

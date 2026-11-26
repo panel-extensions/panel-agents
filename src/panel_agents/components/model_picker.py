@@ -56,6 +56,21 @@ const CARET = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true
 const WARNING = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">'
   + '<path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>'
 
+const CHECK = '<svg class="pa-model-check" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">'
+  + '<path fill="currentColor" d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>'
+
+const composerBox = (el) => {
+  let node = el
+  while (node) {
+    if (node.classList && (node.classList.contains("MuiOutlinedInput-root") || node.classList.contains("MuiInputBase-root"))) {
+      return node
+    }
+    const root = node.getRootNode && node.getRootNode()
+    node = node.parentElement || (root && root !== node ? root.host : null)
+  }
+  return null
+}
+
 export function render({ model, el }) {
   const button = document.createElement("button")
   button.type = "button"
@@ -157,17 +172,21 @@ export function render({ model, el }) {
       item.dataset.id = o.id
       item.tabIndex = -1
       item.setAttribute("aria-selected", String(o.id === model.value))
+      const text = document.createElement("span")
+      text.className = "pa-model-text"
       const primary = document.createElement("span")
       primary.className = "pa-model-primary"
       primary.textContent = o.label
-      item.append(primary)
+      text.append(primary)
       const secondary = o.reason || o.description
       if (secondary) {
         const line = document.createElement("span")
         line.className = "pa-model-secondary"
         line.textContent = secondary
-        item.append(line)
+        text.append(line)
       }
+      item.append(text)
+      if (o.id === model.value) { item.insertAdjacentHTML("beforeend", CHECK) }
       if (o.reason) { item.setAttribute("aria-disabled", "true") }
       return item
     }))
@@ -181,10 +200,13 @@ export function render({ model, el }) {
   }
   const open = () => {
     const rect = button.getBoundingClientRect()
+    const anchor = composerBox(el)?.getBoundingClientRect()
     list.hidden = false
     const width = list.getBoundingClientRect().width
-    list.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))}px`
-    list.style.bottom = `${window.innerHeight - rect.top + 4}px`
+    const left = anchor ? anchor.left : rect.left
+    const top = anchor ? anchor.top - 6 : rect.top - 4
+    list.style.left = `${Math.max(8, Math.min(left, window.innerWidth - width - 8))}px`
+    list.style.bottom = `${window.innerHeight - top}px`
     button.setAttribute("aria-expanded", "true")
     const target = items().find(i => i.getAttribute("aria-selected") === "true") || items().find(i => i.getAttribute("aria-disabled") !== "true")
     if (target) { target.focus() }
@@ -250,17 +272,18 @@ export function render({ model, el }) {
 _MENU_CSS = """
 :host { display: block; }
 .pa-model-button {
-  display: inline-flex; align-items: center; gap: 2px; max-width: 220px; padding: 2px 2px 2px 0;
+  display: inline-flex; align-items: center; gap: 2px; height: 26px; box-sizing: border-box;
+  max-width: 220px; padding: 2px 2px 2px 0;
   border: 0; border-radius: var(--mui-shape-borderRadius, 4px); background: transparent; cursor: pointer;
   color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
   font: 400 0.8125rem/1.5 var(--mui-font-family, Roboto, sans-serif);
 }
 .pa-model-current { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pa-model-fixed {
-  display: inline-block; max-width: 220px; padding: 2px 2px 2px 0; cursor: default;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: top;
+  display: inline-block; height: 26px; box-sizing: border-box; max-width: 220px; padding: 2px 2px 2px 0;
+  cursor: default; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: top;
   color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
-  font: 400 0.8125rem/1.5 var(--mui-font-family, Roboto, sans-serif);
+  font: 400 0.8125rem/22px var(--mui-font-family, Roboto, sans-serif);
 }
 .pa-model-fixed[hidden], .pa-model-button[hidden], .pa-model-tip[hidden] { display: none; }
 /* Drawn inside the label, since the composer clips anything around it. */
@@ -284,15 +307,18 @@ _MENU_CSS = """
 .pa-model-button:hover { color: var(--mui-palette-text-primary, rgba(0, 0, 0, 0.87)); }
 .pa-model-button:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
 .pa-model-list {
-  position: fixed; z-index: 1500; min-width: 200px; max-width: 320px; max-height: 50vh; overflow-y: auto;
-  padding: 4px 0; box-sizing: border-box; border-radius: var(--mui-shape-borderRadius, 4px);
+  position: fixed; z-index: 1500; min-width: 210px; max-width: 320px; max-height: 50vh; overflow-y: auto;
+  padding: 4px 0; box-sizing: border-box; border-radius: var(--mui-shape-borderRadius, 6px);
+  border: 1px solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
   background: var(--mui-palette-background-paper, #fff); color: var(--mui-palette-text-primary, rgba(0, 0, 0, 0.87));
   box-shadow: var(--mui-shadows-8, 0 5px 5px -3px rgba(0,0,0,.2), 0 8px 10px 1px rgba(0,0,0,.14), 0 3px 14px 2px rgba(0,0,0,.12));
   background-image: var(--mui-overlays-8, none);
   font: 400 0.875rem/1.43 var(--mui-font-family, Roboto, sans-serif);
 }
 .pa-model-list[hidden] { display: none; }
-.pa-model-option { display: flex; flex-direction: column; padding: 6px 16px; cursor: pointer; outline: none; }
+.pa-model-option { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 14px; cursor: pointer; outline: none; }
+.pa-model-text { display: flex; flex-direction: column; min-width: 0; }
+.pa-model-check { flex: none; color: var(--mui-palette-primary-main, #0072b5); }
 .pa-model-option:hover, .pa-model-option:focus { background: var(--mui-palette-action-hover, rgba(0, 0, 0, 0.04)); }
 .pa-model-option[aria-selected="true"] { background: var(--mui-palette-action-selected, rgba(0, 0, 0, 0.08)); }
 .pa-model-option[aria-disabled="true"] { cursor: default; }
