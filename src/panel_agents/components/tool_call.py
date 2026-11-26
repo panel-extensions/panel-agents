@@ -104,7 +104,7 @@ pre {
   margin: 0; max-height: 320px; overflow: auto; white-space: pre;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; line-height: 1.45;
 }
-pre.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+:host(.tc-wrap) pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 """
 
 _LABEL_CSS = """
@@ -383,8 +383,10 @@ class ToolCallCard(Viewer):
             if self.redacted:
                 message = f"The call was {_lower(denied_label)}." if denied else "The call failed."
             # Denial reasons are prose; tracebacks scroll verbatim while shorter error messages wrap cleanly.
-            pre_cls = "" if "Traceback (" in message else ' class="wrap"'
-            self._error_text.object = "" if denied else f"<pre{pre_cls}>{escape(message)}</pre>"
+            self._error_text.param.update(
+                object="" if denied else f"<pre>{escape(message)}</pre>",
+                css_classes=[] if denied or "Traceback (" in message else ["tc-wrap"],
+            )
             self._error.param.update(
                 object=_escape_markdown(message) if denied else "", visible=True,
                 severity="warning" if denied else "error", title=denied_label if denied else "Error",
